@@ -47,6 +47,63 @@ if [ -n "$ROOT" ] && [ -n "$SESSION_ID" ]; then
   echo ok >"$ROOT/${SESSION_ID}-${ts}-$$.marker"
 fi
 
+if printf '%s' "$ALL_ARGS" | grep -Fq 'You are authoring the GitHub PR body'; then
+  node <<'NODE'
+const body = [
+  '## Summary',
+  '',
+  'E2E PR body authoring for the dry-run merge gate.',
+  '',
+  '## Review Claim',
+  '',
+  'This proof-only change validates the review gate PR body authoring path.',
+  '',
+  '## Review Lane',
+  '',
+  'proof',
+  '',
+  '## Review Unit',
+  '',
+  'proof',
+  '',
+  '## Safety Invariant',
+  '',
+  'Only e2e fixture output is affected; production behavior is unchanged.',
+  '',
+  '## Slice Rationale',
+  '',
+  'The dry-run fixture must emit the PR body shape required by the gate.',
+  '',
+  '## Non-goals',
+  '',
+  'No production behavior change.',
+  '',
+  '## Test Plan',
+  '',
+  '<details>',
+  '<summary>Test Plan</summary>',
+  '',
+  '- [x] e2e dry-run PR body fixture',
+  '',
+  '</details>',
+  '',
+  '## Revert Plan',
+  '',
+  '<details>',
+  '<summary>Revert Plan</summary>',
+  '',
+  '- Safe to revert? Yes',
+  '- Revert command: `git revert <sha>`',
+  '- Post-revert steps: None',
+  '- Data migration? No',
+  '',
+  '</details>',
+].join('\n');
+process.stdout.write(body);
+NODE
+  exit 0
+fi
+
 if printf '%s' "$ALL_ARGS" | grep -Fq 'Publish the Invoker-on-Invoker review PR stack'; then
   if command -v gh >/dev/null 2>&1; then
     gh api repos/Neko-Catpital-Labs/Invoker/pulls --method GET -f state=open -f head=Neko-Catpital-Labs:e2e-review-stack -f per_page=1 >/dev/null 2>&1 || true

@@ -26,6 +26,74 @@ if [ -n "$ROOT" ]; then
   echo ok >"$ROOT/codex-${ts}-$$.marker"
 fi
 
+if printf '%s' "$ALL_ARGS" | grep -Fq 'You are authoring the GitHub PR body'; then
+  SESSION_ID="$SESSION_ID" node <<'NODE'
+const sessionId = process.env.SESSION_ID || 'e2e-stub-session-id';
+const ts = new Date().toISOString();
+const body = [
+  '## Summary',
+  '',
+  'E2E PR body authoring for the dry-run merge gate.',
+  '',
+  '## Review Claim',
+  '',
+  'This proof-only change validates the review gate PR body authoring path.',
+  '',
+  '## Review Lane',
+  '',
+  'proof',
+  '',
+  '## Review Unit',
+  '',
+  'proof',
+  '',
+  '## Safety Invariant',
+  '',
+  'Only e2e fixture output is affected; production behavior is unchanged.',
+  '',
+  '## Slice Rationale',
+  '',
+  'The dry-run fixture must emit the PR body shape required by the gate.',
+  '',
+  '## Non-goals',
+  '',
+  'No production behavior change.',
+  '',
+  '## Test Plan',
+  '',
+  '<details>',
+  '<summary>Test Plan</summary>',
+  '',
+  '- [x] e2e dry-run PR body fixture',
+  '',
+  '</details>',
+  '',
+  '## Revert Plan',
+  '',
+  '<details>',
+  '<summary>Revert Plan</summary>',
+  '',
+  '- Safe to revert? Yes',
+  '- Revert command: `git revert <sha>`',
+  '- Post-revert steps: None',
+  '- Data migration? No',
+  '',
+  '</details>',
+].join('\n');
+const lines = [
+  { type: 'thread.started', thread_id: sessionId },
+  { timestamp: ts, type: 'session_meta', payload: { id: sessionId, cwd: process.cwd() } },
+  { timestamp: ts, type: 'event_msg', payload: { type: 'task_started', turn_id: 'e2e-turn' } },
+  { timestamp: ts, type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: body }] } },
+  { timestamp: ts, type: 'event_msg', payload: { type: 'task_complete' } },
+];
+for (const line of lines) {
+  console.log(JSON.stringify(line));
+}
+NODE
+  exit 0
+fi
+
 if printf '%s' "$ALL_ARGS" | grep -Fq 'Publish the Invoker-on-Invoker review PR stack'; then
   if command -v gh >/dev/null 2>&1; then
     gh api repos/Neko-Catpital-Labs/Invoker/pulls --method GET -f state=open -f head=Neko-Catpital-Labs:e2e-review-stack -f per_page=1 >/dev/null 2>&1 || true

@@ -1,0 +1,18 @@
+# Edge case: Stack base candidate with onFinish none
+# Expected errors: onfinish_none_stack_base_risk
+#
+# featureBranch will not be pushed to origin; downstream merge gates that stack
+# onto this workflow fail fetching the base from remote.
+
+name: "Stack base with onFinish none"
+description: "Plan that declares a featureBranch but will not publish it"
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+featureBranch: plan/example-stack-base
+onFinish: none
+
+tasks:
+  - id: task-1
+    description: "A task"
+    command: "echo test"
+    dependencies: []

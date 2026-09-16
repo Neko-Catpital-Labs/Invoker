@@ -8,9 +8,9 @@ Run the generator from the Invoker repo root:
 examples/first-agent-workflow/create-local-project.sh
 ```
 
-It creates a temporary local git repo with a failing Node test and generates two Invoker plans:
+It creates a temporary local git repo with a failing Node test and generates two reference Invoker plans:
 
 - `first-agent-workflow-codex.yaml`
 - `first-agent-workflow-claude.yaml`
 
-Open either generated plan in the desktop app and click `Start`.
+The desktop app does not currently import plan files. Follow the linked tutorial to bind the generated repository and use the in-app planner, or run a generated plan directly with `invoker-cli run <plan-path> --live` (which starts it immediately).

@@ -19,6 +19,7 @@ import type { ChildProcess } from 'node:child_process';
 import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
+import { fakeCodexPlanningCommandBuilder } from './test-support/fake-codex-planning-command-builder.js';
 
 type MockHandlerFn = (args: Record<string, unknown>) => Promise<void> | void;
 
@@ -154,8 +155,8 @@ async function slashCommand(surface: SlackSurface, text: string): Promise<Mock> 
   return respond;
 }
 
-function actionValueFromLatestUpdatedCard(actionId: string): string {
-  for (const call of [...sharedSlack.client.chat.update.mock.calls].reverse()) {
+function actionValueFromLatestUpdatedCard(say: Mock, actionId: string): string {
+  for (const call of [...say.mock.calls].reverse()) {
     const message = call[0] as SaidMessage | undefined;
     for (const block of message?.blocks ?? []) {
       for (const element of block.elements ?? []) {
@@ -235,6 +236,7 @@ describe('Slack confirmation expiry repro contracts', () => {
       planningHeartbeatIntervalSeconds: 0,
       workingDir: process.cwd(),
       log: silentLog,
+      planningCommandBuilder: fakeCodexPlanningCommandBuilder,
     });
     surfaces.push(created);
     return created;
@@ -247,8 +249,8 @@ describe('Slack confirmation expiry repro contracts', () => {
 
   async function draftPlan(slack: SlackSurface, threadTs: string, planText: string, turnTs: string): Promise<string> {
     mockSpawn.mockImplementationOnce(() => processWith(planText));
-    await mention(slack, '/plan', turnTs, threadTs);
-    const value = actionValueFromLatestUpdatedCard('plan_draft_approve');
+    const planSay = await mention(slack, '/plan', turnTs, threadTs);
+    const value = actionValueFromLatestUpdatedCard(planSay, 'plan_draft_approve');
     const draft = slackPlanDrafts.getReady('C_LOBBY', threadTs);
     expect(value).toBe(`${draft?.draftId}:${draft?.version}`);
     return value;
@@ -268,6 +270,10 @@ describe('Slack confirmation expiry repro contracts', () => {
       type: 'start_plan',
       planText: expect.stringContaining('name: First'),
     }));
+    // Proves the default harness preset really spawned codex sessions.
+    for (const call of mockSpawn.mock.calls) {
+      expect(call[0]).toBe('codex');
+    }
   });
 
   it('reports a superseded sibling draft honestly after the current draft is approved', async () => {
