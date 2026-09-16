@@ -461,6 +461,7 @@ describe('replaceTask', () => {
         { id: 'X', description: 'X', command: 'echo X', runnerKind: 'worktree' },
       ],
     });
+    orchestrator.editTaskType('X', 'worktree');
     orchestrator.startExecution();
     failTask(orchestrator, 'X');
 

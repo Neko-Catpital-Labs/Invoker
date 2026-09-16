@@ -3076,6 +3076,7 @@ export class Orchestrator {
         default:
           rtConfig = {
             ...rtBase,
+            ...(rtRunnerKind === 'worktree' ? { runnerKind: 'worktree' as const } : {}),
             poolId: inheritedPoolId,
             poolMemberId: task.config.poolMemberId,
           };

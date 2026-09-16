@@ -165,9 +165,7 @@ describe('repro: experiment spawn inherits pivot pool executor', () => {
     const pivotId = sid(orchestrator, 0, 'pivot');
     const pivot = orchestrator.getTask(pivotId)!;
     expect(pivot.config.poolId).toBe('local-mac-only');
-    // Plan pools are currently stamped runnerKind=ssh at load; selectExecutor
-    // remaps via pool members when poolId is present.
-    expect(pivot.config.runnerKind).toBe('ssh');
+    expect(pivot.config.runnerKind).toBeUndefined();
     expect(pivot.config.executionAgent).toBe('codex');
     expect(pivot.config.executionModel).toBe('o3');
     expect(pivot.config.maxTurns).toBe(42);
