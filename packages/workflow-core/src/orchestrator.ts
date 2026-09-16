@@ -78,6 +78,10 @@ function isActiveForInvalidation(status: TaskStatus): boolean {
   );
 }
 
+function runnerKindForPool(poolId: string): RunnerKind {
+  return poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh';
+}
+
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
 import {
@@ -1590,7 +1594,11 @@ export class Orchestrator {
           this.executorRoutingRules,
           this.availablePoolIds,
         );
-        taskConfig = { ...baseConfig, poolId: resolvedRouting.poolId };
+        taskConfig = {
+          ...baseConfig,
+          runnerKind: runnerKindForPool(resolvedRouting.poolId),
+          poolId: resolvedRouting.poolId,
+        };
         resolvedRoutingByTaskId.set(scopedId, resolvedRouting.reason);
       }
       const task = createTaskState(
@@ -3068,6 +3076,14 @@ export class Orchestrator {
             poolMemberId: task.config.runnerKind === 'ssh' ? task.config.poolMemberId : undefined,
           };
           break;
+        case 'worktree':
+          rtConfig = {
+            ...rtBase,
+            runnerKind: 'worktree',
+            poolId: inheritedPoolId,
+            poolMemberId: undefined,
+          };
+          break;
         case 'scratch':
           rtConfig = { ...rtBase, runnerKind: 'scratch' as const };
           break;
@@ -3076,6 +3092,7 @@ export class Orchestrator {
         default:
           rtConfig = {
             ...rtBase,
+            runnerKind: runnerKindForPool(inheritedPoolId),
             poolId: inheritedPoolId,
             poolMemberId: task.config.poolMemberId,
           };

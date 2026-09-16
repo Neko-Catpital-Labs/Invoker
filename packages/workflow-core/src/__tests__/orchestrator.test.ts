@@ -1251,7 +1251,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t1')!.config.requiresManualApproval).toBe(true);
     });
 
-    it('passes runnerKind when specified', () => {
+    it('defaults ordinary tasks to the built-in worktree runner', () => {
       orchestrator.loadPlan({
         name: 'runner-kind-test',
         tasks: [
@@ -1260,8 +1260,8 @@ describe('Orchestrator', () => {
         ],
       });
 
-      expect(orchestrator.getTask('t1')!.config.runnerKind).toBeUndefined();
-      expect(orchestrator.getTask('t2')!.config.runnerKind).toBeUndefined();
+      expect(orchestrator.getTask('t1')!.config.runnerKind).toBe('worktree');
+      expect(orchestrator.getTask('t2')!.config.runnerKind).toBe('worktree');
     });
 
     it('does not project auto-fix onto task config from plans', () => {
@@ -1419,7 +1419,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('prod-pool');
       });
 
@@ -1439,7 +1439,7 @@ describe('Orchestrator', () => {
           tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', runnerKind: 'worktree', poolId: 'prod-pool' } as any],
         });
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('prod-pool');
       });
 
@@ -1460,7 +1460,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('worktree');
         expect(task!.config.poolId).toBe(BUILT_IN_LOCAL_EXECUTION_POOL_ID);
       });
 
@@ -1481,7 +1481,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
@@ -1502,7 +1502,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
@@ -1522,7 +1522,7 @@ describe('Orchestrator', () => {
           tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', runnerKind: 'worktree', poolId: 'ci-pool' } as any],
         });
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
@@ -1561,7 +1561,7 @@ describe('Orchestrator', () => {
           tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', poolId: 'prod-pool' }],
         });
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('prod-pool');
       });
 
@@ -1601,7 +1601,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
       });
 
@@ -1662,7 +1662,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
@@ -1684,12 +1684,13 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
         const routedEvent = persistence.events.find((event) =>
           event.taskId.endsWith('/t1') && event.eventType === 'task.executor.routed'
         );
         expect(routedEvent?.payload).toEqual({
+          runnerKind: 'ssh',
           poolId: 'ssh-light',
           reason: { type: 'routingRule', regex: '\\bpnpm(?:\\s|$)', poolId: 'ssh-light' },
         });
@@ -1712,6 +1713,7 @@ describe('Orchestrator', () => {
           event.taskId.endsWith('/t1') && event.eventType === 'task.executor.routed'
         );
         expect(routedEvent?.payload).toEqual({
+          runnerKind: 'worktree',
           poolId: 'local-worktree',
           reason: { type: 'poolId', poolId: 'local-worktree' },
         });
@@ -1735,6 +1737,7 @@ describe('Orchestrator', () => {
           event.taskId.endsWith('/t1') && event.eventType === 'task.executor.routed'
         );
         expect(routedEvent?.payload).toEqual({
+          runnerKind: 'ssh',
           poolId: 'ssh-light',
           reason: { type: 'poolId', poolId: 'ssh-light' },
         });
@@ -1756,7 +1759,7 @@ describe('Orchestrator', () => {
           tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
         });
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
@@ -1796,7 +1799,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('worktree');
         expect(task!.config.poolId).toBe(BUILT_IN_LOCAL_EXECUTION_POOL_ID);
       });
 
@@ -1817,7 +1820,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
       });
 
@@ -1839,7 +1842,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('mixed-local-ssh');
       });
 
@@ -1858,7 +1861,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('mixed-local-ssh');
       });
 
@@ -1880,7 +1883,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.runnerKind).toBeUndefined();
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('pnpm-ssh');
       });
 
@@ -1970,7 +1973,7 @@ describe('Orchestrator', () => {
         expect(publishedDeltas.length).toBe(0);
       });
 
-      it('ignores legacy runnerKind fields on direct plan definitions', () => {
+      it('ignores invalid legacy runnerKind fields on direct plan definitions', () => {
         orchestrator.loadPlan({
           name: 'unknown-type-plan',
           tasks: [
@@ -1979,7 +1982,7 @@ describe('Orchestrator', () => {
           ],
         });
 
-        expect(orchestrator.getTask('bad')!.config.runnerKind).toBeUndefined();
+        expect(orchestrator.getTask('bad')!.config.runnerKind).toBe('worktree');
       });
 
       it('recovers: failed plan followed by valid plan loads correctly', () => {

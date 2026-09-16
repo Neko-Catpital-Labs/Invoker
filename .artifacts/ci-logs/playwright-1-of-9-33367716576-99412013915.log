@@ -1,0 +1,1136 @@
+playwright / 1-of-9	UNKNOWN STEP	﻿2026-08-31T07:18:38.8445549Z Current runner version: '2.336.0'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8462112Z Runner name: 'gh-heavy-14'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8463980Z Runner group name: 'invoker managed runners'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8466416Z Machine name: 'gh-heavy-14'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8473376Z ##[group]GITHUB_TOKEN Permissions
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8481133Z Contents: read
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8482459Z Metadata: read
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8483923Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8490238Z Secret source: Actions
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:38.8492782Z Prepare workflow directory
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:39.0016736Z Prepare all required actions
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:39.0140160Z Getting action download info
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:39.9805412Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:41.7008118Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:42.2470139Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:42.6931839Z Download action repository 'actions/download-artifact@v4' (SHA:d3f86a106a0bac45b974a628896c90dbdf5c8093)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:43.3045669Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.3014509Z Complete job name: playwright / 1-of-9
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.4246726Z ##[group]Checking docker version
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.4271840Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.4719756Z '1.52'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.4753587Z Docker daemon API version: '1.52'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.4755065Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5200187Z '1.52'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5233274Z Docker client API version: '1.52'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5249645Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5256331Z ##[group]Clean up resources from previous jobs
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5267423Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=ce94fc"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5589581Z ##[command]/usr/bin/docker network prune --force --filter "label=ce94fc"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5910053Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5911367Z ##[group]Create local container network
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.5934799Z ##[command]/usr/bin/docker network create --label ce94fc github_network_443366f671f04d8caa18fa5fcea011ab
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.7221658Z 443f9a3332a1890589279ac4a5392e851dea19f474fd6fa5a7973de8553a9033
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.7265942Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.7319968Z ##[group]Starting job container
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.7373663Z ##[command]/usr/bin/docker pull mcr.microsoft.com/playwright:v1.58.2-noble
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.9006877Z v1.58.2-noble: Pulling from playwright
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.9806497Z Digest: sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.9809482Z Status: Image is up to date for mcr.microsoft.com/playwright:v1.58.2-noble
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:44.9858715Z mcr.microsoft.com/playwright:v1.58.2-noble
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.0057061Z ##[command]/usr/bin/docker create --name ac8f05ea7dad4a5b90b309d8f42ab8be_mcrmicrosoftcomplaywrightv1582noble_4dac06 --label ce94fc --workdir /__w/Invoker/Invoker --network github_network_443366f671f04d8caa18fa5fcea011ab --ipc=host -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/actions-runner/_work":"/__w" -v "/home/runner/actions-runner/externals":"/__e":ro -v "/home/runner/actions-runner/_work/_temp":"/__w/_temp" -v "/home/runner/actions-runner/_work/_actions":"/__w/_actions" -v "/home/runner/actions-runner/_work/_tool":"/__w/_tool" -v "/home/runner/actions-runner/_work/_temp/_github_home":"/github/home" -v "/home/runner/actions-runner/_work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" mcr.microsoft.com/playwright:v1.58.2-noble "-f" "/dev/null"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.2085232Z 48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.2142697Z ##[command]/usr/bin/docker start 48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.6347007Z 48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.6364600Z ##[command]/usr/bin/docker ps --all --filter id=48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.6787906Z 48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a Up Less than a second
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.6807856Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" 48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7158263Z HOME=/github/home
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7170375Z GITHUB_ACTIONS=true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7186462Z CI=true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7187372Z PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7188667Z LANG=C.UTF-8
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7191856Z LC_ALL=C.UTF-8
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7192812Z PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7214207Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7235231Z ##[group]Waiting for all services to be ready
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.7239530Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8127046Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8146268Z ##[group]Run actions/checkout@v4
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8147727Z with:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8148600Z   fetch-depth: 0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8149093Z   repository: Neko-Catpital-Labs/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8156523Z   token: ***
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8156923Z   ssh-strict: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8157254Z   ssh-user: git
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8157577Z   persist-credentials: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8157937Z   clean: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8158260Z   sparse-checkout-cone-mode: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8158889Z   fetch-tags: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8159207Z   show-progress: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8159532Z   lfs: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8159934Z   submodules: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8160711Z   set-safe-directory: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8161469Z   allow-unsafe-pr-checkout: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8163893Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8164828Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8165790Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8167157Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:45.8337442Z ##[command]/usr/bin/docker exec  48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a sh -c "cat /etc/*release | grep ^ID"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2691997Z Syncing repository: Neko-Catpital-Labs/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2695668Z ##[group]Getting Git version info
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2697671Z Working directory is '/__w/Invoker/Invoker'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2700156Z [command]/usr/bin/git version
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2701279Z git version 2.43.0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2704800Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2714069Z Temporarily overriding HOME='/__w/_temp/ca5ff257-0310-42d3-b072-2ce91e5f7504' before making global git config changes
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2716293Z Adding repository directory to the temporary git global config as a safe directory
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2717810Z [command]/usr/bin/git config --global --add safe.directory /__w/Invoker/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2725757Z [command]/usr/bin/git config --local --get remote.origin.url
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2726943Z https://github.com/Neko-Catpital-Labs/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2731342Z ##[group]Removing previously created refs, to avoid conflicts
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2751164Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:46.2813626Z HEAD
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8110879Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8126338Z [command]/usr/bin/git submodule status
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8153341Z ##[group]Cleaning the repository
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8155992Z [command]/usr/bin/git clean -ffdx
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8160073Z [command]/usr/bin/git reset --hard HEAD
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8370718Z HEAD is now at 3f9b1325da5 Merge b1f8c57d6b4ef7fc37e8607d19903626c57ce776 into e7444cde6b47621c231ff464c078d2b75f63fc50
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8439336Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8441699Z ##[group]Disabling automatic garbage collection
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8460674Z [command]/usr/bin/git config --local gc.auto 0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8538680Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8540756Z ##[group]Setting up auth
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8556354Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.8639948Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.9283771Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.9350193Z http.https://github.com/.extraheader
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.9373647Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:48.9487003Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:49.0280847Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:49.0285278Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:49.1011003Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:49.1122359Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:49.1123603Z ##[group]Fetching the repository
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:49.1135243Z [command]/usr/bin/git -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:52.9692319Z From https://github.com/Neko-Catpital-Labs/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:52.9693690Z  - [deleted]                 (none)     -> origin/main
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:53.6232335Z  - [deleted]                 (none)     -> origin/mergify/merge-queue/2a1f82a75a
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:53.6299942Z  - [deleted]                 (none)     -> origin/stack/EdbertChan/fix/autofix-skip-no-repo-workflow/autofix-repo-skip-stop-retrying-unfixable-git--a6b448e7
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:53.6377890Z  - [deleted]                 (none)     -> origin/stack/EdbertChan/fix/start-ready-recoverable-tasks-refresh-cost/start-ready-recovery-refresh-1-repro-one-full--a57b620c
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:58.3076084Z    e7444cde6b4..c912971ce88  master     -> origin/master
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:58.9977885Z [command]/usr/bin/git branch --list --remote origin/master
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:59.6158018Z   origin/master
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:59.6195948Z [command]/usr/bin/git rev-parse refs/remotes/origin/master
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:59.6243176Z c912971ce88455914cccd05b8552c90bcdd61eaf
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:18:59.6292170Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules origin +5049fe39a41eb3c8ab75bcb47bcc7e534284a810:refs/remotes/origin/master
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.5460996Z From https://github.com/Neko-Catpital-Labs/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.5485876Z  + c912971ce88...5049fe39a41 5049fe39a41eb3c8ab75bcb47bcc7e534284a810 -> origin/master  (forced update)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.5582657Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.5583957Z ##[group]Determining the checkout info
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.5592357Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.5609794Z [command]/usr/bin/git sparse-checkout disable
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.6190610Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.6231197Z ##[group]Checking out the ref
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:01.6250180Z [command]/usr/bin/git checkout --progress --force -B master refs/remotes/origin/master
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:02.9813807Z Previous HEAD position was 3f9b1325da5 Merge b1f8c57d6b4ef7fc37e8607d19903626c57ce776 into e7444cde6b47621c231ff464c078d2b75f63fc50
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.0094687Z Switched to a new branch 'master'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.0095716Z branch 'master' set up to track 'origin/master'.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.0372085Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.0450122Z [command]/usr/bin/git log -1 --format=%H
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.0599807Z 5049fe39a41eb3c8ab75bcb47bcc7e534284a810
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1749366Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1755163Z ##[group]Run pnpm/action-setup@v4
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1755771Z with:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1756218Z   dest: ~/setup-pnpm
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1756648Z   run_install: null
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1757073Z   cache: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1757552Z   cache_dependency_path: pnpm-lock.yaml
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1758254Z   package_json_file: package.json
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1759172Z   standalone: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1759610Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1759997Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1760842Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1761855Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.1775857Z ##[command]/usr/bin/docker exec  48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a sh -c "cat /etc/*release | grep ^ID"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:03.8490909Z ##[group]Running self-installer...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.0195266Z (node:200) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.0199860Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.1219623Z Progress: resolved 1, reused 0, downloaded 0, added 0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.1600524Z Packages: +1
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.1603753Z +
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.6034107Z Progress: resolved 1, reused 1, downloaded 0, added 1, done
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.7269633Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.7270867Z dependencies:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.7271874Z + pnpm 10.31.0 (11.15.1 is available)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.7272755Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.7573689Z Done in 1.3s
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.7911036Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.7930697Z Installation Completed!
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8672318Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8676558Z ##[group]Run actions/setup-node@v4
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8677924Z with:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8679054Z   node-version: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8679490Z   cache: pnpm
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8680369Z   cache-dependency-path: pnpm-lock.yaml
+playwright / 1-of-9	UNKNOWN STEP	.node-version
+playwright / 1-of-9	UNKNOWN STEP	
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8682830Z   always-auth: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8683335Z   check-latest: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8691608Z   token: ***
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8692140Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8692552Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8693000Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8694079Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8695015Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:05.8740361Z ##[command]/usr/bin/docker exec  48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a sh -c "cat /etc/*release | grep ^ID"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:06.5267678Z (node:221) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:06.5272060Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:06.5274100Z Found in cache @ /__w/_tool/node/26.5.0/x64
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:06.5275072Z ##[group]Environment details
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:07.2062465Z node: v26.5.0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:07.2063494Z npm: 11.17.0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:07.2065397Z yarn: 1.22.22
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:07.2067423Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:07.2112256Z [command]/github/home/setup-pnpm/node_modules/.bin/pnpm store path --silent
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:08.1330948Z /__w/.pnpm-store/v10
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:08.9776077Z Cache hit for: node-cache-Linux-x64-pnpm-106ff6289f177011d3fcc3992acaa7efc4f2869f04ba9d0f86882dfaabf11607
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:09.0092169Z (node:221) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:10.9357627Z Received 0 of 210809995 (0.0%), 0.0 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:11.9361784Z Received 0 of 210809995 (0.0%), 0.0 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:12.9392909Z Received 4194304 of 210809995 (2.0%), 1.3 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:13.9389746Z Received 12582912 of 210809995 (6.0%), 3.0 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:14.9390552Z Received 41943040 of 210809995 (19.9%), 8.0 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:15.9395959Z Received 75497472 of 210809995 (35.8%), 12.0 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:16.9406169Z Received 104857600 of 210809995 (49.7%), 14.3 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:17.9415945Z Received 130023424 of 210809995 (61.7%), 15.5 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:18.9428683Z Received 134217728 of 210809995 (63.7%), 14.2 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:19.9468224Z Received 167772160 of 210809995 (79.6%), 16.0 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:20.9466300Z Received 188743680 of 210809995 (89.5%), 16.3 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:21.3396660Z Received 210809995 of 210809995 (100.0%), 17.6 MBs/sec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:21.3409381Z Cache Size: ~201 MB (210809995 B)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:21.3561531Z [command]/usr/bin/tar -xf /__w/_temp/2e0f150a-35ef-4cf3-b1c3-a364cac08925/cache.tgz -P -C /__w/Invoker/Invoker -z
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.7350078Z Cache restored successfully
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.7824371Z Cache restored from key: node-cache-Linux-x64-pnpm-106ff6289f177011d3fcc3992acaa7efc4f2869f04ba9d0f86882dfaabf11607
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8346503Z ##[group]Run apt-get update && apt-get install -y unzip make g++ python3
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8347947Z ^[[36;1mapt-get update && apt-get install -y unzip make g++ python3^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8358238Z shell: sh -e {0}
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8359184Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8359719Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8360146Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8360779Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:34.8361648Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:35.2938858Z Get:1 https://deb.nodesource.com/node_24.x nodistro InRelease [12.1 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:35.4546760Z Get:2 https://deb.nodesource.com/node_24.x nodistro/main amd64 Packages [8761 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:35.6584926Z Get:3 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:35.7075540Z Get:4 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:36.9160298Z Get:5 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:36.9301551Z Get:6 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [50.0 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:37.2286347Z Get:7 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:37.2500510Z Get:8 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1527 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:37.5415016Z Get:9 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:37.7683647Z Get:10 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:38.2204101Z Get:11 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1201 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:38.4354138Z Get:12 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1730 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.4031670Z Get:13 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.4599692Z Get:14 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.4647183Z Get:15 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [55.8 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.4718919Z Get:16 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1525 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.4887430Z Get:17 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2149 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.7079056Z Get:18 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1842 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.9172827Z Get:19 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [48.9 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.9178025Z Get:20 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [671 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:40.9197219Z Get:21 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [35.9 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:42.2313248Z Fetched 32.4 MB in 7s (4597 kB/s)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:44.2614766Z Reading package lists...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:46.1397721Z Reading package lists...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:46.6251665Z Building dependency tree...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:46.6265580Z Reading state information...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2564960Z python3 is already the newest version (3.12.3-0ubuntu2.1).
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2567236Z python3 set to manually installed.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2569213Z The following additional packages will be installed:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2571303Z   binutils binutils-common binutils-x86-64-linux-gnu cpp cpp-13
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2573912Z   cpp-13-x86-64-linux-gnu cpp-x86-64-linux-gnu g++-13 g++-13-x86-64-linux-gnu
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2579310Z   g++-x86-64-linux-gnu gcc gcc-13 gcc-13-base gcc-13-x86-64-linux-gnu
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2581839Z   gcc-14-base gcc-x86-64-linux-gnu libasan8 libatomic1 libbinutils libc-bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2601963Z   libc-dev-bin libc-devtools libc6 libc6-dev libcc1-0 libcrypt-dev
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2603071Z   libctf-nobfd0 libctf0 libgcc-13-dev libgcc-s1 libgd3 libgfortran5 libgomp1
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2604080Z   libgprofng0 libheif-plugin-aomdec libheif-plugin-aomenc libheif1 libhwasan0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2605651Z   libisl23 libitm1 libjansson4 liblsan0 libmpc3 libmpfr6 libquadmath0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2606626Z   libsframe1 libstdc++-13-dev libstdc++6 libtsan2 libubsan1 linux-libc-dev
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2607494Z   manpages manpages-dev rpcsvc-proto
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2645217Z Suggested packages:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2646557Z   binutils-doc gprofng-gui cpp-doc gcc-13-locales cpp-13-doc g++-multilib
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2647816Z   g++-13-multilib gcc-13-doc gcc-multilib autoconf automake libtool flex bison
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2659378Z   gdb gcc-doc gcc-13-multilib gdb-x86-64-linux-gnu glibc-doc locales
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2660537Z   libnss-nis libnss-nisplus libgd-tools libheif-plugin-libde265
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2661766Z   libheif-plugin-x265 libheif-plugin-ffmpegdec libheif-plugin-jpegdec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2663647Z   libheif-plugin-jpegenc libheif-plugin-j2kdec libheif-plugin-j2kenc
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2665013Z   libheif-plugin-rav1e libheif-plugin-svtenc libstdc++-13-doc make-doc
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.2666052Z   man-browser zip
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4863827Z The following NEW packages will be installed:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4870262Z   binutils binutils-common binutils-x86-64-linux-gnu cpp cpp-13
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4880836Z   cpp-13-x86-64-linux-gnu cpp-x86-64-linux-gnu g++ g++-13
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4882983Z   g++-13-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-13 gcc-13-base
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4918992Z   gcc-13-x86-64-linux-gnu gcc-x86-64-linux-gnu libasan8 libbinutils
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4921161Z   libc-dev-bin libc-devtools libc6-dev libcc1-0 libcrypt-dev libctf-nobfd0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4922735Z   libctf0 libgcc-13-dev libgd3 libgprofng0 libheif-plugin-aomdec
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4924836Z   libheif-plugin-aomenc libheif1 libhwasan0 libisl23 libitm1 libjansson4
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4927109Z   liblsan0 libmpc3 libmpfr6 libquadmath0 libsframe1 libstdc++-13-dev libtsan2
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4940106Z   libubsan1 linux-libc-dev make manpages manpages-dev rpcsvc-proto unzip
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4965429Z The following packages will be upgraded:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.4996970Z   gcc-14-base libatomic1 libc-bin libc6 libgcc-s1 libgfortran5 libgomp1
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:47.5013254Z   libstdc++6
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:48.0762788Z 8 upgraded, 49 newly installed, 0 to remove and 117 not upgraded.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:48.0764331Z Need to get 79.3 MB of archives.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:48.0765298Z After this operation, 254 MB of additional disk space will be used.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:48.0767040Z Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libatomic1 amd64 14.2.0-4ubuntu2~24.04.1 [10.5 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:48.3404105Z Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgomp1 amd64 14.2.0-4ubuntu2~24.04.1 [148 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:50.0367330Z Get:3 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgfortran5 amd64 14.2.0-4ubuntu2~24.04.1 [916 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:51.7357976Z Get:4 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-14-base amd64 14.2.0-4ubuntu2~24.04.1 [51.0 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:51.7361936Z Get:5 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-s1 amd64 14.2.0-4ubuntu2~24.04.1 [78.4 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:51.7366053Z Get:6 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libstdc++6 amd64 14.2.0-4ubuntu2~24.04.1 [792 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:52.5344715Z Get:7 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc6 amd64 2.39-0ubuntu8.8 [3262 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:54.1857786Z Get:8 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc-bin amd64 2.39-0ubuntu8.8 [682 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:54.4690956Z Get:9 http://archive.ubuntu.com/ubuntu noble/main amd64 libjansson4 amd64 2.14-2build2 [32.8 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:54.4699343Z Get:10 http://archive.ubuntu.com/ubuntu noble/main amd64 manpages all 6.7-2 [1384 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:55.3024938Z Get:11 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils-common amd64 2.42-4ubuntu2.10 [240 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:55.3524990Z Get:12 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libsframe1 amd64 2.42-4ubuntu2.10 [15.7 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:55.3531098Z Get:13 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libbinutils amd64 2.42-4ubuntu2.10 [577 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:55.4592256Z Get:14 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libctf-nobfd0 amd64 2.42-4ubuntu2.10 [98.0 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:55.4610295Z Get:15 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libctf0 amd64 2.42-4ubuntu2.10 [94.5 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:55.4627078Z Get:16 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgprofng0 amd64 2.42-4ubuntu2.10 [849 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:56.1750089Z Get:17 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils-x86-64-linux-gnu amd64 2.42-4ubuntu2.10 [2463 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:57.4531661Z Get:18 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils amd64 2.42-4ubuntu2.10 [18.2 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:57.4682064Z Get:19 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-base amd64 13.3.0-6ubuntu2~24.04.1 [51.6 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:57.4688137Z Get:20 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libisl23 amd64 0.26-3build1.1 [680 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:57.4778186Z Get:21 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libmpfr6 amd64 4.2.1-1build1.1 [353 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:57.6557324Z Get:22 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libmpc3 amd64 1.3.1-1build1.1 [54.6 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:19:57.6571292Z Get:23 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 cpp-13-x86-64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1 [10.7 MB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:02.9595084Z Get:24 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 cpp-13 amd64 13.3.0-6ubuntu2~24.04.1 [1042 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:02.9915309Z Get:25 http://archive.ubuntu.com/ubuntu noble/main amd64 cpp-x86-64-linux-gnu amd64 4:13.2.0-7ubuntu1 [5326 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:02.9920263Z Get:26 http://archive.ubuntu.com/ubuntu noble/main amd64 cpp amd64 4:13.2.0-7ubuntu1 [22.4 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:02.9972418Z Get:27 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libcc1-0 amd64 14.2.0-4ubuntu2~24.04.1 [48.0 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:02.9978055Z Get:28 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libitm1 amd64 14.2.0-4ubuntu2~24.04.1 [29.7 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:02.9981565Z Get:29 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libasan8 amd64 14.2.0-4ubuntu2~24.04.1 [3027 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:04.8765744Z Get:30 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 liblsan0 amd64 14.2.0-4ubuntu2~24.04.1 [1322 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:05.3085801Z Get:31 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libtsan2 amd64 14.2.0-4ubuntu2~24.04.1 [2772 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:06.5854364Z Get:32 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libubsan1 amd64 14.2.0-4ubuntu2~24.04.1 [1184 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:06.8894696Z Get:33 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libhwasan0 amd64 14.2.0-4ubuntu2~24.04.1 [1641 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:07.5233072Z Get:34 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libquadmath0 amd64 14.2.0-4ubuntu2~24.04.1 [153 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:07.5735971Z Get:35 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-13-dev amd64 13.3.0-6ubuntu2~24.04.1 [2681 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:08.3030558Z Get:36 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-x86-64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1 [21.1 MB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.1720770Z Get:37 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13 amd64 13.3.0-6ubuntu2~24.04.1 [494 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.1963294Z Get:38 http://archive.ubuntu.com/ubuntu noble/main amd64 gcc-x86-64-linux-gnu amd64 4:13.2.0-7ubuntu1 [1212 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.2001906Z Get:39 http://archive.ubuntu.com/ubuntu noble/main amd64 gcc amd64 4:13.2.0-7ubuntu1 [5018 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.2030977Z Get:40 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc-dev-bin amd64 2.39-0ubuntu8.8 [20.4 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.2039330Z Get:41 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 linux-libc-dev amd64 6.8.0-138.138 [1523 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.4389059Z Get:42 http://archive.ubuntu.com/ubuntu noble/main amd64 libcrypt-dev amd64 1:4.4.36-4build1 [112 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.4710157Z Get:43 http://archive.ubuntu.com/ubuntu noble/main amd64 rpcsvc-proto amd64 1.4.2-0ubuntu7 [67.4 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:14.4841715Z Get:44 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc6-dev amd64 2.39-0ubuntu8.8 [2125 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:15.1625704Z Get:45 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libstdc++-13-dev amd64 13.3.0-6ubuntu2~24.04.1 [2420 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:15.5840287Z Get:46 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 g++-13-x86-64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1 [12.2 MB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.4725707Z Get:47 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 g++-13 amd64 13.3.0-6ubuntu2~24.04.1 [16.0 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.4729795Z Get:48 http://archive.ubuntu.com/ubuntu noble/main amd64 g++-x86-64-linux-gnu amd64 4:13.2.0-7ubuntu1 [964 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.4741186Z Get:49 http://archive.ubuntu.com/ubuntu noble/main amd64 g++ amd64 4:13.2.0-7ubuntu1 [1100 B]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.4748055Z Get:50 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libheif-plugin-aomdec amd64 1.17.6-1ubuntu4.8 [11.6 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.4751676Z Get:51 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libheif1 amd64 1.17.6-1ubuntu4.8 [277 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.5543403Z Get:52 http://archive.ubuntu.com/ubuntu noble/main amd64 libgd3 amd64 2.3.3-9ubuntu5 [128 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.5568018Z Get:53 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libc-devtools amd64 2.39-0ubuntu8.8 [29.3 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.5578263Z Get:54 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libheif-plugin-aomenc amd64 1.17.6-1ubuntu4.8 [14.7 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.5601075Z Get:55 http://archive.ubuntu.com/ubuntu noble/main amd64 make amd64 4.3-4.1build2 [180 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.7189366Z Get:56 http://archive.ubuntu.com/ubuntu noble/main amd64 manpages-dev all 6.7-2 [2013 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:18.9958042Z Get:57 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 unzip amd64 6.0-28ubuntu4.1 [174 kB]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.6023345Z debconf: delaying package configuration, since apt-utils is not installed
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.7337699Z Fetched 79.3 MB in 31s (2519 kB/s)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8671148Z (Reading database ... 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8676562Z (Reading database ... 5%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8678017Z (Reading database ... 10%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8679495Z (Reading database ... 15%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8680848Z (Reading database ... 20%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8682181Z (Reading database ... 25%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8683868Z (Reading database ... 30%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8685393Z (Reading database ... 35%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8686870Z (Reading database ... 40%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8688194Z (Reading database ... 45%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8689517Z (Reading database ... 50%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8715734Z (Reading database ... 55%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8752195Z (Reading database ... 60%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8834253Z (Reading database ... 65%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8939139Z (Reading database ... 70%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8969818Z (Reading database ... 75%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.8989259Z (Reading database ... 80%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.9019967Z (Reading database ... 85%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.9026498Z (Reading database ... 90%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.9049679Z (Reading database ... 95%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.9052868Z (Reading database ... 100%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.9055117Z (Reading database ... 35123 files and directories currently installed.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.9074088Z Preparing to unpack .../libatomic1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:19.9814876Z Unpacking libatomic1:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:20.1497949Z Preparing to unpack .../libgomp1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:20.1854029Z Unpacking libgomp1:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:20.3025982Z Preparing to unpack .../libgfortran5_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:20.3362966Z Unpacking libgfortran5:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:20.7898125Z Preparing to unpack .../gcc-14-base_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:20.8311376Z Unpacking gcc-14-base:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.0372734Z Setting up gcc-14-base:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2188672Z (Reading database ... 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2190287Z (Reading database ... 5%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2191691Z (Reading database ... 10%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2192930Z (Reading database ... 15%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2193987Z (Reading database ... 20%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2195319Z (Reading database ... 25%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2196346Z (Reading database ... 30%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2197377Z (Reading database ... 35%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2199318Z (Reading database ... 40%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2200862Z (Reading database ... 45%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2201947Z (Reading database ... 50%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2257463Z (Reading database ... 55%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2306678Z (Reading database ... 60%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2365354Z (Reading database ... 65%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2445732Z (Reading database ... 70%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2455659Z (Reading database ... 75%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2484666Z (Reading database ... 80%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2488857Z (Reading database ... 85%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2492283Z (Reading database ... 90%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2519029Z (Reading database ... 95%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2533772Z (Reading database ... 100%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2536249Z (Reading database ... 35123 files and directories currently installed.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.2546862Z Preparing to unpack .../libgcc-s1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.3015982Z Unpacking libgcc-s1:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.4415705Z Setting up libgcc-s1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6377108Z (Reading database ... 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6379083Z (Reading database ... 5%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6380953Z (Reading database ... 10%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6382180Z (Reading database ... 15%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6384741Z (Reading database ... 20%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6412817Z (Reading database ... 25%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6419343Z (Reading database ... 30%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6422559Z (Reading database ... 35%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6429451Z (Reading database ... 40%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6454740Z (Reading database ... 45%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6461747Z (Reading database ... 50%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6463863Z (Reading database ... 55%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6542722Z (Reading database ... 60%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6644113Z (Reading database ... 65%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6725293Z (Reading database ... 70%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6860115Z (Reading database ... 75%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6921022Z (Reading database ... 80%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6922106Z (Reading database ... 85%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6924138Z (Reading database ... 90%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6963996Z (Reading database ... 95%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6966133Z (Reading database ... 100%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6967367Z (Reading database ... 35123 files and directories currently installed.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.6984173Z Preparing to unpack .../libstdc++6_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:21.8257192Z Unpacking libstdc++6:amd64 (14.2.0-4ubuntu2~24.04.1) over (14.2.0-4ubuntu2~24.04) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.1459353Z Setting up libstdc++6:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4920440Z (Reading database ... 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4940374Z (Reading database ... 5%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4942983Z (Reading database ... 10%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4944150Z (Reading database ... 15%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4944945Z (Reading database ... 20%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4945755Z (Reading database ... 25%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4946618Z (Reading database ... 30%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4947417Z (Reading database ... 35%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4948220Z (Reading database ... 40%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4950584Z (Reading database ... 45%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.4951731Z (Reading database ... 50%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5170283Z (Reading database ... 55%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5183008Z (Reading database ... 60%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5187474Z (Reading database ... 65%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5224146Z (Reading database ... 70%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5239438Z (Reading database ... 75%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5307756Z (Reading database ... 80%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5444052Z (Reading database ... 85%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5449855Z (Reading database ... 90%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5452202Z (Reading database ... 95%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5453275Z (Reading database ... 100%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5455443Z (Reading database ... 35123 files and directories currently installed.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.5457216Z Preparing to unpack .../libc6_2.39-0ubuntu8.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.8518707Z debconf: unable to initialize frontend: Dialog
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.8520357Z debconf: (TERM is not set, so the dialog frontend is not usable.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.8521413Z debconf: falling back to frontend: Readline
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.8702367Z debconf: unable to initialize frontend: Readline
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.8713763Z debconf: (This frontend requires a controlling tty.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:22.8716862Z debconf: falling back to frontend: Teletype
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:23.0436609Z Unpacking libc6:amd64 (2.39-0ubuntu8.8) over (2.39-0ubuntu8.6) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:27.0540155Z Setting up libc6:amd64 (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:27.4442705Z debconf: unable to initialize frontend: Dialog
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:27.4446220Z debconf: (TERM is not set, so the dialog frontend is not usable.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:27.4448052Z debconf: falling back to frontend: Readline
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:27.4612842Z debconf: unable to initialize frontend: Readline
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:27.4616054Z debconf: (This frontend requires a controlling tty.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:27.4621245Z debconf: falling back to frontend: Teletype
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8115269Z (Reading database ... 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8118781Z (Reading database ... 5%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8119536Z (Reading database ... 10%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8132909Z (Reading database ... 15%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8133633Z (Reading database ... 20%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8134373Z (Reading database ... 25%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8135627Z (Reading database ... 30%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8136348Z (Reading database ... 35%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8137846Z (Reading database ... 40%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8138886Z (Reading database ... 45%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8139596Z (Reading database ... 50%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8177592Z (Reading database ... 55%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8209658Z (Reading database ... 60%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8340982Z (Reading database ... 65%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8363350Z (Reading database ... 70%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8372259Z (Reading database ... 75%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8396059Z (Reading database ... 80%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8403136Z (Reading database ... 85%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8419943Z (Reading database ... 90%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8444270Z (Reading database ... 95%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8446197Z (Reading database ... 100%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8447572Z (Reading database ... 35123 files and directories currently installed.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8476786Z Preparing to unpack .../libc-bin_2.39-0ubuntu8.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:28.8913288Z Unpacking libc-bin (2.39-0ubuntu8.8) over (2.39-0ubuntu8.6) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:29.7574266Z Setting up libc-bin (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.8931524Z Selecting previously unselected package libjansson4:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9000052Z (Reading database ... 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9101003Z (Reading database ... 5%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9134986Z (Reading database ... 10%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9136436Z (Reading database ... 15%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9137749Z (Reading database ... 20%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9138992Z (Reading database ... 25%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9139813Z (Reading database ... 30%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9140560Z (Reading database ... 35%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9141331Z (Reading database ... 40%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9142076Z (Reading database ... 45%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9143603Z (Reading database ... 50%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9144710Z (Reading database ... 55%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9145463Z (Reading database ... 60%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9220257Z (Reading database ... 65%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9253172Z (Reading database ... 70%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9273443Z (Reading database ... 75%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9285461Z (Reading database ... 80%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9348011Z (Reading database ... 85%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9349860Z (Reading database ... 90%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9351519Z (Reading database ... 95%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9352657Z (Reading database ... 100%
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9354347Z (Reading database ... 35123 files and directories currently installed.)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9366694Z Preparing to unpack .../00-libjansson4_2.14-2build2_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:30.9627491Z Unpacking libjansson4:amd64 (2.14-2build2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.0575054Z Selecting previously unselected package manpages.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.0595971Z Preparing to unpack .../01-manpages_6.7-2_all.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.0746990Z Unpacking manpages (6.7-2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.2561000Z Selecting previously unselected package binutils-common:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.2614251Z Preparing to unpack .../02-binutils-common_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.2890305Z Unpacking binutils-common:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.5399042Z Selecting previously unselected package libsframe1:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.5409651Z Preparing to unpack .../03-libsframe1_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.5634885Z Unpacking libsframe1:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.6851448Z Selecting previously unselected package libbinutils:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.6861327Z Preparing to unpack .../04-libbinutils_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.7062444Z Unpacking libbinutils:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.8874996Z Selecting previously unselected package libctf-nobfd0:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.8885328Z Preparing to unpack .../05-libctf-nobfd0_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:31.8997292Z Unpacking libctf-nobfd0:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.0256447Z Selecting previously unselected package libctf0:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.0281502Z Preparing to unpack .../06-libctf0_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.0388121Z Unpacking libctf0:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.2778513Z Selecting previously unselected package libgprofng0:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.2953509Z Preparing to unpack .../07-libgprofng0_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.3133971Z Unpacking libgprofng0:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.6006710Z Selecting previously unselected package binutils-x86-64-linux-gnu.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.6049845Z Preparing to unpack .../08-binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.6146634Z Unpacking binutils-x86-64-linux-gnu (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.8765211Z Selecting previously unselected package binutils.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.8803554Z Preparing to unpack .../09-binutils_2.42-4ubuntu2.10_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:32.9073192Z Unpacking binutils (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:33.1380196Z Selecting previously unselected package gcc-13-base:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:33.1452820Z Preparing to unpack .../10-gcc-13-base_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:33.1769397Z Unpacking gcc-13-base:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:33.4894596Z Selecting previously unselected package libisl23:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:33.4920072Z Preparing to unpack .../11-libisl23_0.26-3build1.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:33.5801466Z Unpacking libisl23:amd64 (0.26-3build1.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.2237836Z Selecting previously unselected package libmpfr6:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.2316655Z Preparing to unpack .../12-libmpfr6_4.2.1-1build1.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.2525601Z Unpacking libmpfr6:amd64 (4.2.1-1build1.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.6469153Z Selecting previously unselected package libmpc3:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.6517998Z Preparing to unpack .../13-libmpc3_1.3.1-1build1.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.7305388Z Unpacking libmpc3:amd64 (1.3.1-1build1.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.8797791Z Selecting previously unselected package cpp-13-x86-64-linux-gnu.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.8850910Z Preparing to unpack .../14-cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:34.8976689Z Unpacking cpp-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.2974151Z Selecting previously unselected package cpp-13.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.3022817Z Preparing to unpack .../15-cpp-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.3286819Z Unpacking cpp-13 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.4443523Z Selecting previously unselected package cpp-x86-64-linux-gnu.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.4472205Z Preparing to unpack .../16-cpp-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.4794986Z Unpacking cpp-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.6464617Z Selecting previously unselected package cpp.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.6524813Z Preparing to unpack .../17-cpp_4%3a13.2.0-7ubuntu1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.6917561Z Unpacking cpp (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.8185170Z Selecting previously unselected package libcc1-0:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.8242712Z Preparing to unpack .../18-libcc1-0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.8472504Z Unpacking libcc1-0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.9641172Z Selecting previously unselected package libitm1:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.9678123Z Preparing to unpack .../19-libitm1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:35.9808195Z Unpacking libitm1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.0868710Z Selecting previously unselected package libasan8:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.0932311Z Preparing to unpack .../20-libasan8_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.1059223Z Unpacking libasan8:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.3406876Z Selecting previously unselected package liblsan0:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.3465771Z Preparing to unpack .../21-liblsan0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.3697539Z Unpacking liblsan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.6320875Z Selecting previously unselected package libtsan2:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.6367532Z Preparing to unpack .../22-libtsan2_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.6720787Z Unpacking libtsan2:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:36.9963203Z Selecting previously unselected package libubsan1:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.0001498Z Preparing to unpack .../23-libubsan1_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.0209390Z Unpacking libubsan1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.2489227Z Selecting previously unselected package libhwasan0:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.2514865Z Preparing to unpack .../24-libhwasan0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.3131737Z Unpacking libhwasan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.7101631Z Selecting previously unselected package libquadmath0:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.7144669Z Preparing to unpack .../25-libquadmath0_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.7412579Z Unpacking libquadmath0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.9443569Z Selecting previously unselected package libgcc-13-dev:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:37.9530146Z Preparing to unpack .../26-libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:38.0004428Z Unpacking libgcc-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:38.2483837Z Selecting previously unselected package gcc-13-x86-64-linux-gnu.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:38.2497256Z Preparing to unpack .../27-gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:38.2663943Z Unpacking gcc-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.1614410Z Selecting previously unselected package gcc-13.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.1645580Z Preparing to unpack .../28-gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.2411864Z Unpacking gcc-13 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.4345754Z Selecting previously unselected package gcc-x86-64-linux-gnu.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.4387140Z Preparing to unpack .../29-gcc-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.4522149Z Unpacking gcc-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.5599675Z Selecting previously unselected package gcc.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.5647097Z Preparing to unpack .../30-gcc_4%3a13.2.0-7ubuntu1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.5765899Z Unpacking gcc (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.6689092Z Selecting previously unselected package libc-dev-bin.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.6729277Z Preparing to unpack .../31-libc-dev-bin_2.39-0ubuntu8.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.6894481Z Unpacking libc-dev-bin (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.7806631Z Selecting previously unselected package linux-libc-dev:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.7865058Z Preparing to unpack .../32-linux-libc-dev_6.8.0-138.138_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:39.8009818Z Unpacking linux-libc-dev:amd64 (6.8.0-138.138) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.2135828Z Selecting previously unselected package libcrypt-dev:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.2185159Z Preparing to unpack .../33-libcrypt-dev_1%3a4.4.36-4build1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.2397475Z Unpacking libcrypt-dev:amd64 (1:4.4.36-4build1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.3247375Z Selecting previously unselected package rpcsvc-proto.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.3293993Z Preparing to unpack .../34-rpcsvc-proto_1.4.2-0ubuntu7_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.3442510Z Unpacking rpcsvc-proto (1.4.2-0ubuntu7) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.5260699Z Selecting previously unselected package libc6-dev:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.5314982Z Preparing to unpack .../35-libc6-dev_2.39-0ubuntu8.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:40.6007117Z Unpacking libc6-dev:amd64 (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:41.0246941Z Selecting previously unselected package libstdc++-13-dev:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:41.0312679Z Preparing to unpack .../36-libstdc++-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:41.0501655Z Unpacking libstdc++-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:41.6936381Z Selecting previously unselected package g++-13-x86-64-linux-gnu.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:41.7046848Z Preparing to unpack .../37-g++-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:41.7159143Z Unpacking g++-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.2166725Z Selecting previously unselected package g++-13.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.2228042Z Preparing to unpack .../38-g++-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.2392840Z Unpacking g++-13 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.3246210Z Selecting previously unselected package g++-x86-64-linux-gnu.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.3281334Z Preparing to unpack .../39-g++-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.3441735Z Unpacking g++-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.4456663Z Selecting previously unselected package g++.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.4516705Z Preparing to unpack .../40-g++_4%3a13.2.0-7ubuntu1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.4618976Z Unpacking g++ (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.7916492Z Selecting previously unselected package libheif-plugin-aomdec:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.7961492Z Preparing to unpack .../41-libheif-plugin-aomdec_1.17.6-1ubuntu4.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.8099383Z Unpacking libheif-plugin-aomdec:amd64 (1.17.6-1ubuntu4.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.9121488Z Selecting previously unselected package libheif1:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.9132691Z Preparing to unpack .../42-libheif1_1.17.6-1ubuntu4.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:42.9224007Z Unpacking libheif1:amd64 (1.17.6-1ubuntu4.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.1132954Z Selecting previously unselected package libgd3:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.1204135Z Preparing to unpack .../43-libgd3_2.3.3-9ubuntu5_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.2158923Z Unpacking libgd3:amd64 (2.3.3-9ubuntu5) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.3319485Z Selecting previously unselected package libc-devtools.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.3322663Z Preparing to unpack .../44-libc-devtools_2.39-0ubuntu8.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.3472555Z Unpacking libc-devtools (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.4622439Z Selecting previously unselected package libheif-plugin-aomenc:amd64.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.4679756Z Preparing to unpack .../45-libheif-plugin-aomenc_1.17.6-1ubuntu4.8_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.4775626Z Unpacking libheif-plugin-aomenc:amd64 (1.17.6-1ubuntu4.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.5877975Z Selecting previously unselected package make.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.5928612Z Preparing to unpack .../46-make_4.3-4.1build2_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.6104977Z Unpacking make (4.3-4.1build2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.7878516Z Selecting previously unselected package manpages-dev.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.7921275Z Preparing to unpack .../47-manpages-dev_6.7-2_all.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:43.8171392Z Unpacking manpages-dev (6.7-2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:44.2157737Z Selecting previously unselected package unzip.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:44.2239172Z Preparing to unpack .../48-unzip_6.0-28ubuntu4.1_amd64.deb ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:44.3244139Z Unpacking unzip (6.0-28ubuntu4.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:44.8144405Z Setting up manpages (6.7-2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:44.9328183Z Setting up unzip (6.0-28ubuntu4.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.0529049Z Setting up binutils-common:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.1573266Z Setting up linux-libc-dev:amd64 (6.8.0-138.138) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.1902809Z Setting up libctf-nobfd0:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.2395963Z Setting up libgomp1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.2981633Z Setting up libsframe1:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.3908665Z Setting up libjansson4:amd64 (2.14-2build2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.4813775Z Setting up rpcsvc-proto (1.4.2-0ubuntu7) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.5506388Z Setting up gcc-13-base:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.6134882Z Setting up make (4.3-4.1build2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.6534826Z Setting up libmpfr6:amd64 (4.2.1-1build1.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.6879623Z Setting up libquadmath0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.7288686Z Setting up libmpc3:amd64 (1.3.1-1build1.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.7873172Z Setting up libatomic1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.8271576Z Setting up libgfortran5:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.8603455Z Setting up libubsan1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.9056760Z Setting up libhwasan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:45.9466116Z Setting up libcrypt-dev:amd64 (1:4.4.36-4build1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.0133508Z Setting up libasan8:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.0547961Z Setting up libtsan2:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.1249928Z Setting up libbinutils:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.1715598Z Setting up libisl23:amd64 (0.26-3build1.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.2108727Z Setting up libc-dev-bin (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.2556817Z Setting up libcc1-0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.3033334Z Setting up liblsan0:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.3649801Z Setting up libitm1:amd64 (14.2.0-4ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.4121931Z Setting up libctf0:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.4586155Z Setting up manpages-dev (6.7-2) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.4971091Z Setting up cpp-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.5291697Z Setting up libgprofng0:amd64 (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.5623786Z Setting up libgcc-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.5900130Z Setting up libc6-dev:amd64 (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.6180010Z Setting up libstdc++-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.6456361Z Setting up binutils-x86-64-linux-gnu (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.6986253Z Setting up cpp-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.8067504Z Setting up cpp-13 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.8903913Z Setting up gcc-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.9228816Z Setting up binutils (2.42-4ubuntu2.10) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.9485172Z Setting up gcc-13 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:46.9810779Z Setting up cpp (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.1236862Z Setting up g++-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.1493803Z Setting up gcc-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.1832781Z Setting up gcc (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.2606509Z Setting up g++-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.3222122Z Setting up g++-13 (13.3.0-6ubuntu2~24.04.1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.4005265Z Setting up g++ (4:13.2.0-7ubuntu1) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.4560733Z update-alternatives: using /usr/bin/g++ to provide /usr/bin/c++ (c++) in auto mode
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.4565342Z update-alternatives: warning: skip creation of /usr/share/man/man1/c++.1.gz because associated file /usr/share/man/man1/g++.1.gz (of link group c++) doesn't exist
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.4822803Z Setting up libheif1:amd64 (1.17.6-1ubuntu4.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.5148505Z Setting up libgd3:amd64 (2.3.3-9ubuntu5) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.5426457Z Setting up libc-devtools (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.5702341Z Setting up libheif-plugin-aomdec:amd64 (1.17.6-1ubuntu4.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.5946058Z Setting up libheif-plugin-aomenc:amd64 (1.17.6-1ubuntu4.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.6226164Z Processing triggers for libc-bin (2.39-0ubuntu8.8) ...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7933465Z ##[group]Run pnpm install --frozen-lockfile
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7934611Z ^[[36;1mpnpm install --frozen-lockfile^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7935830Z shell: sh -e {0}
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7936875Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7938162Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7939256Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7939936Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:47.7940607Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:48.7644266Z Scope: all 30 workspace projects
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:48.7825618Z  WARN  There are cyclic workspace dependencies: /__w/Invoker/Invoker/packages/data-store, /__w/Invoker/Invoker/packages/persistence
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:48.9361349Z Lockfile is up to date, resolution step is skipped
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:49.0789861Z Progress: resolved 1, reused 0, downloaded 0, added 0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:49.2680759Z Packages: +989
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:49.2682255Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:50.0844262Z Progress: resolved 989, reused 425, downloaded 0, added 0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:51.0826456Z Progress: resolved 989, reused 871, downloaded 0, added 0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:52.0867260Z Progress: resolved 989, reused 982, downloaded 0, added 132
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:53.0835978Z Progress: resolved 989, reused 982, downloaded 0, added 390
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:54.0834208Z Progress: resolved 989, reused 982, downloaded 0, added 639
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:55.0840385Z Progress: resolved 989, reused 982, downloaded 0, added 887
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:55.6677368Z Progress: resolved 989, reused 982, downloaded 0, added 989, done
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:56.7193404Z  WARN  Failed to create bin at /__w/Invoker/Invoker/packages/app/node_modules/.bin/invoker-cli. ENOENT: no such file or directory, open '/__w/Invoker/Invoker/packages/cli/dist/index.js'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1584436Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1585422Z devDependencies:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1586614Z + @mergifyio/vitest 0.3.0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1587677Z + aws4 1.13.2
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1589121Z + concurrently 10.0.4
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1590547Z + dependency-cruiser 17.3.10
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1591806Z + electron-builder 26.8.1
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1592862Z + jsdom 25.0.1
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1593557Z + mermaid 11.15.0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1594065Z + postject 1.0.0-alpha.6
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1595115Z + tsup 8.5.1
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1595459Z + typescript 5.9.3
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1596090Z + yaml 2.8.2
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1596621Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.1642609Z packages/npm-watcher postinstall$ node scripts/install.js
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.2071937Z packages/npm-slack postinstall$ node scripts/install.js
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.2073955Z packages/npm-cli postinstall$ node scripts/install.js
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.3534781Z packages/npm-cli postinstall: Done
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.3996009Z packages/npm-watcher postinstall: Done
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.4165528Z . postinstall$ node scripts/electron.cjs --install-only && node scripts/fix-node-pty-spawn-helper.mjs
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:20:57.4366945Z packages/npm-slack postinstall: Done
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:03.9822652Z . postinstall: [fix-node-pty] spawn-helper permissions already correct (or node-pty absent)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:03.9905184Z . postinstall: Done
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.0314760Z packages/npm-ui postinstall$ node scripts/install.js
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.1289135Z packages/npm-ui postinstall: Done
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.2883587Z  WARN  Failed to create bin at /__w/Invoker/Invoker/packages/app/node_modules/.bin/invoker-cli. ENOENT: no such file or directory, open '/__w/Invoker/Invoker/packages/app/node_modules/@invoker/cli/dist/index.js'
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3742774Z ╭ Warning ─────────────────────────────────────────────────────────────────────╮
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3745108Z │                                                                              │
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3747269Z │   Ignored build scripts: cpu-features@0.0.10, electron-winstaller@5.4.0,     │
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3751714Z │   esbuild@0.25.12, esbuild@0.27.3, protobufjs@7.5.4, ssh2@1.17.0.            │
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3755736Z │   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3758211Z │   to run scripts.                                                            │
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3762919Z │                                                                              │
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.3765559Z ╰──────────────────────────────────────────────────────────────────────────────╯
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4112858Z Done in 16.4s using pnpm v10.31.0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4895194Z ##[group]Run node scripts/repro/repro-ci-playwright-shard-inventory.mjs
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4896759Z ^[[36;1mnode scripts/repro/repro-ci-playwright-shard-inventory.mjs^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4898508Z shell: sh -e {0}
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4898978Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4899560Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4900065Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4900709Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.4901518Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9260057Z [repro-ci-playwright-shard-inventory] OK: 69 CI-owned spec files each assigned to exactly one shard; 5 manual-only spec(s) accounted for.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9658955Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9662722Z ##[group]Run actions/download-artifact@v4
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9663361Z with:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9663880Z   name: app-build-dist
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9664470Z   path: /tmp/invoker-build-artifacts
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9665180Z   merge-multiple: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9665816Z   repository: Neko-Catpital-Labs/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9668594Z   run-id: 33367716576
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9669518Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9669946Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9670408Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9671068Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9671890Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:04.9684413Z ##[command]/usr/bin/docker exec  48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a sh -c "cat /etc/*release | grep ^ID"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:05.5538835Z Downloading single artifact
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:05.6065553Z (node:1223) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:05.6072664Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:06.4044008Z Preparing to download the following artifacts:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:06.4047274Z - app-build-dist (ID: 9748885779, Size: 9430129, Expected Digest: sha256:75d0752b0172b3ec26691033899508db7c59ec4eae5696703b5d0f134a05c2d6)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:07.0159591Z Redirecting to blob download url: https://productionresultssa13.blob.core.windows.net/actions-results/d6879f58-23c2-4737-8be1-44f9177a5623/workflow-job-run-138767e4-52e9-5779-bbf3-cfc5ad1e484c/artifacts/82bc795ab15388784bf0faa2e3f2e9cfa82cc44accbe8fc271a5d46de22b50b2.zip
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:07.0165640Z Starting download of artifact to: /tmp/invoker-build-artifacts
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:07.9963522Z (node:1223) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.7541642Z SHA256 digest of downloaded artifact is 75d0752b0172b3ec26691033899508db7c59ec4eae5696703b5d0f134a05c2d6
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.7589691Z Artifact download completed successfully.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.7676826Z Total of 1 artifact(s) downloaded
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.7677717Z Download artifact has finished successfully
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8091159Z ##[group]Run tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8092442Z ^[[36;1mtar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8094668Z shell: sh -e {0}
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8095637Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8096465Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8096934Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8097539Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:12.8098694Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1755985Z ##[group]Run echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1758696Z ^[[36;1mecho "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1760388Z ^[[36;1mexport GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1761990Z ^[[36;1mgit config --global user.name "CI Bot"^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1762877Z ^[[36;1mgit config --global user.email "ci@invoker.dev"^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1763990Z ^[[36;1mgit config --global --add safe.directory "$GITHUB_WORKSPACE"^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1765884Z shell: sh -e {0}
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1766815Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1767711Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1769213Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1770555Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.1771694Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3246856Z ##[group]Run bash scripts/test-suites/optional/40-playwright-app.sh
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3248174Z ^[[36;1mbash scripts/test-suites/optional/40-playwright-app.sh^[[0m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3249593Z shell: sh -e {0}
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3250041Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3250478Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3250920Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3251504Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3252312Z   GIT_CONFIG_GLOBAL: /__w/_temp/gitconfig
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3253098Z   INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-1-of-9
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3253805Z   INVOKER_PLAYWRIGHT_WORKERS: 1
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3256277Z   INVOKER_PLAYWRIGHT_FILES: e2e/visual-proof.spec.ts e2e/edit-task-command.spec.ts e2e/headless-thundering-herd.spec.ts e2e/launching-stall-watchdog.spec.ts e2e/embedded-terminal-pty.spec.ts e2e/keyboard-navigation.spec.ts
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3259340Z   INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:13.3260059Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:18.0102827Z (node:1300) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:18.0112710Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5533868Z hint: Using 'master' as the name for the initial branch. This default branch name
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5539041Z hint: is subject to change. To configure the initial branch name to use in all
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5542729Z hint: of your new repositories, which will suppress this warning, call:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5544521Z hint: 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5547808Z hint: 	git config --global init.defaultBranch <name>
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5550209Z hint: 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5552398Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5555152Z hint: 'development'. The just-created branch can be renamed via this command:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5557132Z hint: 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5559108Z hint: 	git branch -m <name>
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5785467Z Cloning into '/tmp/invoker-e2e-repo-ci-playwright-1-of-9.git.setup'...
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5789801Z warning: You appear to have cloned an empty repository.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.5790619Z done.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.6391045Z To /tmp/invoker-e2e-repo-ci-playwright-1-of-9.git
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.6741918Z  * [new branch]      HEAD -> master
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.6743050Z To /tmp/invoker-e2e-repo-ci-playwright-1-of-9.git
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:19.6745275Z  * [new branch]      HEAD -> main
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:25.4342788Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:25.4343844Z Running 84 tests using 1 worker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:25.4344442Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:28.3690213Z ^[[1A^[[2K(node:1354) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:28.3693684Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:28.3697629Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:28.6533513Z ^[[1A^[[2K[1/84] e2e/edit-task-command.spec.ts:73:7 › Edit task command › edit a failed task command via TaskPanel, verify re-run with new command
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:21:49.8720351Z ^[[1A^[[2K[2/84] e2e/edit-task-command.spec.ts:104:7 › Edit task command › editing a completed task with dependents invalidates the downstream subtree in place
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:22:13.4658841Z ^[[1A^[[2K[3/84] e2e/embedded-terminal-pty.spec.ts:132:7 › Embedded terminal PTY › completed Codex resume terminal gets a real TTY in the drawer
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:22:24.9748239Z ^[[1A^[[2K[4/84] e2e/embedded-terminal-pty.spec.ts:216:7 › Embedded terminal PTY › completed Claude resume terminal gets a real TTY in the drawer
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:22:37.4083053Z ^[[1A^[[2K[5/84] e2e/embedded-terminal-pty.spec.ts:275:7 › Embedded terminal PTY › maximized drawer can scroll back through terminal history
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:22:50.7310089Z ^[[1A^[[2K[6/84] e2e/embedded-terminal-pty.spec.ts:338:7 › Embedded terminal PTY › drawer interactions stay responsive while terminal output streams
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:10.1195742Z ^[[1A^[[2Ke2e/embedded-terminal-pty.spec.ts:338:7 › Embedded terminal PTY › drawer interactions stay responsive while terminal output streams
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:10.1923092Z EMBEDDED_TERMINAL_PRESSURE_BENCH_RESULT={"fullAlphaTaskId":"wf-test-1/terminal-pressure-alpha","fullBetaTaskId":"wf-test-1/terminal-pressure-beta","alphaOpenWallMs":224,"betaOpenWallMs":139,"switchWallMs":485,"scrollWallMs":292,"attachPayloads":[{"ts":"2026-08-31T07:23:02.001Z","metric":"embedded_terminal_attach","durationMs":69,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","mode":"spawn","status":"running","active":true,"hasHeader":false,"hasSnapshot":false,"snapshotBytes":0},{"ts":"2026-08-31T07:23:09.043Z","metric":"embedded_terminal_attach","durationMs":26,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","mode":"spawn","status":"running","active":true,"hasHeader":false,"hasSnapshot":false,"snapshotBytes":0}],"inputPayloads":[{"ts":"2026-08-31T07:23:02.508Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:02.549Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:02.606Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:02.662Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:02.997Z","metric":"embedded_terminal_input","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.090Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.247Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.401Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.483Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.618Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.666Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.755Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:03.839Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:04.204Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:04.359Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:04.510Z","metric":"embedded_terminal_input","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:04.683Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:04.756Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:04.800Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:04.888Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.072Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.197Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.283Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.406Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.595Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.723Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.818Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:05.911Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:06.263Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:06.330Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:06.523Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:06.587Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:06.726Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:06.866Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:06.969Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:07.033Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:07.125Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:07.248Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:07.362Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:07.695Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:07.867Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.047Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.091Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.128Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.155Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.186Z","metric":"embedded_terminal_input","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.217Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.252Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.282Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.335Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.367Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.396Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.445Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.476Z","metric":"embedded_terminal_input","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.525Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.556Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.590Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.634Z","metric":"embedded_terminal_input","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.685Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.737Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.758Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.783Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true},{"ts":"2026-08-31T07:23:08.817Z","metric":"embedded_terminal_input","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true}],"outputPayloads":[{"ts":"2026-08-31T07:23:02.341Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":82,"chars":82,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:02.528Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:02.581Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:02.633Z","metric":"embedded_terminal_output_write","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:02.940Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.055Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.179Z","metric":"embedded_terminal_output_write","durationMs":2,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.281Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.425Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.572Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.645Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.730Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.797Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:03.885Z","metric":"embedded_terminal_output_write","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:04.315Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:04.430Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:04.578Z","metric":"embedded_terminal_output_write","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:04.726Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:04.774Z","metric":"embedded_terminal_output_write","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:04.830Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:04.990Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:05.160Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:05.250Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:05.338Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:05.572Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:05.617Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:05.775Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:05.848Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:06.136Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:06.291Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:06.366Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:06.563Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:06.617Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:06.806Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:06.907Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:07.008Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:07.064Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:07.193Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:07.307Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:07.506Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:07.731Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:07.918Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.067Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":3,"chars":3,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.111Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.139Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.171Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.198Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.240Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.268Z","metric":"embedded_terminal_output_write","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.299Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.350Z","metric":"embedded_terminal_output_write","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.380Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.428Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.460Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.500Z","metric":"embedded_terminal_output_write","durationMs":1,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.541Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.576Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.615Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.651Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.715Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.746Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.769Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.796Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":1,"chars":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:08.844Z","metric":"embedded_terminal_output_write","durationMs":7,"bytes":2196,"chars":2196,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"},{"ts":"2026-08-31T07:23:09.202Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":81,"chars":81,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","active":true,"status":"running"},{"ts":"2026-08-31T07:23:09.658Z","metric":"embedded_terminal_output_write","durationMs":0,"bytes":82,"chars":82,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"status":"running"}],"resizePayloads":[{"ts":"2026-08-31T07:23:02.031Z","metric":"embedded_terminal_resize","source":"active_session","durationMs":8,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:02.074Z","metric":"embedded_terminal_resize","source":"active_session","durationMs":0,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:02.112Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":0,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:02.221Z","metric":"embedded_terminal_resize","source":"resize_observer","durationMs":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:02.294Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":2,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:02.315Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":4,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.060Z","metric":"embedded_terminal_resize","source":"active_session","durationMs":6,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.091Z","metric":"embedded_terminal_resize","source":"active_session","durationMs":0,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.107Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":0,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.127Z","metric":"embedded_terminal_resize","source":"resize_observer","durationMs":0,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.157Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":1,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.220Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":1,"sessionId":"b9530d08-e9b2-4be4-bed2-1b70c3a814c9","taskId":"wf-test-1/terminal-pressure-beta","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.415Z","metric":"embedded_terminal_resize","source":"active_session","durationMs":4,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.428Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":0,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.452Z","metric":"embedded_terminal_resize","source":"resize_observer","durationMs":0,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.462Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.471Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":119,"rows":16,"active":true},{"ts":"2026-08-31T07:23:09.598Z","metric":"embedded_terminal_resize","source":"active_session","durationMs":13,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":192,"rows":42,"active":true},{"ts":"2026-08-31T07:23:09.622Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":0,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":192,"rows":42,"active":true},{"ts":"2026-08-31T07:23:09.637Z","metric":"embedded_terminal_resize","source":"resize_observer","durationMs":1,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":192,"rows":42,"active":true},{"ts":"2026-08-31T07:23:09.647Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":8,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":192,"rows":42,"active":true},{"ts":"2026-08-31T07:23:09.734Z","metric":"embedded_terminal_resize","source":"followup_frame","durationMs":6,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","cols":192,"rows":42,"active":true}],"scrollPayloads":[{"ts":"2026-08-31T07:23:09.870Z","metric":"embedded_terminal_scroll","durationMs":0,"eventAgeMs":37,"deltaX":0,"deltaY":-800,"deltaMode":0,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"drawerState":"maximized"},{"ts":"2026-08-31T07:23:09.977Z","metric":"embedded_terminal_scroll","durationMs":0,"eventAgeMs":25,"deltaX":0,"deltaY":-800,"deltaMode":0,"sessionId":"75629863-e6c5-4038-a5f4-092e758e916a","taskId":"wf-test-1/terminal-pressure-alpha","active":true,"drawerState":"maximized"}],"eventLoopLagPayloads":[],"longTaskPayloads":[],"perf":{"mainDeltaToUi":5,"dbPollCreated":0,"dbPollUpdatedAsCreated":3,"dbPollUpdatedAsUpdated":0,"rendererReports":187,"maxRendererEventLoopLagMs":0,"maxRendererHiddenEventLoopLagMs":0,"maxRendererCumulativeLagMs":0,"maxRendererTickDeltaMs":0,"maxRendererLongTaskMs":572,"planningTypingLagReports":10,"maxPlanningTypingLagMs":11,"planningChatInputChangeReports":0,"maxPlanningChatInputHandlerMs":0,"planningChatInputCommitReports":0,"maxPlanningChatInputCommitMs":0,"planningChatTranscriptCommitReports":0,"maxPlanningChatTranscriptCommitMs":0,"maxPlanningChatTranscriptLines":0,"maxPlanningChatTranscriptChars":0,"planningChatTranscriptAutoscrollReports":4,"maxPlanningChatTranscriptAutoscrollMs":60,"planningChatSubmits":0,"embeddedTerminalAttachReports":2,"maxEmbeddedTerminalAttachMs":69,"embeddedTerminalInputReports":63,"maxEmbeddedTerminalInputMs":1,"maxEmbeddedTerminalInputBytes":1,"embeddedTerminalOutputWriteReports":66,"maxEmbeddedTerminalOutputWriteMs":7,"maxEmbeddedTerminalOutputWriteBytes":2196,"embeddedTerminalResizeReports":22,"maxEmbeddedTerminalResizeMs":13,"embeddedTerminalScrollReports":2,"maxEmbeddedTerminalScrollMs":0,"embeddedTerminalSnapshotWriteReports":0,"maxEmbeddedTerminalSnapshotWriteMs":0,"maxEmbeddedTerminalSnapshotBytes":0,"workflowMetadataPublishRequests":3,"workflowMetadataPublishes":2,"workflowMetadataCoalescedRequests":1,"largeTaskDeltaBatches":0,"maxTaskDeltaBatchSize":0,"maxTerminalWriteMs":0.7407670000011422,"maxTerminalResizeMs":0.23380600000018603,"maxTerminalSessionUpsertMs":147.9805060000017,"terminalWriteSlowCount":0,"terminalResizeSlowCount":0,"terminalSessionUpsertSlowCount":6,"startupMarks":{"app.whenReady":306,"initServices.start":307,"initServices.end":1585,"owner-ipc-ready":1620,"listWorkflowsByStartupRecency":1638,"startup.ready-for-window":1723,"createWindow.begin":1796,"window.mapped":1980,"createWindow.end":2021,"bootstrap-ipc.serialize-return":4907,"window.show":2800,"ui.interactive":2823,"deferred-startup.begin":2862,"window.did-finish-load":5054,"workers.auto-started":3018,"api-server.started":3096,"refresh-task-graph.return":8447},"startupPhaseDetails":[{"phase":"listWorkflowsByStartupRecency","durationMs":0,"workflowCount":0},{"phase":"bootstrap-ipc.serialize-return","durationMs":0,"taskCount":0,"workflowCount":0,"jsonSizeBytes":37,"light":true},{"phase":"bootstrap-ipc.serialize-return","durationMs":0,"taskCount":0,"workflowCount":0,"jsonSizeBytes":37,"light":true},{"phase":"bootstrap-ipc.serialize-return","durationMs":0,"taskCount":0,"workflowCount":0,"jsonSizeBytes":37,"light":true},{"phase":"refresh-task-graph.return","durationMs":3,"taskCount":3,"workflowCount":1,"streamSequence":6},{"phase":"refresh-task-graph.return","durationMs":4,"taskCount":3,"workflowCount":1,"streamSequence":6}],"ts":"2026-08-31T07:23:10.102Z"},"budgets":{"maxInputMs":100,"maxOutputWriteMs":250,"maxResizeMs":250,"maxScrollMs":50,"maxOpenWallMs":2000,"maxTabSwitchWallMs":1000,"maxScrollWallMs":2000,"maxTerminalSessionUpsertMs":250,"maxRendererEventLoopLagMs":1000,"maxRendererLongTaskMs":1500}}
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:10.2441349Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:10.9600796Z ^[[1A^[[2K[7/84] e2e/headless-thundering-herd.spec.ts:103:7 › Headless thundering herd › burst headless restarts do not spawn headless electron herds or freeze the UI
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:51.5052115Z ^[[1A^[[2K(node:2846) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:51.5078530Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:51.5083962Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:23:51.8017212Z ^[[1A^[[2K[8/84] e2e/headless-thundering-herd.spec.ts:103:7 › Headless thundering herd › burst headless restarts do not spawn headless electron herds or freeze the UI (retry #1)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:24:34.8256113Z ^[[1A^[[2K(node:2972) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:24:34.8260563Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:24:34.8276191Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:24:35.0823878Z ^[[1A^[[2K[9/84] e2e/headless-thundering-herd.spec.ts:103:7 › Headless thundering herd › burst headless restarts do not spawn headless electron herds or freeze the UI (retry #2)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0298898Z ^[[1A^[[2K  1) e2e/headless-thundering-herd.spec.ts:103:7 › Headless thundering herd › burst headless restarts do not spawn headless electron herds or freeze the UI 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0300877Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0311551Z     Error: ^[[2mexpect(^[[22m^[[31mreceived^[[39m^[[2m).^[[22mtoBe^[[2m(^[[22m^[[32mexpected^[[39m^[[2m) // Object.is equality^[[22m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0313644Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0331643Z     Expected: ^[[32m"^[[7mdaemon^[[27m-owner"^[[39m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0333384Z     Received: ^[[31m"^[[7mlocal^[[27m-owner"^[[39m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0334387Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0335002Z     Call Log:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0337009Z     - Timeout 30000ms exceeded while waiting on the predicate
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0345130Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0360498Z        at fixtures/electron-app.ts:78
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0361405Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0380509Z       76 | export async function waitForRuntimeMode(page: Page, mode: RuntimeMode, timeoutMs = 15_000): Promise<void> {
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0382634Z       77 |   await waitForInvokerBridge(page, timeoutMs);
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0383521Z     > 78 |   await expect
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0384169Z          |   ^
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0384805Z       79 |     .poll(async () => {
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0387611Z       80 |       const runtimeStatus = await page.evaluate(async () => window.invoker.getRuntimeStatus());
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0389408Z       81 |       return runtimeStatus.mode;
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0390926Z         at waitForRuntimeMode (/__w/Invoker/Invoker/packages/app/e2e/fixtures/electron-app.ts:78:3)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0392790Z         at Object.page (/__w/Invoker/Invoker/packages/app/e2e/fixtures/electron-app.ts:285:7)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0393800Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0395429Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0401821Z     ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI/test-failed-1.png
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0421002Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0421989Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0423630Z     Error Context: ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI/error-context.md
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0425391Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0427288Z     Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0428682Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0429971Z     Error: ^[[2mexpect(^[[22m^[[31mreceived^[[39m^[[2m).^[[22mtoBe^[[2m(^[[22m^[[32mexpected^[[39m^[[2m) // Object.is equality^[[22m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0440780Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0442378Z     Expected: ^[[32m"^[[7mdaemon^[[27m-owner"^[[39m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0444102Z     Received: ^[[31m"^[[7mlocal^[[27m-owner"^[[39m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0445144Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0445688Z     Call Log:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0447114Z     - Timeout 30000ms exceeded while waiting on the predicate
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0448147Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0449075Z        at fixtures/electron-app.ts:78
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0450057Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0452057Z       76 | export async function waitForRuntimeMode(page: Page, mode: RuntimeMode, timeoutMs = 15_000): Promise<void> {
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0460284Z       77 |   await waitForInvokerBridge(page, timeoutMs);
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0461889Z     > 78 |   await expect
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0463036Z          |   ^
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0464192Z       79 |     .poll(async () => {
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0466448Z       80 |       const runtimeStatus = await page.evaluate(async () => window.invoker.getRuntimeStatus());
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0469455Z       81 |       return runtimeStatus.mode;
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0471474Z         at waitForRuntimeMode (/__w/Invoker/Invoker/packages/app/e2e/fixtures/electron-app.ts:78:3)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0473771Z         at Object.page (/__w/Invoker/Invoker/packages/app/e2e/fixtures/electron-app.ts:285:7)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0474764Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0475999Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0478275Z     ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI-retry1/test-failed-1.png
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0514862Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0516290Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0521248Z     Error Context: ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI-retry1/error-context.md
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0523872Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0531673Z     attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0535097Z     ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI-retry1/trace.zip
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0539189Z     Usage:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0539665Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0542002Z         pnpm exec playwright show-trace ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI-retry1/trace.zip
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0544386Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0545989Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0547274Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0548926Z     Retry #2 ───────────────────────────────────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0549976Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0551610Z     Error: ^[[2mexpect(^[[22m^[[31mreceived^[[39m^[[2m).^[[22mtoBe^[[2m(^[[22m^[[32mexpected^[[39m^[[2m) // Object.is equality^[[22m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0553510Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0554276Z     Expected: ^[[32m"^[[7mdaemon^[[27m-owner"^[[39m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0555531Z     Received: ^[[31m"^[[7mlocal^[[27m-owner"^[[39m
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0556293Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0556615Z     Call Log:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0557479Z     - Timeout 30000ms exceeded while waiting on the predicate
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0558477Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0558988Z        at fixtures/electron-app.ts:78
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0559685Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0561096Z       76 | export async function waitForRuntimeMode(page: Page, mode: RuntimeMode, timeoutMs = 15_000): Promise<void> {
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0563035Z       77 |   await waitForInvokerBridge(page, timeoutMs);
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0564139Z     > 78 |   await expect
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0564935Z          |   ^
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0565824Z       79 |     .poll(async () => {
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0568837Z       80 |       const runtimeStatus = await page.evaluate(async () => window.invoker.getRuntimeStatus());
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0570669Z       81 |       return runtimeStatus.mode;
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0572403Z         at waitForRuntimeMode (/__w/Invoker/Invoker/packages/app/e2e/fixtures/electron-app.ts:78:3)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0574663Z         at Object.page (/__w/Invoker/Invoker/packages/app/e2e/fixtures/electron-app.ts:285:7)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0576574Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0578606Z     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0581809Z     ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI-retry2/test-failed-1.png
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0586219Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0587404Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0589860Z     Error Context: ../../.git/playwright-artifacts/ci-playwright-1-of-9/test-results/headless-thundering-herd-H-8309d-tron-herds-or-freeze-the-UI-retry2/error-context.md
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0592762Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:18.0592947Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:20.6189240Z ^[[1A^[[2K(node:3099) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:20.6208721Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:20.6210108Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:20.9263720Z ^[[1A^[[2K[10/84] e2e/headless-thundering-herd.spec.ts:204:7 › Headless thundering herd › standalone owner serves delegated headless commands from isolated test paths
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:28.0208704Z ^[[1A^[[2K[11/84] e2e/keyboard-navigation.spec.ts:4:7 › keyboard-first navigation › opens workflow and task context menus without the mouse
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:40.9876083Z ^[[1A^[[2K[12/84] e2e/keyboard-navigation.spec.ts:23:7 › keyboard-first navigation › search jumps to workflows and tasks from the keyboard
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:25:52.6392492Z ^[[1A^[[2K[13/84] e2e/keyboard-navigation.spec.ts:41:7 › keyboard-first navigation › expands and collapses the bottom drawer from the keyboard
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:26:02.4983508Z ^[[1A^[[2K[14/84] e2e/launching-stall-watchdog.spec.ts:43:7 › Launch stall watchdog › fails stuck executing task without execution handle
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:26:18.1812171Z ^[[1A^[[2K[15/84] e2e/launching-stall-watchdog.spec.ts:152:7 › Launch stall watchdog › fails SSH executing task when remote workload heartbeat is stale
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:26:33.5662121Z ^[[1A^[[2K[16/84] e2e/visual-proof.spec.ts:681:7 › Read-only mode visual proof › read-only mode banner
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:26:40.0181049Z ^[[1A^[[2K[17/84] e2e/visual-proof.spec.ts:691:7 › Connection lost visual proof › connection lost banner
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:26:46.3437586Z ^[[1A^[[2K[18/84] e2e/visual-proof.spec.ts:699:7 › Visual proof capture › history view — task state timeline
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:26:56.0579471Z ^[[1A^[[2K[19/84] e2e/visual-proof.spec.ts:742:7 › Visual proof capture › empty state
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:27:04.2323262Z ^[[1A^[[2K[20/84] e2e/visual-proof.spec.ts:765:7 › Visual proof capture › workflow delete propagation
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:27:16.6724814Z ^[[1A^[[2K[21/84] e2e/visual-proof.spec.ts:776:7 › Visual proof capture › mutation failure does not steal focus
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:27:26.7085735Z ^[[1A^[[2K[22/84] e2e/visual-proof.spec.ts:798:7 › Visual proof capture › terminal planning loads graph
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:27:34.9393679Z ^[[1A^[[2K[23/84] e2e/visual-proof.spec.ts:880:7 › Visual proof capture › planning review incident ad665bff shows ask-first YAML review
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:27:42.2374680Z ^[[1A^[[2K[24/84] e2e/visual-proof.spec.ts:919:7 › Visual proof capture › plan doctor rejection stays out of the review UI
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:27:49.5319259Z ^[[1A^[[2K[25/84] e2e/visual-proof.spec.ts:951:7 › Visual proof capture › planning context sidebar shows repo bind status
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:27:57.0222352Z ^[[1A^[[2K[26/84] e2e/visual-proof.spec.ts:971:7 › Visual proof capture › planning rail — per-row delete and clear-submitted controls
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:28:05.8766838Z ^[[1A^[[2K[27/84] e2e/visual-proof.spec.ts:1027:7 › Visual proof capture › planning chat composer — split harness and model picker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:28:13.4052052Z ^[[1A^[[2K[28/84] e2e/visual-proof.spec.ts:1051:7 › Visual proof capture › terminal planning captures long transcript follow surface
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:28:21.5441532Z ^[[1A^[[2K[29/84] e2e/visual-proof.spec.ts:1139:7 › Visual proof capture › planner retry exhausted surfaces raw error to chat and error card
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:28:29.0612307Z ^[[1A^[[2K[30/84] e2e/visual-proof.spec.ts:1173:7 › Visual proof capture › planning chat busy state — indicator visible and wait cursor gone before reply arrives
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:28:41.2403729Z ^[[1A^[[2K[31/84] e2e/visual-proof.spec.ts:1221:7 › Visual proof capture › planning chat long transcript — scrollable surface with follow pinned to bottom
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:28:49.5239946Z ^[[1A^[[2K[32/84] e2e/visual-proof.spec.ts:1284:7 › Visual proof capture › terminal planning submits Workers Surface as stacked workflows without jumping surfaces
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:28:57.6805370Z ^[[1A^[[2K[33/84] e2e/visual-proof.spec.ts:1345:7 › Visual proof capture › workflows browser and home return
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:29:07.9077261Z ^[[1A^[[2K[34/84] e2e/visual-proof.spec.ts:1359:7 › Visual proof capture › needs attention browser focuses the selected task
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:29:18.9843169Z ^[[1A^[[2K[35/84] e2e/visual-proof.spec.ts:1413:7 › Visual proof capture › collapsible workflow browsers
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:29:30.4532375Z ^[[1A^[[2K[36/84] e2e/visual-proof.spec.ts:1436:7 › Visual proof capture › sidebar-expanded-width — home to workflows keeps manual full width
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:29:40.5576577Z ^[[1A^[[2K[37/84] e2e/visual-proof.spec.ts:1460:7 › Visual proof capture › sidebar-collapse-state — manual sidebar width survives left rail navigation
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:29:48.3801871Z ^[[1A^[[2K[38/84] e2e/visual-proof.spec.ts:1501:7 › Visual proof capture › dag loaded
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:29:57.7035950Z ^[[1A^[[2K[39/84] e2e/visual-proof.spec.ts:1509:7 › Visual proof capture › system setup readiness report shows a failing default preset check
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:09.2687118Z ^[[1A^[[2K[40/84] e2e/visual-proof.spec.ts:1538:7 › Visual proof capture › graph maximize overlay
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:21.7974035Z ^[[1A^[[2K[41/84] e2e/visual-proof.spec.ts:1546:7 › Visual proof capture › task-graph-keyboard-controls-selected — selected workflow mini DAG framing
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:32.9496392Z ^[[1A^[[2K[42/84] e2e/visual-proof.spec.ts:1555:7 › Visual proof capture › dag-bg-click-noop — clicking empty background on the workflow graph keeps the mini-DAG visible
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:44.0109308Z ^[[1A^[[2K[43/84] e2e/visual-proof.spec.ts:1599:7 › Visual proof capture › dag-full-graph-bg-click-noop — clicking empty background on the 15-workflow Full graph view does not re-fit the camera
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:53.1886694Z ^[[1A^[[2Ke2e/visual-proof.spec.ts:1599:7 › Visual proof capture › dag-full-graph-bg-click-noop — clicking empty background on the 15-workflow Full graph view does not re-fit the camera
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:53.1893349Z [dag-full-graph-bg-click-noop] mini-DAG visible after select=true, after background click=true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:53.1895668Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:53.1899943Z ^[[1A^[[2K[dag-full-graph-bg-click-noop] main graph viewport: initial="translate(300.5px, -167.35px) scale(0.3)" after-select="translate(300.5px, -167.35px) scale(0.3)" after-bg-click="translate(300.5px, -167.35px) scale(0.3)"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:53.1902913Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:30:53.7774524Z ^[[1A^[[2K[44/84] e2e/visual-proof.spec.ts:1666:7 › Visual proof capture › graph-selection-camera-stable — main graph viewport is unchanged across workflow selection and background deselection
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:04.4316136Z ^[[1A^[[2Ke2e/visual-proof.spec.ts:1666:7 › Visual proof capture › graph-selection-camera-stable — main graph viewport is unchanged across workflow selection and background deselection
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:04.4332798Z [graph-selection-camera-stable] main graph viewport: initial="translate(-84.5294px, 42.5574px) scale(1.84412)" after-select="translate(-84.5294px, 42.5574px) scale(1.84412)" after-background="translate(-84.5294px, 42.5574px) scale(1.84412)"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:04.4337163Z 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:05.1184090Z ^[[1A^[[2K[45/84] e2e/visual-proof.spec.ts:1723:7 › Visual proof capture › graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:18.0933511Z ^[[1A^[[2K[46/84] e2e/visual-proof.spec.ts:1794:7 › Visual proof capture › task running
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:28.0635919Z ^[[1A^[[2K[47/84] e2e/visual-proof.spec.ts:1804:7 › Visual proof capture › task complete
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:38.2081662Z ^[[1A^[[2K[48/84] e2e/visual-proof.spec.ts:1836:9 › Visual proof capture › timeline worker proof › timeline workers mode
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:48.3143106Z ^[[1A^[[2K[49/84] e2e/visual-proof.spec.ts:1914:7 › Visual proof capture › task panel
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:31:59.9363736Z ^[[1A^[[2K[50/84] e2e/visual-proof.spec.ts:1923:7 › Visual proof capture › embedded-tabbed-terminal — drawer opens partial with active task tab
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:32:11.0572545Z ^[[1A^[[2K[51/84] e2e/visual-proof.spec.ts:1963:7 › Visual proof capture › task panel setup failure renders in Error panel
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:32:20.6887227Z ^[[1A^[[2K[52/84] e2e/visual-proof.spec.ts:1996:7 › Visual proof capture › dag before and after task selection
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:32:29.8747277Z ^[[1A^[[2K[53/84] e2e/visual-proof.spec.ts:2014:7 › Visual proof capture › stable-layout-and-dag-ordering — deterministic dag layout
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:32:38.9838187Z ^[[1A^[[2K[54/84] e2e/visual-proof.spec.ts:2026:7 › Visual proof capture › status bar — no system log button
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:32:48.6824858Z ^[[1A^[[2K[55/84] e2e/visual-proof.spec.ts:2048:7 › Visual proof capture › fixing-with-ai vs fix-approval colors
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:32:59.6096436Z ^[[1A^[[2K[56/84] e2e/visual-proof.spec.ts:2072:7 › Visual proof capture › merge-gate-node-text-black — merge gate visible
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:33:10.4115912Z ^[[1A^[[2K[57/84] e2e/visual-proof.spec.ts:2080:7 › Visual proof capture › merge-gate-no-inline-approve — approval moves from chip to TaskPanel
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:33:21.9682545Z ^[[1A^[[2K[58/84] e2e/visual-proof.spec.ts:2119:7 › Visual proof capture › closed-status-merge-gate — merge gate renders the terminal Closed status
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:33:31.9971970Z ^[[1A^[[2K[59/84] e2e/visual-proof.spec.ts:2162:7 › Visual proof capture › review gate stack side panel shows a linear PR chain
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:33:38.7208434Z ^[[1A^[[2K[60/84] e2e/visual-proof.spec.ts:2211:7 › Visual proof capture › workflow inspector captures review-ready and not-review-ready pull request states
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:33:45.6031247Z ^[[1A^[[2K[61/84] e2e/visual-proof.spec.ts:2253:7 › Visual proof capture › sidebar keyboard navigation focuses the first inspector item, not the container
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:33:52.7599433Z ^[[1A^[[2K[62/84] e2e/visual-proof.spec.ts:2298:7 › Visual proof capture › interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:34:05.3729680Z ^[[1A^[[2K[63/84] e2e/visual-proof.spec.ts:2338:7 › Visual proof capture › workflow-task-status-color-parity — workflow and task review_ready share canonical hue
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:34:16.8796593Z ^[[1A^[[2K[64/84] e2e/visual-proof.spec.ts:2395:7 › Visual proof capture › task-status-all-states — task nodes render every persisted status
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:34:28.6607758Z ^[[1A^[[2K[65/84] e2e/visual-proof.spec.ts:2425:7 › Visual proof capture › workflow-status-all-states — workflow nodes render every persisted status
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:34:51.3221595Z ^[[1A^[[2K[66/84] e2e/visual-proof.spec.ts:2506:7 › Visual proof capture › context menu organization for failed task
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:35:02.7420523Z ^[[1A^[[2K[67/84] e2e/visual-proof.spec.ts:2528:7 › Visual proof capture › workflow context menu organization
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:35:17.2222601Z ^[[1A^[[2K[68/84] e2e/visual-proof.spec.ts:2546:7 › Visual proof capture › context menu keyboard navigation highlight
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:35:28.0640623Z ^[[1A^[[2K[69/84] e2e/visual-proof.spec.ts:2561:7 › Visual proof capture › task context menu shows Recreate Downstream action
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:35:41.0335795Z ^[[1A^[[2K[70/84] e2e/visual-proof.spec.ts:2580:7 › Visual proof capture › context menu keeps danger separator when cancel action is absent
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:35:53.5979181Z ^[[1A^[[2K[71/84] e2e/visual-proof.spec.ts:2603:7 › Visual proof capture › context menu dismisses on outside left-click even when bubbling is stopped
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:36:07.7642809Z ^[[1A^[[2K[72/84] e2e/visual-proof.spec.ts:2650:7 › Visual proof capture › queue view concurrency display
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:36:18.9603190Z ^[[1A^[[2K[73/84] e2e/visual-proof.spec.ts:2663:7 › Visual proof capture › queue assigning state
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:36:32.5134879Z ^[[1A^[[2K[74/84] e2e/visual-proof.spec.ts:2705:7 › Visual proof capture › queue-semantics — action queue with canonical task states
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:36:43.6986907Z ^[[1A^[[2K[75/84] e2e/visual-proof.spec.ts:2727:7 › Visual proof capture › queue-relationships — expanded row context with upstream and downstream
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:36:54.4665161Z ^[[1A^[[2K[76/84] e2e/visual-proof.spec.ts:2762:7 › Visual proof capture › gate-policy-side-panel — blocked task with satisfied and offender gates
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:37:11.8662714Z ^[[1A^[[2K[77/84] e2e/visual-proof.spec.ts:2880:7 › Visual proof capture › stacked-workflows — root, parallel downstream, and fan-in graph
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:37:32.8493244Z ^[[1A^[[2K[78/84] e2e/visual-proof.spec.ts:2947:7 › Visual proof capture › detached-workflow-lineage — active edge becomes detached lineage
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:37:50.6207895Z ^[[1A^[[2K[79/84] e2e/visual-proof.spec.ts:3010:7 › Visual proof capture › queue-action-wording — task-level uses Cancel, workflow-level keeps Cancel Workflow
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:38:11.6599551Z ^[[1A^[[2K[80/84] e2e/visual-proof.spec.ts:3041:7 › Visual proof capture › queue-cancel-control — compact cancel affordance without priority metadata
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:38:24.9533531Z ^[[1A^[[2K[81/84] e2e/visual-proof.spec.ts:3058:7 › Visual proof capture › queue-action-surface-hardening — composed queue UX with labels, relationships, and cancel
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:38:36.4201960Z ^[[1A^[[2K[82/84] e2e/visual-proof.spec.ts:3090:7 › Visual proof capture › completed SSH task double-click expands terminal drawer with working SSH resume terminal
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:38:46.7922056Z ^[[1A^[[2K[83/84] e2e/visual-proof.spec.ts:3204:7 › Visual proof capture › task-graph-keyboard-controls - selected workflow task graph visible
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:38:55.8122822Z ^[[1A^[[2K[84/84] e2e/visual-proof.spec.ts:3213:7 › Visual proof capture › start-ready-recreate-failed-and-pending — menu option and preview dialog
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:06.2853107Z ^[[1A^[[2K[85/84] (retries) e2e/visual-proof.spec.ts:3231:7 › Visual proof capture › start-ready-recreate-failed-pending-and-running — menu option and preview dialog
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:16.1050034Z ^[[1A^[[2K[86/84] (retries) e2e/visual-proof.spec.ts:3247:7 › Unknown terminal status visual proof › hydrated session with unconfirmed terminal status shows the reattach placeholder, then reattaches for real
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.6775100Z cleanup-orphaned-automation-chrome: no orphaned automation Chrome groups found
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.6911472Z ^[[1A^[[2K  Slow test file: e2e/visual-proof.spec.ts (12.7m)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.6915392Z   Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.6918749Z   1 failed
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.6922372Z     e2e/headless-thundering-herd.spec.ts:103:7 › Headless thundering herd › burst headless restarts do not spawn headless electron herds or freeze the UI 
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.6925158Z   3 skipped
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.6926122Z   80 passed (18.1m)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.7668923Z undefined
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.7700026Z /__w/Invoker/Invoker/packages/app:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.7715893Z  ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command failed with exit code 1: xvfb-run --auto-servernum playwright test --output /__w/Invoker/Invoker/.git/playwright-artifacts/ci-playwright-1-of-9/test-results --reporter=line e2e/visual-proof.spec.ts e2e/edit-task-command.spec.ts e2e/headless-thundering-herd.spec.ts e2e/launching-stall-watchdog.spec.ts e2e/embedded-terminal-pty.spec.ts e2e/keyboard-navigation.spec.ts
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8223858Z ##[error]Process completed with exit code 1.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8476240Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8481030Z ##[group]Run actions/upload-artifact@v4
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8482347Z with:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8482948Z   name: playwright-artifacts-1-of-9
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8484056Z   path: .git/playwright-artifacts
+playwright / 1-of-9	UNKNOWN STEP	packages/app/test-results
+playwright / 1-of-9	UNKNOWN STEP	
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8485567Z   if-no-files-found: ignore
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8486749Z   compression-level: 6
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8487813Z   overwrite: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8489040Z   include-hidden-files: false
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8490178Z env:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8491111Z   CI: true
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8492026Z   NODE_VERSION: 26
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8493340Z   PNPM_HOME: /github/home/setup-pnpm/node_modules/.bin
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8494560Z   GIT_CONFIG_GLOBAL: /__w/_temp/gitconfig
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8495151Z ##[endgroup]
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:21.8523493Z ##[command]/usr/bin/docker exec  48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a sh -c "cat /etc/*release | grep ^ID"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:22.4776667Z (node:14757) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:22.4780020Z (Use `node --trace-deprecation ...` to show where the warning was created)
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:23.0457939Z Multiple search paths detected. Calculating the least common ancestor of all paths
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:23.0462323Z The least common ancestor is /__w/Invoker/Invoker. This will be the root directory of the artifact
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:23.0464387Z With the provided path, there will be 218 files uploaded
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:23.0466519Z Artifact name is valid!
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:23.0467924Z Root directory input is valid!
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:23.7374240Z Beginning upload of artifact content to blob storage
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:24.8400013Z (node:14757) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:27.8257262Z Uploaded bytes 8388608
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.1461297Z Uploaded bytes 11632766
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.3902153Z Finished uploading artifact content to blob storage!
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.3909765Z SHA256 digest of uploaded artifact zip is aed32d04211bc3a75e7f2eeb018d4b528c2acaf53face5a604aeb9402a7f3318
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.3926055Z Finalizing artifact upload
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.8358655Z Artifact playwright-artifacts-1-of-9.zip successfully finalized. Artifact ID 9749434612
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.8362317Z Artifact playwright-artifacts-1-of-9 has been successfully uploaded! Final size is 11632766 bytes. Artifact ID is 9749434612
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.8401361Z Artifact download URL: https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/33367716576/artifacts/9749434612
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.8953004Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.8956292Z Post job cleanup.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:28.8963877Z ##[command]/usr/bin/docker exec  48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a sh -c "cat /etc/*release | grep ^ID"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.4468734Z Pruning is unnecessary.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.5005592Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.5009768Z Post job cleanup.
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.5038708Z ##[command]/usr/bin/docker exec  48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a sh -c "cat /etc/*release | grep ^ID"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.9070305Z [command]/usr/bin/git version
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.9160890Z git version 2.43.0
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.9270795Z Temporarily overriding HOME='/__w/_temp/73b502b2-187c-4abc-bafa-78acff6abbe4' before making global git config changes
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.9276015Z Adding repository directory to the temporary git global config as a safe directory
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.9284949Z [command]/usr/bin/git config --global --add safe.directory /__w/Invoker/Invoker
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.9380815Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:29.9520793Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.0121991Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.0198532Z http.https://github.com/.extraheader
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.0232259Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.0343351Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.1006053Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.1091618Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.2094143Z Stop and remove container: ac8f05ea7dad4a5b90b309d8f42ab8be_mcrmicrosoftcomplaywrightv1582noble_4dac06
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.2105656Z ##[command]/usr/bin/docker rm --force 48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.8009103Z 48ce344c29c50b1f18b201d7dbd48246e407f9f1e4576fb8b8aa656aa4c5d44a
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.8080931Z Remove container network: github_network_443366f671f04d8caa18fa5fcea011ab
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.8090410Z ##[command]/usr/bin/docker network rm github_network_443366f671f04d8caa18fa5fcea011ab
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.9389632Z github_network_443366f671f04d8caa18fa5fcea011ab
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:30.9557376Z Cleaning up orphan processes
+playwright / 1-of-9	UNKNOWN STEP	2026-08-31T07:39:31.0226644Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/download-artifact@v4, actions/setup-node@v4, actions/upload-artifact@v4, pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
