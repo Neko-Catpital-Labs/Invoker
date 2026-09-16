@@ -12,6 +12,7 @@ import type { TaskState, TaskStateChanges, Attempt, TaskExecution, WorkflowDeriv
 import {
   assertTaskConsistent,
   applyTaskConfigPatch,
+  BUILT_IN_LOCAL_EXECUTION_POOL_ID,
   computeWorkflowRollupFromSummaries,
   isDiscardedAttempt,
   normalizeRunnerKind,
@@ -56,6 +57,16 @@ const SAVE_TASK_COLUMNS = [
 ] as const;
 
 const SAVE_TASK_ROW_PLACEHOLDERS = `(${SAVE_TASK_COLUMNS.map(() => '?').join(', ')})`;
+
+function persistedRunnerKindForTaskConfig(
+  cfg: ReturnType<typeof resolveTaskConfig>,
+): string | null {
+  if (cfg.runnerKind) return cfg.runnerKind;
+  if (cfg.poolId) {
+    return cfg.poolId === BUILT_IN_LOCAL_EXECUTION_POOL_ID ? 'worktree' : 'ssh';
+  }
+  return null;
+}
 
 /**
  * Safety invariant: saveTask's INSERT OR REPLACE must bind selected_attempt_id
@@ -334,7 +345,7 @@ export class SqliteTaskAttemptRepository {
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
       0, null,
-      cfg.runnerKind ?? null,
+      persistedRunnerKindForTaskConfig(cfg),
       cfg.poolId ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
@@ -447,7 +458,7 @@ export class SqliteTaskAttemptRepository {
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
       0, null,
-      cfg.runnerKind ?? null,
+      persistedRunnerKindForTaskConfig(cfg),
       cfg.poolId ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,

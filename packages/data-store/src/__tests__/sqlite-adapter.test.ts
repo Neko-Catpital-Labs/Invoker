@@ -1057,6 +1057,31 @@ describe('SQLiteAdapter', () => {
       )).toThrow('tasks executor routing invariant violated');
     });
 
+    it('materializes storage runner kind for pooled task configs without changing the in-memory shape', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const local = makeTask('local-pooled', {
+        config: { poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID },
+      });
+      const remote = makeTask('remote-pooled', {
+        config: { poolId: 'mixed-local-ssh' },
+      });
+
+      expect(local.config.runnerKind).toBeUndefined();
+      expect(remote.config.runnerKind).toBeUndefined();
+
+      adapter.saveTask('wf-1', local);
+      adapter.saveTasks('wf-1', [remote]);
+
+      expect(adapter.loadTask('local-pooled')?.config).toMatchObject({
+        runnerKind: 'worktree',
+        poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+      });
+      expect(adapter.loadTask('remote-pooled')?.config).toMatchObject({
+        runnerKind: 'ssh',
+        poolId: 'mixed-local-ssh',
+      });
+    });
+
     it('backfills compatible legacy ordinary rows without changing lifecycle data', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-pool-invariant-'));
       const dbPath = join(dir, 'invoker.db');
