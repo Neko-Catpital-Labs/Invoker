@@ -213,7 +213,7 @@ These are the words that keep showing up once you read the code. The definitions
 - **Plan**: A YAML document describing a workflow: a name, workflow defaults like `featureBranch`, a `baseBranch` that defaults to `master` but can also be an explicit remote-qualified ref like `origin/master` or `upstream/main`, and a list of tasks with ids, descriptions, and dependency edges. Plans are parsed into a `PlanDefinition` with validation on required fields.
 - **Workflow**: The persisted instance created from a plan. It has durable identity, stored tasks, and workflow-level fields (including a generation counter used to salt branch naming and invalidate stale work).
 - **Task (node)**: One unit of work in the DAG: a human-readable description, dependency ids, a `TaskConfig` (what to run and how), and `TaskExecution` (runtime fields like branch/commit/workspace metadata).
-- **Task status**: The workflow-visible lifecycle label (`pending`, `running`, `failed`, `needs_input`, `review_ready`, `awaiting_approval`, `stale`, and others).
+- **Task status**: The workflow-visible lifecycle label (`pending`, `running`, `failed`, `needs_input`, `review_ready`, `awaiting_approval`, `stale`, `skipped`, and others); `skipped` is terminal when an upstream task fails and is resurrected when that upstream task is retried.
 - **Attempt**: An immutable execution record for a task node: input snapshot metadata (including upstream attempt lineage), execution progress, and outputs like branch/commit when work finishes.
 - **Selected attempt**: The attempt a task is currently treating as authoritative for downstream composition and staleness checks.
 - **Executor**: The runtime that actually runs a task (`worktree`, `docker`, `ssh`, or the internal `merge` gate executor). The orchestration engine stays executor-agnostic in its core task model.
@@ -305,7 +305,7 @@ This appendix is the more explicit version of the comparisons above. It is here 
 |---|---|---|
 | DAG as the organizing model | Airflow models pipelines as DAGs. | Invoker models workflows as DAGs whose edges affect readiness, scheduling, and invalidation. |
 | Scheduler | Airflow runs tasks in dependency order under resource constraints. | Invoker uses a queue and concurrency cap to drain ready work. |
-| Visible lifecycle states | Airflow exposes task states for operators. | Invoker exposes states like `pending`, `running`, `failed`, `needs_input`, `review_ready`, `awaiting_approval`, and `stale`. |
+| Visible lifecycle states | Airflow exposes task states for operators. | Invoker exposes states like `pending`, `running`, `failed`, `needs_input`, `review_ready`, `awaiting_approval`, `stale`, and `skipped`; `skipped` means an upstream failure prevented the task from running and retrying that upstream resurrects it. |
 | Graph and timeline views | Airflow gives operators graph-oriented UI views. | Invoker uses graph and timeline views so operators can understand workflow progress visually. |
 | Retry and rerun mental model | Airflow gives operators a structured model for rerunning work. | Invoker uses retries, recreation, and downstream invalidation to rerun work explicitly. |
 

@@ -7,6 +7,8 @@ import {
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
 
+const ACTION_GRAPH_PAYLOAD_MAX_CHARS = 2500;
+
 function needsActionGraphDetail(status: string): boolean {
   switch (status) {
     case 'running':
@@ -18,6 +20,7 @@ function needsActionGraphDetail(status: string): boolean {
     case 'awaiting_approval':
     case 'review_ready':
     case 'stale':
+    case 'skipped':
       return true;
     default:
       return false;
@@ -41,7 +44,11 @@ export function buildCurrentActionGraphSnapshot(args: {
       task.id,
       args.persistence.loadActionGraphAttempts(task.id, task.execution.selectedAttemptId),
     );
-    eventsByTaskId.set(task.id, args.persistence.getEvents(task.id, 'desc', 20));
+    eventsByTaskId.set(
+      task.id,
+      args.persistence.getEventsSlim?.(task.id, 'desc', 20, ACTION_GRAPH_PAYLOAD_MAX_CHARS)
+        ?? args.persistence.getEvents(task.id, 'desc', 20),
+    );
   }
 
   return buildActionGraphDiagnostics({
@@ -56,4 +63,30 @@ export function buildCurrentActionGraphSnapshot(args: {
     stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(args.invokerConfig),
     launchDispatches: args.persistence.listLaunchDispatchesByState(['enqueued', 'leased']),
   });
+}
+
+export function createCachedActionGraphSnapshotReader(args: {
+  getOrchestrator: () => Orchestrator;
+  persistence: SQLiteAdapter;
+  invokerConfig: InvokerConfig;
+  ttlMs?: number;
+  now?: () => number;
+}): () => ActionGraphResponse {
+  const ttlMs = args.ttlMs ?? 1000;
+  const now = args.now ?? (() => Date.now());
+  let cached: { at: number; value: ActionGraphResponse } | null = null;
+
+  return () => {
+    const at = now();
+    if (cached && at - cached.at >= 0 && at - cached.at < ttlMs) {
+      return cached.value;
+    }
+    const value = buildCurrentActionGraphSnapshot({
+      orchestrator: args.getOrchestrator(),
+      persistence: args.persistence,
+      invokerConfig: args.invokerConfig,
+    });
+    cached = { at, value };
+    return value;
+  };
 }

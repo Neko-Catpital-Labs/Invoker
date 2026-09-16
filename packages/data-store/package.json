@@ -9,6 +9,11 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "require": "./src/index.ts"
+    },
+    "./sqlite-quick-check-worker": {
+      "types": "./src/sqlite-quick-check-worker.ts",
+      "import": "./src/sqlite-quick-check-worker.ts",
+      "require": "./src/sqlite-quick-check-worker.ts"
     }
   },
   "scripts": {

@@ -24,21 +24,26 @@ class GitFacts:
     is_ancestor: bool
     is_empty_diff: bool
     all_commits_equivalent: bool
+    is_rebase_equivalent: bool = False
+    has_conflict: bool = False
 
 
 LANDED_ANCESTOR = "landed:ancestor"
 LANDED_EMPTY_DIFF = "landed:empty-diff"
 LANDED_PATCH_EQUIVALENT = "landed:patch-equivalent"
+LANDED_REBASE_EQUIVALENT = "landed:rebase-equivalent"
 DUPLICATE_SAME_BRANCH = "duplicate:same-branch"
 DUPLICATE_SAME_DIFF = "duplicate:same-diff"
+DUPLICATE_TITLE_COLLISION_MERGED = "duplicate:title-collision-merged"
 
 CLOSE_LANDED = "close_landed"
 CLOSE_DUPLICATE = "close_duplicate"
+FLAG_DUPLICATE = "flag_duplicate"
 
 
 @dataclass(frozen=True)
 class CloseAction:
-    kind: str  # CLOSE_LANDED | CLOSE_DUPLICATE
+    kind: str  # CLOSE_LANDED | CLOSE_DUPLICATE | FLAG_DUPLICATE
     pr_number: int
     expected_head_oid: str
     reason: str  # one of the *_* signal constants above
