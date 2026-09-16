@@ -481,5 +481,6 @@ describe('cancel-first invariant — direct primitive calls bypass applyInvalida
     expect(cancelEvent).toBeDefined();
     const payload = cancelEvent!.payload as TaskStateChanges | undefined;
     expect(payload?.execution?.error).toMatch(/Cancelled before .*invalidation/);
+    expect(payload?.execution?.failureClass).toBe('cancelled');
   });
 });

@@ -210,7 +210,9 @@ export function finalizeFailedTaskImpl(
     throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `finalizeFailedTask: task ${taskId} not found in graph`);
   }
 
-  const failureClass = executionFields.failureClass ?? FailureClassifier.classifyError(executionFields.error);
+  const failureClass = executionFields.failureClass
+    ?? FailureClassifier.classifyError(executionFields.error)
+    ?? FailureClassifier.classifyWorkFailure(executionFields.error);
 
   const changes: TaskStateChanges = {
     status: 'failed',
