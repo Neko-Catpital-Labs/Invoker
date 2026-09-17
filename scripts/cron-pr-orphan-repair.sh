@@ -143,6 +143,8 @@ scan_repo() {
     q_key="$(shell_quote "$key")"
     q_fingerprint="$(shell_quote "$fingerprint")"
     q_tsv_kind="$(shell_quote "orphan-attempt")"
+    q_repo="$(shell_quote "$repo")"
+    q_num="$(shell_quote "$num")"
 
     plan_file="$repo_plan_dir/repair-pr-$num.yaml"
     {
@@ -185,9 +187,18 @@ scan_repo() {
         printf 'kind=%s\n' "$q_tsv_kind"
         printf 'key=%s\n' "$q_key"
         printf 'marker=%s\n' "$q_fingerprint"
+        printf 'repo=%s\n' "$q_repo"
+        printf 'num=%s\n' "$q_num"
         printf 'ref="refs/heads/$branch"\n'
         printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
         printf 'if [ "$live" != "$expected" ]; then\n'
+        printf '  if [ -z "$live" ]; then\n'
+        printf '    pr_state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null || true)"\n'
+        printf '    if [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then\n'
+        printf '      echo "pr-worker-safe-push: noop: PR #$num is already ${pr_state,,}; $ref no longer exists, nothing to push" >&2\n'
+        printf '      exit 0\n'
+        printf '    fi\n'
+        printf '  fi\n'
         printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
         printf '  exit 20\n'
         printf 'fi\n'
