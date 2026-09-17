@@ -1,11 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const DEFAULT_TARGET_REPO_URL_FOR_TEST = 'https://github.com/Neko-Catpital-Labs/Invoker.git';
 import {
+  saveState,
   buildCiJobDefinitions,
   buildFailureKey,
   buildMarker,
@@ -1766,5 +1767,44 @@ describe('watch-target-repo config resolution', () => {
     assert.equal(defaultResult.inserted, true);
     assert.equal(catstackResult.inserted, true, 'catstack must claim its own row, not collide with the default repo\'s');
     assert.equal(rows.size, 2);
+  });
+});
+
+describe('saveState atomic write', () => {
+  const sampleState = { lastProcessedRunId: 42, heads: { sha1: { runId: 42 } } };
+
+  it('leaves a parseable state.json and no temporary file behind', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ci-watch-state-'));
+    try {
+      const stateFile = join(dir, 'state.json');
+      saveState(sampleState, { stateFile });
+      const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
+      assert.equal(saved.lastProcessedRunId, 42);
+      assert.deepEqual(saved.heads, { sha1: { runId: 42 } });
+      assert.deepEqual(readdirSync(dir), ['state.json']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the previous state.json intact and cleans up when the write throws', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ci-watch-state-'));
+    try {
+      const stateFile = join(dir, 'state.json');
+      const previous = '{"lastProcessedRunId":7}';
+      writeFileSync(stateFile, previous);
+      const failingWrite = (path, content) => {
+        writeFileSync(path, String(content).slice(0, 5));
+        throw new Error('ENOSPC: no space left on device');
+      };
+      assert.throws(
+        () => saveState(sampleState, { stateFile, writeFile: failingWrite }),
+        (error) => error.message.includes(stateFile) && error.message.includes('ENOSPC'),
+      );
+      assert.equal(readFileSync(stateFile, 'utf8'), previous);
+      assert.deepEqual(readdirSync(dir), ['state.json']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
