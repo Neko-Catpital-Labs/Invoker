@@ -15,6 +15,7 @@ import {
   reapStaleInvokerCliTempDirs,
   reapStaleAutomationCheckouts,
   reapStaleDevelopmentHomes,
+  reapStaleDevelopmentWorktrees,
   reapStaleMergeClones,
   reapStaleWorktrees,
 } from './reaper-reclaim.js';
@@ -41,6 +42,7 @@ export interface ReaperWorkerOptions {
   taskStore?: DiskHeadroomWorkerStore;
   reapMergeClones?: typeof reapStaleMergeClones;
   reapDevHomes?: typeof reapStaleDevelopmentHomes;
+  reapDevWorktrees?: typeof reapStaleDevelopmentWorktrees;
   /** Test seam: override the orphaned dot-deleting reap. */
   reapOrphans?: typeof reapDeletingOrphans;
   /** Test seam: override the stale automation-checkout reap. */
@@ -63,6 +65,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
   const enforceRetention = options.enforceRetention ?? enforceHourlySnapshotRetention;
   const reapMergeClones = options.reapMergeClones ?? reapStaleMergeClones;
   const reapDevHomes = options.reapDevHomes ?? reapStaleDevelopmentHomes;
+  const reapDevWorktrees = options.reapDevWorktrees ?? reapStaleDevelopmentWorktrees;
 
   return createWorkerRuntime({
     kind: REAPER_WORKER_KIND,
@@ -112,12 +115,18 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         invokerHome: options.invokerHome,
         logger: options.logger,
       });
+      if (ctx.signal?.aborted) return;
+      const devWorktreeResult = await reapDevWorktrees({
+        invokerHome: options.invokerHome,
+        logger: options.logger,
+      });
 
       const orphanFailed = orphanResults.filter((result) => !result.ok);
       const failed = [...orphanResults, ...worktreeResults].filter((result) => !result.ok);
       const failureReason = failed[0]?.reason
         ?? (mergeCloneResult.ok ? undefined : mergeCloneResult.reason)
-        ?? (devHomeResult.ok ? undefined : devHomeResult.reason);
+        ?? (devHomeResult.ok ? undefined : devHomeResult.reason)
+        ?? (devWorktreeResult.ok ? undefined : devWorktreeResult.reason);
       const summary =
         `Reaper pass: orphan targets ${orphanResults.length - orphanFailed.length}/${orphanResults.length} ok, `
         + `checkouts removed ${checkoutsRemoved.length}, CLI temp dirs removed ${tempDirsRemoved.length}, `
@@ -126,7 +135,9 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         + `merge clones removed ${mergeCloneResult.removed.length}`
         + (mergeCloneResult.ok ? '' : ` (merge clone reap failed: ${mergeCloneResult.reason})`)
         + `, dev homes removed ${devHomeResult.removed.length}, dev homes unchecked ${devHomeResult.unchecked.length}`
-        + (devHomeResult.ok ? '' : ` (dev home reap failed: ${devHomeResult.reason})`);
+        + (devHomeResult.ok ? '' : ` (dev home reap failed: ${devHomeResult.reason})`)
+        + `, dev worktrees removed ${devWorktreeResult.removed.length}, dev worktrees unchecked ${devWorktreeResult.unchecked.length}`
+        + (devWorktreeResult.ok ? '' : ` (dev worktree reap failed: ${devWorktreeResult.reason})`);
 
       if (options.store) {
         recordWorkerDecisionRow(options.store, {
@@ -148,6 +159,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
             worktreesRemoved,
             mergeCloneResult,
             devHomeResult,
+            devWorktreeResult,
           },
           incrementAttempt: true,
         });
@@ -163,7 +175,7 @@ export function registerReaperWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: REAPER_WORKER_KIND,
-    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, stale CLI temp dirs, stale task worktrees, stale merge clones no unfinished task uses, week-old dev homes with no running process, and excess hourly snapshots on an interval.',
+    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, stale CLI temp dirs, stale task worktrees, stale merge clones no unfinished task uses, week-old dev homes with no running process, stale worktrees inside dev homes, and excess hourly snapshots on an interval.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createReaperWorker({
         logger: deps.logger,
