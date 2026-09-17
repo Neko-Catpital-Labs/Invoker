@@ -15,6 +15,7 @@ import { hourlySnapshotRetention, pruneHourlySnapshots, type Logger } from '@inv
 
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
 import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
+import { hasFreshInUseMark, IN_USE_MARK_DIR } from '../workspace-in-use-mark.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
 import {
@@ -790,6 +791,132 @@ export async function reapStaleDevelopmentHomes(opts: {
     } catch (err) {
       errors.push(`${devHome}: ${errorDetail(err)}`);
       opts.logger?.warn?.(`[reaper] failed to remove dev home ${devHome}: ${errorDetail(err)}`, { module: 'reaper' });
+    }
+  }
+  if (errors.length > 0) {
+    return { ok: false, removed, unchecked, reason: `cleanup-error: ${errors.slice(0, 3).join('; ')}` };
+  }
+  return { ok: true, removed, unchecked };
+}
+
+type ListedDir = { ok: true; names: string[] } | { ok: false; detail: string };
+
+function listDir(path: string): ListedDir {
+  try {
+    return { ok: true, names: readdirSync(path) };
+  } catch (err) {
+    return { ok: false, detail: `${path}: ${errorDetail(err)}` };
+  }
+}
+
+export async function reapStaleDevelopmentWorktrees(opts: {
+  invokerHome: string;
+  logger?: Logger;
+  userHome?: string;
+  nowMs?: number;
+  runLocalGit?: RunLocalGit;
+  gitTimeoutMs?: number;
+}): Promise<StaleDevelopmentHomeReapResult> {
+  const userHome = opts.userHome ?? homedir();
+  const home = expandTildeHome(opts.invokerHome, userHome);
+  if (!isSafeInvokerHome(home, userHome)) return { ok: false, removed: [], unchecked: [], reason: 'path-guard' };
+
+  const devRoot = join(home, 'dev');
+  const rootKind = pathKind(devRoot);
+  if (rootKind.state === 'error') {
+    opts.logger?.error?.(`[reaper] could not check ${rootKind.detail}`, { module: 'reaper' });
+    return { ok: false, removed: [], unchecked: [], reason: `cleanup-error: ${rootKind.detail}` };
+  }
+  if (rootKind.state !== 'directory') return { ok: true, removed: [], unchecked: [] };
+  const devHomes = listDir(devRoot);
+  if (!devHomes.ok) {
+    opts.logger?.error?.(`[reaper] could not list ${devHomes.detail}`, { module: 'reaper' });
+    return { ok: false, removed: [], unchecked: [], reason: `cleanup-error: ${devHomes.detail}` };
+  }
+
+  const nowMs = opts.nowMs ?? Date.now();
+  const minAgeMs = STALE_WORKTREE_MIN_AGE_HOURS * 60 * 60 * 1000;
+  const runLocalGit = opts.runLocalGit ?? defaultRunLocalGit;
+  const gitTimeoutMs = opts.gitTimeoutMs ?? STALE_WORKTREE_GIT_TIMEOUT_MS;
+  const removed: string[] = [];
+  const unchecked: string[] = [];
+  const errors: string[] = [];
+  const keepUnchecked = (path: string, detail: string) => {
+    unchecked.push(path);
+    opts.logger?.warn?.(`[reaper] kept dev worktree, could not check ${detail}`, { module: 'reaper' });
+  };
+
+  for (const devName of devHomes.names) {
+    const devHome = join(devRoot, devName);
+    const worktreesRoot = join(devHome, 'worktrees');
+    const worktreesKind = pathKind(worktreesRoot);
+    if (worktreesKind.state === 'error') {
+      keepUnchecked(worktreesRoot, worktreesKind.detail);
+      continue;
+    }
+    if (worktreesKind.state !== 'directory') continue;
+    const repoHashes = listDir(worktreesRoot);
+    if (!repoHashes.ok) {
+      keepUnchecked(worktreesRoot, repoHashes.detail);
+      continue;
+    }
+
+    for (const repoHash of repoHashes.names) {
+      const repoWorktreeRoot = join(worktreesRoot, repoHash);
+      const repoKind = pathKind(repoWorktreeRoot);
+      if (repoKind.state === 'error') {
+        keepUnchecked(repoWorktreeRoot, repoKind.detail);
+        continue;
+      }
+      if (repoKind.state !== 'directory') continue;
+      try {
+        if (hasFreshInUseMark(devHome, repoHash, nowMs)) {
+          opts.logger?.info?.(`[reaper] kept dev worktrees ${repoWorktreeRoot}, in-use mark is fresh`, { module: 'reaper' });
+          continue;
+        }
+      } catch (err) {
+        keepUnchecked(repoWorktreeRoot, `in-use mark ${join(devHome, IN_USE_MARK_DIR, 'worktrees', repoHash)}: ${errorDetail(err)}`);
+        continue;
+      }
+      const branches = listDir(repoWorktreeRoot);
+      if (!branches.ok) {
+        keepUnchecked(repoWorktreeRoot, branches.detail);
+        continue;
+      }
+
+      let removedInRepo = 0;
+      for (const branch of branches.names) {
+        const path = join(repoWorktreeRoot, branch);
+        const kind = pathKind(path);
+        if (kind.state === 'error') {
+          keepUnchecked(path, kind.detail);
+          continue;
+        }
+        if (kind.state !== 'directory') continue;
+        const newest = newestMtimeMs(path);
+        if (!newest.ok) {
+          keepUnchecked(path, newest.detail);
+          continue;
+        }
+        if (nowMs - newest.ms < minAgeMs) continue;
+        try {
+          await rm(path, { recursive: true, force: true });
+          removed.push(path);
+          removedInRepo += 1;
+          opts.logger?.info?.(`[reaper] removed stale dev worktree ${path}`, { module: 'reaper' });
+        } catch (err) {
+          errors.push(`${path}: ${errorDetail(err)}`);
+          opts.logger?.warn?.(`[reaper] failed to remove dev worktree ${path}: ${errorDetail(err)}`, { module: 'reaper' });
+        }
+      }
+
+      const repoPath = join(devHome, 'repos', repoHash);
+      if (removedInRepo === 0 || !isDirectory(repoPath)) continue;
+      try {
+        await runLocalGit(['-C', repoPath, 'worktree', 'prune'], gitTimeoutMs);
+      } catch (err) {
+        opts.logger?.warn?.(`[reaper] git worktree prune failed for ${repoPath}: ${errorDetail(err)}`, { module: 'reaper' });
+      }
     }
   }
   if (errors.length > 0) {
