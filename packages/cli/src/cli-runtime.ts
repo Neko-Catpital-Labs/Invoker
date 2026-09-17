@@ -1152,13 +1152,11 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
   const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
     ownerCapability: true,
     outputDir: join(dbDir, 'outputs'),
-    ...(options.json ? { slowQueryThresholdMs: 0 } : {}),
+    ...(options.json ? { slowQueryThresholdMs: 0, logCheckpointTiming: false } : {}),
   });
   const stdoutWrite = process.stdout.write;
-  const consoleWarn = console.warn;
   if (options.json) {
     process.stdout.write = (() => true) as typeof process.stdout.write;
-    console.warn = () => {};
   }
 
 
@@ -1232,11 +1230,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     } else {
       process.env.INVOKER_DB_DIR = previousInvokerDbDir;
     }
-    try {
-      persistence.close();
-    } finally {
-      console.warn = consoleWarn;
-    }
+    persistence.close();
   }
 }
 
