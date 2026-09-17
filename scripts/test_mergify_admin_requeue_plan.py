@@ -1914,7 +1914,7 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
             "repair-check-settled", 1, HEAD, "build", epoch=NOW,
             meta={"workflowId": "wf-capacity", "outcomeClass": "capacity-deferred"},
         )
-        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, "build"), 0)
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
         self.assertTrue(p.repair_in_flight(ledger, 1, HEAD, "repair-check", "build", NOW + 1))
 
     def test_three_infra_outcomes_do_not_cap_and_eventual_retry_files(self):
@@ -2037,6 +2037,49 @@ class StackReport(PlannerTestCase):
         self.assertIn("workflow=wf-build-2", text)
         self.assertIn("status=failed", text)
         self.assertIn("outcome=code", text)
+
+    def test_report_cap_line_ignores_attempts_from_a_superseded_head(self):
+        ledger = self._ledger()
+        stale_head = "c" * 40
+        for idx in range(3):
+            ledger.record(
+                "repair-check",
+                501,
+                stale_head,
+                "build",
+                epoch=NOW - 60 + idx,
+                meta={"dispatchState": "acknowledged", "workflowId": f"wf-stale-{idx}"},
+            )
+            ledger.record(
+                "repair-check-settled",
+                501,
+                stale_head,
+                "build",
+                epoch=NOW - 50 + idx,
+                meta={"workflowId": f"wf-stale-{idx}", "workflowStatus": "failed", "outcomeClass": "code"},
+            )
+        item = pr(
+            number=501,
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+        )
+        with unittest.mock.patch.object(
+            p,
+            "retry_decision",
+            return_value={"action": "file", "attempts": 0, "crashed_on_infra": False},
+        ):
+            sections = p.build_stack_report_sections(
+                (m.StackGroup("stale-head", (item,)),),
+                REQUIRED,
+                ledger,
+                NOW,
+                {501},
+                {},
+                max_repair_attempts=3,
+            )
+        text = p.render_stack_report("owner/repo", sections)
+        self.assertIn('Caps: repair-check PR #501 key="build" cap=0/3', text)
+        self.assertNotIn("cap=3/3", text)
 
     def test_report_includes_conflict_rebase_plan_and_submission_timeout(self):
         ledger = self._ledger()

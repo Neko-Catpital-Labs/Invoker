@@ -240,6 +240,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
     INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
     INVOKER_PR_ORPHAN_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
     INVOKER_PR_ORPHAN_PLAN_DIR: join(leg.legDir, 'plans'),
+    // Pin the scan list: an inherited one makes this leg scan real repos.
+    INVOKER_GITHUB_TARGET_REPOS: 'fake/repo',
   }, 'pr-orphan-broken.json');
   assert(leg, has(leg, '[worker:pr-orphan-repair] spawning scripts/cron-pr-orphan-repair.sh'),
     'worker spawned its own cron entrypoint');
