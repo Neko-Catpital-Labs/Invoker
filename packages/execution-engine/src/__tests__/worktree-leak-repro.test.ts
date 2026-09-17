@@ -213,7 +213,7 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
 
     // pool.ensureCloneThroughRepoQueue handles fetching internally (git fetch --all on existing clones)
     const pool = (executor as any).pool;
-    expect(pool.ensureCloneThroughRepoQueue).toHaveBeenCalledWith('git@github.com:test/repo.git');
+    expect(pool.ensureCloneThroughRepoQueue).toHaveBeenCalledWith('git@github.com:test/repo.git', undefined);
 
     // Cleanup
     taskProcess.emit('close', 0, null);
