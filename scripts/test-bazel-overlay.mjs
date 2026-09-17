@@ -113,8 +113,13 @@ try {
 require('node:fs').writeFileSync(process.env.BAZEL_AUTH_CAPTURE, JSON.stringify(process.argv.slice(2)));
 `, { mode: 0o755 });
   for (const [name, job] of [['bazel-cache-pilot', pilot], ['bazel-rbe-pilot', rbePilot]]) {
-    const step = job.steps.find((step) => step.env?.BUILDBUDDY_API_KEY);
-    assert(step?.env.BUILDBUDDY_API_KEY === '${{ secrets.BUILDBUDDY_API_KEY }}', `${name} must use the repository secret`);
+    const keyedSteps = job.steps.filter((step) => step.env?.BUILDBUDDY_API_KEY);
+    assert(keyedSteps.length > 0, `${name} must read BUILDBUDDY_API_KEY`);
+    for (const keyed of keyedSteps) {
+      assert(keyed.env.BUILDBUDDY_API_KEY === '${{ secrets.BUILDBUDDY_API_KEY }}', `${name} must use the repository secret`);
+    }
+    const step = keyedSteps.find((keyed) => /\bbazelisk\b/.test(keyed.run ?? ''));
+    assert(step, `${name} must invoke bazelisk from a step that reads BUILDBUDDY_API_KEY`);
     for (const key of ['dummy-key with spaces', '']) {
       rmSync(capture, { force: true });
       const result = spawnSync('bash', ['-euo', 'pipefail', '-c', step.run], {
