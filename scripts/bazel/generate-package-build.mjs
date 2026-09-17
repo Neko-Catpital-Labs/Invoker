@@ -80,6 +80,13 @@ function renderScriptsBazelBuild() {
     '    "run_workspace_cmd.sh",',
     '])',
     '',
+    'sh_test(',
+    '    name = "rbe_smoke_test",',
+    '    srcs = ["rbe_smoke_test.sh"],',
+    '    size = "small",',
+    '    tags = ["manual", "rbe"],',
+    ')',
+    '',
   ].join('\n');
 }
 

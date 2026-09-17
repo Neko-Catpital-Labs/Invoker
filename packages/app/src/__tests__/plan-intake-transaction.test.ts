@@ -25,10 +25,12 @@ describe('plan intake transaction', () => {
     });
     const originalSaveTask = persistence.saveTask.bind(persistence);
     let saveCount = 0;
-    vi.spyOn(persistence, 'saveTask').mockImplementation((workflowId, task) => {
-      saveCount += 1;
-      if (saveCount === 2) throw new Error('injected task write failure');
-      originalSaveTask(workflowId, task);
+    vi.spyOn(persistence, 'saveTasks').mockImplementation((workflowId, tasks) => {
+      for (const task of tasks) {
+        saveCount += 1;
+        if (saveCount === 2) throw new Error('injected task write failure');
+        originalSaveTask(workflowId, task);
+      }
     });
 
     expect(() => orchestrator.loadPlan({

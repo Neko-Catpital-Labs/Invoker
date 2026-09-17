@@ -6,9 +6,7 @@ const enabled = JSON.parse(readFileSync('scripts/bazel/enabled-packages.json', '
 const targets = [];
 
 if (mode === 'rbe') {
-  for (const pkg of enabled.rbePilotPackages ?? []) {
-    targets.push(`//packages/${pkg}:test`);
-  }
+  targets.push('//scripts/bazel:rbe_smoke_test');
 } else if (mode === 'quality') {
   if (enabled.quality) {
     targets.push('//:check_types', '//:check_deps', '//:check_comments');

@@ -212,6 +212,7 @@ interface SQLiteAdapterOptions {
    */
   exclusiveLocking?: boolean;
   slowQueryThresholdMs?: number;
+  logCheckpointTiming?: boolean;
   onSlowQuery?: (info: SlowQueryInfo) => void;
 }
 
@@ -848,6 +849,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readonly taskAttemptRepo: SqliteTaskAttemptRepository;
   private readonly workflowRepo: SqliteWorkflowRepository;
   private readonly slowQueryThresholdMs: number;
+  private readonly logCheckpointTiming: boolean;
   private readonly onSlowQuery: ((info: SlowQueryInfo) => void) | null;
 
   /**
@@ -874,6 +876,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
     this.slowQueryThresholdMs = options?.slowQueryThresholdMs ?? 25;
+    this.logCheckpointTiming = options?.logCheckpointTiming ?? true;
     this.onSlowQuery = options?.onSlowQuery
       ?? (this.slowQueryThresholdMs > 0
         ? createDefaultSlowQuerySink(this.slowQueryThresholdMs)
@@ -1179,13 +1182,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const started = performance.now();
     const { timeout } = this.nativeDb.prepare('PRAGMA busy_timeout').get() as { timeout: number };
     this.nativeDb.exec('PRAGMA busy_timeout = 0');
-    console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'start',
-      wall_time: new Date().toISOString(), monotonic_ms: started }));
+    if (this.logCheckpointTiming) {
+      console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'start',
+        wall_time: new Date().toISOString(), monotonic_ms: started }));
+    }
     try {
       const result = this.nativeDb.prepare(`PRAGMA wal_checkpoint(${mode})`).get();
-      console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'end',
-        wall_time: new Date().toISOString(), monotonic_ms: performance.now(),
-        duration_ms: performance.now() - started, ...result }));
+      if (this.logCheckpointTiming) {
+        console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'end',
+          wall_time: new Date().toISOString(), monotonic_ms: performance.now(),
+          duration_ms: performance.now() - started, ...result }));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(JSON.stringify({ operation: 'wal_checkpoint', mode, event: 'error',

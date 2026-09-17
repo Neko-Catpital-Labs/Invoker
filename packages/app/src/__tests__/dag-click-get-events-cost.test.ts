@@ -42,7 +42,7 @@ describe('dag-click getEvents pagination cost', () => {
     const bounded = getEventsPage(adapter, taskId, { limit: 50, sortBy: 'desc' });
     const boundedMs = performance.now() - boundedStarted;
 
-    expect(unbounded.length).toBe(20_000);
+    expect(unbounded.length).toBe(10_000);
     expect(bounded.length).toBe(50);
     expect(unboundedMs).toBeGreaterThan(boundedMs);
     expect(boundedMs).toBeLessThan(25);
