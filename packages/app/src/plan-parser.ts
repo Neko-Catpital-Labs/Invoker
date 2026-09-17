@@ -666,6 +666,10 @@ function parseSimpleScalar(rawValue: string): string | number | boolean {
   return value;
 }
 
+function isFlowCollection(rawValue: string): boolean {
+  return /^[[{]/.test(rawValue.trim());
+}
+
 function parseSimpleStringList(rawValue: string): string[] | undefined {
   const value = rawValue.trim();
   if (!value.startsWith('[') || !value.endsWith(']')) return undefined;
@@ -696,6 +700,7 @@ function parseSimplePlanSubmissionBundle(yamlContent: string): RawPlanBundle | u
       const match = /^([A-Za-z][A-Za-z0-9]*):\s+(.+)$/.exec(line);
       if (!match) return undefined;
       const [, key, value] = match;
+      if (isFlowCollection(value)) return undefined;
       Reflect.set(raw, key, parseSimpleScalar(value));
       continue;
     }
@@ -715,6 +720,7 @@ function parseSimplePlanSubmissionBundle(yamlContent: string): RawPlanBundle | u
       currentTask.dependencies = dependencies;
       continue;
     }
+    if (isFlowCollection(value)) return undefined;
     Reflect.set(currentTask, key, parseSimpleScalar(value));
   }
 
