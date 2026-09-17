@@ -699,6 +699,33 @@ describe('enforceHourlySnapshotRetention', () => {
     expect(readdirSync(backupDir)).toHaveLength(10);
   });
 
+  it('honors a lowered INVOKER_DISK_CRITICAL_PERCENT', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
+    vi.stubEnv('INVOKER_DISK_WARN_PERCENT', '70');
+    vi.stubEnv('INVOKER_DISK_CRITICAL_PERCENT', '80');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      readDiskUsedPercent: () => 82,
+    });
+
+    expect(removed).toBe(4);
+    expect(readdirSync(backupDir)).toHaveLength(6);
+  });
+
+  it('honors a raised INVOKER_DISK_CRITICAL_PERCENT', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
+    vi.stubEnv('INVOKER_DISK_CRITICAL_PERCENT', '98');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      readDiskUsedPercent: () => DEFAULT_DISK_CRITICAL_PERCENT + 1,
+    });
+
+    expect(removed).toBe(0);
+    expect(readdirSync(backupDir)).toHaveLength(10);
+  });
+
   it('keeps the configured retention and warns when disk usage is unreadable', () => {
     vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
     const { root, home, backupDir } = seedHourlySnapshots(10);
