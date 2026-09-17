@@ -128,6 +128,7 @@ while IFS= read -r pr; do
   q_num="$(shell_quote "$num")"
   q_fingerprint="$(shell_quote "$fingerprint")"
   q_tsv_kind="$(shell_quote "orphan-attempt")"
+  q_repo="$(shell_quote "$TARGET_REPO")"
 
   plan_file="$PLAN_DIR/repair-pr-$num.yaml"
   {
@@ -170,8 +171,18 @@ while IFS= read -r pr; do
       printf 'kind=%s\n' "$q_tsv_kind"
       printf 'key=%s\n' "$q_num"
       printf 'marker=%s\n' "$q_fingerprint"
+      printf 'repo=%s\n' "$q_repo"
       printf 'ref="refs/heads/$branch"\n'
       printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
+      printf 'if [ -z "$live" ]; then\n'
+      printf '  state="$(gh pr view "$key" --repo "$repo" --json state -q .state 2>/dev/null || true)"\n'
+      printf '  if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then\n'
+      printf '    mkdir -p "$(dirname "$ledger")"\n'
+      printf '    printf '"'"'%%s\\t%%s\\t%%s\\t%%s\\n'"'"' "$kind" "$key" "$marker" "$(date +%%s)" >> "$ledger"\n'
+      printf '    echo "pr-worker-safe-push: noop: PR #$key is already ${state,,}; $ref no longer exists, nothing to push"\n'
+      printf '    exit 0\n'
+      printf '  fi\n'
+      printf 'fi\n'
       printf 'if [ "$live" != "$expected" ]; then\n'
       printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
       printf '  exit 20\n'
