@@ -1008,6 +1008,12 @@ describe('retired CI job filing gate', () => {
       assert.equal(planText.includes(CATSTACK_REPO_URL), true);
       assert.equal(planText.includes('Never edit Invoker files'), true);
       assert.equal(planText.includes("this repo's `skills/reflect/SKILL.md`"), false);
+      const promptLanes = new Set(
+        [...planText.matchAll(/^ {6}Review lane: (\S+)$/gm)]
+          .map((match) => match[1])
+          .filter((lane) => lane !== 'proof' && lane !== 'cleanup'),
+      );
+      assert.deepEqual([...promptLanes], ['behavior']);
     } finally {
       rmSync(outRoot, { recursive: true, force: true });
     }
