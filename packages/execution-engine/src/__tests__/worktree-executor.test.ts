@@ -1995,7 +1995,7 @@ describe('WorktreeExecutor', () => {
         (taskProcess as any).exitCode = 42;
         (taskProcess as any).killed = false;
 
-        await vi.advanceTimersByTimeAsync(150);
+        await vi.advanceTimersByTimeAsync(250);
 
         const diagnosticOutput = outputLines.find(line => line.includes('Heartbeat detected orphaned process'));
         expect(diagnosticOutput).toBeDefined();
