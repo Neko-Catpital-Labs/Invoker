@@ -1,0 +1,234 @@
+name: Bazel pilots proof
+
+on:
+  push:
+    branches: [tmp/bazel-pilots-proof]
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+  NODE_VERSION: '26'
+
+jobs:
+  build-artifacts:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install native build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y make g++
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build UI and app
+        run: |
+          pnpm --filter @invoker/ui build
+          pnpm --filter @invoker/surfaces build
+          pnpm --filter @invoker/app build
+          pnpm --filter @invoker/cli build
+          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist packages/surfaces/dist packages/cli/dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build-dist
+          path: app-build-dist.tgz
+          if-no-files-found: error
+
+  bazel-cache-pilot:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    name: bazel-cache-pilot
+
+    steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bazelisk
+        uses: bazel-contrib/setup-bazel@0.14.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workspace }}/.invoker-bazel-disk
+          repository-cache: true
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Overlay self-check
+        run: node scripts/test-bazel-overlay.mjs
+
+      - name: Configure BuildBuddy credentials
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILDBUDDY_API_KEY:-}" ]; then
+            echo "BUILDBUDDY_API_KEY unset; remote cache/BES disabled"
+            exit 0
+          fi
+          umask 077
+          {
+            echo "build --bes_results_url=https://app.buildbuddy.io/invocation/"
+            echo "build --bes_backend=grpcs://remote.buildbuddy.io"
+            echo "common --remote_cache=grpcs://remote.buildbuddy.io"
+            echo "common --remote_timeout=10m"
+            echo "common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+            echo "common --bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          } > .bazelrc.user
+
+      - name: Bazel test with BuildBuddy cache when keyed
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          TARGETS="$(node scripts/bazel/list-test-targets.mjs cache)"
+          ARGS=(test --test_env=BUILD_WORKSPACE_DIRECTORY="$GITHUB_WORKSPACE" --test_env=PATH="$PATH" --test_output=errors)
+          if [ -n "${BUILDBUDDY_API_KEY:-}" ]; then
+            ARGS+=(--config=remote
+              "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+              "--bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}")
+          else
+            echo "BUILDBUDDY_API_KEY unset; running with local disk cache only"
+          fi
+          bazelisk "${ARGS[@]}" $TARGETS
+
+  bazel-rbe-pilot:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    name: bazel-rbe-pilot
+    continue-on-error: false
+
+    steps:
+      - name: Reclaim workspace
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bazelisk
+        uses: bazel-contrib/setup-bazel@0.14.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workspace }}/.invoker-bazel-disk
+          repository-cache: true
+
+      - name: Configure BuildBuddy credentials
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILDBUDDY_API_KEY:-}" ]; then
+            echo "BUILDBUDDY_API_KEY unset; remote cache/BES disabled"
+            exit 0
+          fi
+          umask 077
+          {
+            echo "build --bes_results_url=https://app.buildbuddy.io/invocation/"
+            echo "build --bes_backend=grpcs://remote.buildbuddy.io"
+            echo "common --remote_cache=grpcs://remote.buildbuddy.io"
+            echo "common --remote_timeout=10m"
+            echo "common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+            echo "common --bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          } > .bazelrc.user
+
+      - name: Bazel RBE smoke test when keyed
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILDBUDDY_API_KEY:-}" ]; then
+            echo "BUILDBUDDY_API_KEY unset; skipping RBE pilot"
+            exit 0
+          fi
+          TARGETS="$(node scripts/bazel/list-test-targets.mjs rbe)"
+          bazelisk test --config=rbe \
+            --remote_header="x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}" \
+            --bes_header="x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}" \
+            --test_env=BUILD_WORKSPACE_DIRECTORY="$GITHUB_WORKSPACE" \
+            --test_env=PATH="$PATH" \
+            --test_output=errors \
+            --test_tag_filters=-no-remote-exec \
+            $TARGETS
+
