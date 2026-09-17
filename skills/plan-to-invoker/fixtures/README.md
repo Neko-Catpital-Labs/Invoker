@@ -39,6 +39,7 @@ Positive fixtures demonstrate valid plan patterns:
 - **07-prompt-edit-layered-split-with-dormant.yaml** - Dependency-first layer split for prompt-edit bridge work, including a dormant activation slice
 - **11-entity-research-aggregate-fan-in.yaml** - Multi-extDep fan-in on shared trunk (carve-out from stacked_basebranch_default)
 - **12-hook-plan-with-readme.yaml** - Behavior slice in a non-Invoker repo whose README sits beside the hook's `detect.py` (lint treats it as part of the hook)
+- **13-blank-lines-inside-blocks.yaml** - Same plan as 12 with an empty line and a whitespace-only line inside the first task's description and prompt (lint still reads the sections after them)
 - Implementation fixtures use focused verification by default. Full-suite gates are optional and risk-based, not a validator requirement.
 
 All positive fixtures are extracted from `references/examples.md` sections 1-4.

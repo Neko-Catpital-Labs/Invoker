@@ -557,6 +557,9 @@ FNR == NR {
       desc = desc "\n" trim(line)
       next
     }
+    if (line ~ /^[[:space:]]*$/) {
+      next
+    }
     in_description_block = 0
   }
 
@@ -652,6 +655,9 @@ FNR == NR {
     # Note: mawk does not support {6,} bounded quantifiers; use explicit 6 spaces + *
     if (line ~ /^[[:space:]][[:space:]][[:space:]][[:space:]][[:space:]][[:space:]]*[^[:space:]]/) {
       prompt_text = prompt_text " " trim(line)
+      next
+    }
+    if (line ~ /^[[:space:]]*$/) {
       next
     }
     in_prompt_block = 0
