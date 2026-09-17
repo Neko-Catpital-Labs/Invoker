@@ -60,6 +60,8 @@ describe('--no-track microtask dispatch (no deferRunnableTasks)', () => {
     deps.orchestrator.getExecutableReadyTasks = vi.fn(() => []);
     deps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
     deps.orchestrator.startExecution = vi.fn(() => [task]);
+    deps.orchestrator.getStagedWorkflowIds = vi.fn(() => []);
+    deps.orchestrator.activateStagedWorkflows = vi.fn(() => []);
 
     await headlessStartReady(['--no-track'], deps);
     await flushMicrotasks();

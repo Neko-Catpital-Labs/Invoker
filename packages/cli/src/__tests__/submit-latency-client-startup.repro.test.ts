@@ -9,15 +9,22 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, it } from 'vitest';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(testDir, '../..');
 const repoRoot = resolve(packageRoot, '../..');
 const cliEntry = join(packageRoot, 'dist/index.js');
-const startupBudgetMs = 80;
 const sampleRuns = 10;
+const loadRecorderImport = [
+  'data:text/javascript,',
+  'import{registerHooks}from"node:module";',
+  'import{writeFileSync}from"node:fs";',
+  'const loaded=[];',
+  'registerHooks({load(url,context,nextLoad){loaded.push(url);return nextLoad(url,context);}});',
+  'process.on("exit",()=>writeFileSync(process.env.INVOKER_STARTUP_LOAD_LOG,loaded.join("\\n")));',
+].join('');
 
 type TimedRun = {
   ms: number;
@@ -74,95 +81,59 @@ function formatMs(value: number): string {
   return `${value.toFixed(1)}ms`;
 }
 
-function formatModuleName(moduleName: string): string {
-  if (moduleName.startsWith('file://')) {
-    return relative(repoRoot, fileURLToPath(moduleName));
-  }
-  return moduleName;
-}
-
-function measureModuleLoads(): string {
+function listVersionModuleLoads(): string[] {
   const root = mkdtempSync(join(tmpdir(), 'invoker-cli-module-load-'));
   try {
-    const profileName = 'startup.cpuprofile';
-    const profilePath = join(root, profileName);
-    const result = spawnSync(process.execPath, [
-      '--cpu-prof',
-      '--cpu-prof-dir',
-      root,
-      '--cpu-prof-name',
-      profileName,
-      cliEntry,
-      '--version',
-    ], {
+    const logPath = join(root, 'loads.txt');
+    const result = spawnSync(process.execPath, ['--import', loadRecorderImport, cliEntry, '--version'], {
       cwd: packageRoot,
-      env: createIsolatedEnv(root),
+      env: { ...createIsolatedEnv(root), INVOKER_STARTUP_LOAD_LOG: logPath },
       encoding: 'utf8',
       timeout: 20_000,
     });
-    if (result.error || result.status !== 0 || !existsSync(profilePath)) {
-      return [
-        'module-load breakdown unavailable',
-        `profile exit=${result.status ?? 'error'}`,
-        `stderr=${JSON.stringify(result.stderr)}`,
-        `files=${JSON.stringify(readdirSync(root))}`,
-      ].join('; ');
+    if (result.error) throw result.error;
+    if (result.status !== 0 || !existsSync(logPath)) {
+      throw new Error(
+        `module-load recording failed: exit=${result.status} stderr=${JSON.stringify(result.stderr)} files=${JSON.stringify(readdirSync(root))}`,
+      );
     }
-
-    const profile = JSON.parse(readFileSync(profilePath, 'utf8')) as {
-      nodes: Array<{ id: number; callFrame: { url?: string } }>;
-      samples?: number[];
-      timeDeltas?: number[];
-    };
-    const nodesById = new Map(profile.nodes.map((node) => [node.id, node]));
-    const totals = new Map<string, number>();
-    for (let index = 0; index < (profile.samples?.length ?? 0); index += 1) {
-      const node = nodesById.get(profile.samples![index]!);
-      const url = node?.callFrame.url;
-      if (!url) continue;
-      totals.set(url, (totals.get(url) ?? 0) + ((profile.timeDeltas?.[index] ?? 0) / 1_000));
-    }
-
-    const top = [...totals.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([moduleName, ms], index) => `${index + 1}. ${formatModuleName(moduleName)} ${formatMs(ms)}`);
-    return top.length > 0 ? top.join('; ') : 'module-load breakdown had no load records';
+    return readFileSync(logPath, 'utf8')
+      .split('\n')
+      .filter((url) => url.length > 0 && !url.startsWith('node:'))
+      .map((url) => (url.startsWith('file://') ? relative(repoRoot, fileURLToPath(url)) : url));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
 describe('repro: invoker client startup latency', () => {
-  it('keeps built --version startup within the client budget', () => {
+  it('keeps built --version startup free of the command runtime', () => {
     if (!existsSync(cliEntry)) {
       throw new Error(`missing built CLI entry at ${cliEntry}; run pnpm --filter @invoker/cli build`);
     }
 
-    const runs = Array.from({ length: sampleRuns }, () => runVersionOnce());
-    const measured = runs.map((run) => run.ms);
-    const medianMs = p50(measured);
-    const moduleBreakdown = measureModuleLoads();
+    const measured = Array.from({ length: sampleRuns }, () => runVersionOnce().ms);
+    const entry = relative(repoRoot, fileURLToPath(pathToFileURL(cliEntry)));
+    const loaded = listVersionModuleLoads();
+    const extraModules = loaded.filter((moduleName) => moduleName !== entry);
     const expectation = process.env.INVOKER_REPRO_EXPECT === 'bug' ? 'bug' : 'fixed';
     const summary = [
-      `invoker-cli --version startup samples=[${measured.map(formatMs).join(', ')}]`,
-      `p50=${formatMs(medianMs)}`,
-      `budget=${formatMs(startupBudgetMs)}`,
+      `invoker-cli --version startup samples=[${measured.map(formatMs).join(', ')}] p50=${formatMs(p50(measured))}`,
       `expectation=${expectation}`,
-      `slowest module loads: ${moduleBreakdown}`,
+      `modules loaded besides ${entry}: ${extraModules.length > 0 ? extraModules.join(', ') : 'none'}`,
     ].join('\n');
 
     process.stdout.write(`${summary}\n`);
 
     if (expectation === 'bug') {
-      if (medianMs <= startupBudgetMs) {
-        throw new Error(`Expected known bug with p50 over budget, but startup met the budget.\n${summary}`);
+      if (extraModules.length === 0) {
+        throw new Error(`Expected known bug with --version loading the command runtime, but it loaded only the entry.\n${summary}`);
       }
       return;
     }
 
-    if (medianMs >= startupBudgetMs) {
-      throw new Error(`Expected startup p50 under budget, but measured p50 exceeded it.\n${summary}`);
+    if (extraModules.length > 0) {
+      throw new Error(`Expected --version to load only the CLI entry, but it loaded more modules.\n${summary}`);
     }
   });
 });

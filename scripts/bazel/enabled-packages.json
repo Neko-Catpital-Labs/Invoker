@@ -25,26 +25,5 @@
   ],
   "quality": true,
   "playwright": true,
-  "packaging": true,
-  "rbePilotPackages": [
-    "workflow-graph",
-    "runtime-domain",
-    "slack-bug-scan",
-    "svc-api",
-    "contracts",
-    "execution-engine",
-    "surfaces",
-    "cli",
-    "data-store",
-    "slack-manager",
-    "runtime-adapters",
-    "runtime-service",
-    "planning-core",
-    "protocol",
-    "shell",
-    "transport",
-    "watcher",
-    "workflow-core",
-    "graph"
-  ]
+  "packaging": true
 }

@@ -6,9 +6,14 @@
 // in flight.
 import { execFileSync, execSync } from 'node:child_process';
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
@@ -1328,7 +1333,7 @@ export function renderOptionalReflectTaskYaml(vars) {
       skill edits there only — never edit Invoker.
       Review claim: Any skill edit is a catstack PR traceable to a cited
       finding from this repair's own transcript, not a speculative rewrite.
-      Review lane: docs
+      Review lane: behavior
       Safety invariant: This task never edits Invoker files and never merges
       a catstack PR on its own authority. If /reflect finds nothing durable,
       it makes no changes and exits 0.
@@ -1363,7 +1368,7 @@ export function renderOptionalReflectTaskYaml(vars) {
       CI job \`${jobName}\` (first observed failing at ${sha}).
       Review claim: Any drafted skill edit is a catstack PR traceable to a
       cited finding from this repair's own transcript.
-      Review lane: docs
+      Review lane: behavior
       Safety invariant: Never edit Invoker files. Never merge a catstack PR
       on this task's own authority. If there is no durable finding, make no
       changes.
@@ -1580,9 +1585,26 @@ export function loadState() {
   return normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
 }
 
-export function saveState(state) {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(STATE_FILE, JSON.stringify(normalizeState(state), null, 2));
+function fsyncFile(path) {
+  const fd = openSync(path, 'r+');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function saveState(state, { stateFile = STATE_FILE, writeFile = writeFileSync } = {}) {
+  mkdirSync(dirname(stateFile), { recursive: true });
+  const tmpFile = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFile(tmpFile, JSON.stringify(normalizeState(state), null, 2));
+    fsyncFile(tmpFile);
+    renameSync(tmpFile, stateFile);
+  } catch (error) {
+    rmSync(tmpFile, { force: true });
+    throw new Error(`Failed to save CI regression watcher state to ${stateFile}: ${error.message}`, { cause: error });
+  }
 }
 
 export function appendSweepLog(entry) {

@@ -82,7 +82,7 @@ async function invokeFollower(channel: string, args: unknown[]) {
       ipcMain,
       getOwnerMode: () => false,
       getMessageBus: () => ({ request }),
-      ownerCapabilities: new OwnerCapabilityRegistry(),
+      guiMutationHandlers: new OwnerCapabilityRegistry(),
       translateGuiMutationToHeadless: productionTranslate,
     },
     channel,
