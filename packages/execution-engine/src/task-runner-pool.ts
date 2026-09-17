@@ -688,7 +688,7 @@ export function selectExecutor(
     return { executor: scratch, resolvedExecution, selectedPoolMemberId: undefined };
   }
 
-  if (!task.config.isMergeNode && (task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh') && explicitPoolMemberId) {
+  if (!task.config.isMergeNode && task.config.poolId && explicitPoolMemberId) {
     const pool = host.getExecutionPools()[task.config.poolId];
     if (!pool) {
       throw new Error(`Task ${task.id} references missing execution pool "${task.config.poolId}"`);
@@ -709,7 +709,7 @@ export function selectExecutor(
     selectedWorktreeTargetId = member.type === 'worktree' && member.id !== BUILT_IN_LOCAL_EXECUTION_POOL_ID
       ? member.id
       : undefined;
-  } else if (!task.config.isMergeNode && (task.config.runnerKind === 'worktree' || task.config.runnerKind === 'ssh')) {
+  } else if (!task.config.isMergeNode && task.config.poolId) {
     const pool = host.getExecutionPools()[task.config.poolId];
     if (!pool) {
       throw new Error(`Task ${task.id} references missing execution pool "${task.config.poolId}"`);
