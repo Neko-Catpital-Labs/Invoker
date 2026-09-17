@@ -29,7 +29,6 @@ const PLAN_A_REPLY = `Here is the plan.
 \`\`\`yaml
 name: Plan A
 onFinish: none
-repoUrl: ${REPO_A}
 tasks:
   - id: only
     description: Only task
@@ -37,7 +36,6 @@ tasks:
 \`\`\``;
 const PLAN_A_TEXT = `name: Plan A
 onFinish: none
-repoUrl: ${REPO_A}
 tasks:
   - id: only
     description: Only task
@@ -48,7 +46,6 @@ const CRITIQUE_REPLY_WITH_COINCIDENTAL_YAML = `Sure, that dependency is optional
 \`\`\`yaml
 name: Coincidental Restatement
 onFinish: none
-repoUrl: ${REPO_A}
 tasks:
   - id: only
     description: Only task
@@ -60,7 +57,6 @@ const PLAN_C_REPLY = `Here is the revised plan.
 \`\`\`yaml
 name: Plan C
 onFinish: none
-repoUrl: ${REPO_A}
 tasks:
   - id: only
     description: Only task
@@ -68,7 +64,6 @@ tasks:
 \`\`\``;
 const PLAN_C_TEXT = `name: Plan C
 onFinish: none
-repoUrl: ${REPO_A}
 tasks:
   - id: only
     description: Only task
@@ -252,8 +247,8 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> locked r
       });
       if (!submitResult.ok) throw new Error(submitResult.error);
 
-      expect(loadGeneratedPlan).toHaveBeenCalledWith(dbDraftBeforeSubmit, { repoUrl: REPO_A, baseBranch: 'main' });
-      expect(loadGeneratedPlan).toHaveBeenCalledWith(planCText, { repoUrl: REPO_A, baseBranch: 'main' });
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(dbDraftBeforeSubmit);
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(planCText);
       expect(submitResult.workflowId).toBe('wf-e2e-1');
       expect(sessions.get(sessionId)?.status).toBe('submitted');
       expect(sessions.get(sessionId)?.submittedWorkflowId).toBe('wf-e2e-1');

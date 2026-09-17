@@ -1086,9 +1086,7 @@ export async function sendPlanningChatMessage(
 
       try {
         const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
-        if (activatedWorktree) {
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-        }
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
         const repositoryContext = planningRepositoryContext(activeSession);
         const previousVisibleAssistantMessage = [...messagesBeforeTurn]
           .reverse()
