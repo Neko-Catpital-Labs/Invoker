@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { gunzipSync } from 'node:zlib';
 import {
@@ -303,5 +304,91 @@ describe('hourly snapshot compression', () => {
     expect(existsSync(snapshot as string)).toBe(true); // the new .gz snapshot survives
     expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000000-000Z'))).toBe(false);
     expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000001-000Z'))).toBe(false);
+  });
+});
+
+describe('interrupted snapshot cleanup', () => {
+  it('leaves a snapshot that is still being compressed alone when another snapshot starts', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const payload = randomBytes(64 * 1024 * 1024);
+    let slowRawPath = '';
+    const slow = createHourlySnapshot(root, async (destination) => {
+      slowRawPath = destination;
+      writeFileSync(destination, payload);
+    });
+    while (!slowRawPath || !existsSync(`${slowRawPath}.gz`)) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const other = await createDeleteAllSnapshot(root);
+    const slowResult = await slow;
+
+    expect(slowResult).toBe(`${slowRawPath}.gz`);
+    expect(existsSync(slowResult as string)).toBe(true);
+    expect(gunzipSync(readFileSync(slowResult as string)).equals(payload)).toBe(true);
+    expect(readSnapshotText(other as string)).toBe('db-main');
+  });
+
+  it('removes a raw snapshot and its partial .gz left by an earlier interrupted run', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const backupDir = join(root, 'db-backups');
+    mkdirSync(backupDir, { recursive: true });
+    const stale = join(backupDir, 'invoker.db.hourly-auto-20260101-000000-000Z');
+    writeFileSync(stale, 'full-raw-copy');
+    writeFileSync(`${stale}.gz`, 'truncated');
+
+    const snapshot = await createHourlySnapshot(root);
+
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(`${stale}.gz`)).toBe(false);
+    expect(readSnapshotText(snapshot as string)).toBe('db-main');
+  });
+
+  it('removes an interrupted pair from another label before a delete-all snapshot', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const backupDir = join(root, 'db-backups');
+    mkdirSync(backupDir, { recursive: true });
+    const stale = join(backupDir, 'invoker.db.hourly-auto-20260101-000000-000Z');
+    writeFileSync(stale, 'full-raw-copy');
+    writeFileSync(`${stale}.gz`, 'truncated');
+
+    const snapshot = await createDeleteAllSnapshot(root);
+
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(`${stale}.gz`)).toBe(false);
+    expect(readSnapshotText(snapshot as string)).toBe('db-main');
+  });
+
+  it('keeps finished .gz snapshots and uncompressed snapshots that have no .gz sibling', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const backupDir = join(root, 'db-backups');
+    mkdirSync(backupDir, { recursive: true });
+    const finished = join(backupDir, 'invoker.db.hourly-auto-20260101-000000-000Z.gz');
+    const legacy = join(backupDir, 'invoker.db.before-prod-recreate-20260101-000000');
+    writeFileSync(finished, 'finished');
+    writeFileSync(legacy, 'legacy');
+
+    const snapshot = await createDeleteAllSnapshot(root);
+
+    expect(readFileSync(finished, 'utf-8')).toBe('finished');
+    expect(readFileSync(legacy, 'utf-8')).toBe('legacy');
+    expect(existsSync(snapshot as string)).toBe(true);
+  });
+
+  it('still writes the new snapshot when removing an interrupted file fails', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const backupDir = join(root, 'db-backups');
+    const stale = join(backupDir, 'invoker.db.hourly-auto-20260101-000000-000Z');
+    mkdirSync(join(stale, 'child'), { recursive: true });
+    writeFileSync(`${stale}.gz`, 'truncated');
+
+    const snapshot = await createHourlySnapshot(root);
+
+    expect(readSnapshotText(snapshot as string)).toBe('db-main');
   });
 });
