@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemoteDiskTarget } from '../workers/disk-headroom-monitor.js';
+import { DEFAULT_DISK_CRITICAL_PERCENT } from '../workers/disk-headroom.js';
 import {
   AUTOMATION_CHECKOUT_DIRS,
   buildDeletingOrphanReapScript,
@@ -652,6 +653,68 @@ describe('enforceHourlySnapshotRetention', () => {
 
     expect(enforceHourlySnapshotRetention(home, root)).toBe(0);
     expect(readdirSync(backupDir)).toEqual(['invoker.db.hourly-auto-20260101-000001-000Z']);
+  });
+
+  function seedHourlySnapshots(count: number): { root: string; home: string; backupDir: string } {
+    const { root, home } = makeHome();
+    const backupDir = join(home, 'db-backups');
+    mkdirSync(backupDir, { recursive: true });
+    for (let i = 1; i <= count; i += 1) {
+      writeFileSync(join(backupDir, `invoker.db.hourly-auto-20260101-0000${String(i).padStart(2, '0')}-000Z`), `${i}`);
+    }
+    return { root, home, backupDir };
+  }
+
+  it('keeps only the newest six snapshots under critical disk pressure', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+    const logger = { warn: vi.fn() };
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      logger,
+      readDiskUsedPercent: () => DEFAULT_DISK_CRITICAL_PERCENT,
+    });
+
+    expect(removed).toBe(4);
+    expect(readdirSync(backupDir).sort()).toEqual([
+      'invoker.db.hourly-auto-20260101-000005-000Z',
+      'invoker.db.hourly-auto-20260101-000006-000Z',
+      'invoker.db.hourly-auto-20260101-000007-000Z',
+      'invoker.db.hourly-auto-20260101-000008-000Z',
+      'invoker.db.hourly-auto-20260101-000009-000Z',
+      'invoker.db.hourly-auto-20260101-000010-000Z',
+    ]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the configured retention below critical disk pressure', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      readDiskUsedPercent: () => DEFAULT_DISK_CRITICAL_PERCENT - 0.1,
+    });
+
+    expect(removed).toBe(0);
+    expect(readdirSync(backupDir)).toHaveLength(10);
+  });
+
+  it('keeps the configured retention and warns when disk usage is unreadable', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+    const logger = { warn: vi.fn() };
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      logger,
+      readDiskUsedPercent: () => {
+        throw new Error('statfs EACCES');
+      },
+    });
+
+    expect(removed).toBe(0);
+    expect(readdirSync(backupDir)).toHaveLength(10);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(String(logger.warn.mock.calls[0]?.[0])).toContain('statfs EACCES');
   });
 });
 
