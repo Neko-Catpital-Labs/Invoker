@@ -66,7 +66,7 @@ describe('headless worker autofix', () => {
       await runHeadless(['worker', 'autofix'], {
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
         persistence: {
-          listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+          listWorkflows: vi.fn(() => [{ id: 'wf-1', repoUrl: 'https://example.com/repo.git' }]),
           loadTasks: vi.fn(() => [task]),
           loadTask: vi.fn(() => task),
           listWorkflowMutationIntents: vi.fn(() => []),
