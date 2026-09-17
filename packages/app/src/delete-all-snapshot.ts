@@ -1,4 +1,13 @@
-import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, rmSync, unlinkSync } from 'node:fs';
+import {
+  copyFileSync,
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+} from 'node:fs';
 import * as path from 'node:path';
 import { createGzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
@@ -61,6 +70,28 @@ function removeFailedSnapshotFiles(paths: string[]): void {
   }
 }
 
+const SNAPSHOT_NAME = /^invoker\.db\..+-\d{8}-\d{6}-\d{3}Z$/;
+
+function removeRawSnapshotsWithGzSibling(backupDir: string): void {
+  const names = new Set(readdirSync(backupDir));
+  for (const name of names) {
+    if (!SNAPSHOT_NAME.test(name) || !names.has(`${name}.gz`)) continue;
+    for (const leftover of [name, `${name}.gz`]) {
+      const leftoverPath = path.join(backupDir, leftover);
+      try {
+        rmSync(leftoverPath, { force: true });
+        console.warn(`[db-snapshot] removed ${leftoverPath} left by an interrupted snapshot`);
+      } catch (err) {
+        console.warn(
+          `[db-snapshot] failed to remove ${leftoverPath} left by an interrupted snapshot: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  }
+}
+
 async function createDbSnapshot(
   label: string,
   invokerHomeRoot: string,
@@ -71,6 +102,7 @@ async function createDbSnapshot(
 
   const backupDir = path.join(invokerHomeRoot, 'db-backups');
   mkdirSync(backupDir, { recursive: true });
+  removeRawSnapshotsWithGzSibling(backupDir);
 
   const stamp = utcTimestampCompact();
   const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
