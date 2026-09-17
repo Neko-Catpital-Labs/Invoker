@@ -1155,8 +1155,10 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     ...(options.json ? { slowQueryThresholdMs: 0 } : {}),
   });
   const stdoutWrite = process.stdout.write;
+  const consoleWarn = console.warn;
   if (options.json) {
     process.stdout.write = (() => true) as typeof process.stdout.write;
+    console.warn = () => {};
   }
 
 
@@ -1230,7 +1232,11 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     } else {
       process.env.INVOKER_DB_DIR = previousInvokerDbDir;
     }
-    persistence.close();
+    try {
+      persistence.close();
+    } finally {
+      console.warn = consoleWarn;
+    }
   }
 }
 

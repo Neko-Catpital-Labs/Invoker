@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,16 +20,26 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
+function makeSandboxRepo(): string {
+  const dir = makeTempDir('invoker-cli-repo-');
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  git('init', '-q', '-b', 'master');
+  writeFileSync(join(dir, 'README.md'), 'sandbox\n', 'utf8');
+  git('add', 'README.md');
+  git('-c', 'user.name=Invoker Test', '-c', 'user.email=test@invoker.local', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'initial');
+  return dir;
+}
+
 function writeStandalonePlan(dir: string, body: string): string {
   const planPath = join(dir, 'plan.yaml');
-  writeFileSync(planPath, body.replace('__REPO_ROOT__', JSON.stringify(repoRoot)), 'utf8');
+  writeFileSync(planPath, body.replace('__REPO_ROOT__', JSON.stringify(makeSandboxRepo())), 'utf8');
   return planPath;
 }
 
-function runCli(args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
+function runCli(args: string[], cwd = repoRoot): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      cwd: repoRoot,
+      cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -251,14 +261,14 @@ describe('invoker-cli', () => {
 
   it('runs the hello-world fixture with an isolated db dir', async () => {
     const dbDir = makeTempDir('invoker-cli-test-db-');
-    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
+    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir], makeSandboxRepo());
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('hello-from-invoker-cli');
   });
 
   it('--json emits only a workflow result object on stdout', async () => {
     const dbDir = makeTempDir('invoker-cli-json-db-');
-    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json']);
+    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json'], makeSandboxRepo());
     expect(result.status).toBe(0);
     const json = JSON.parse(result.stdout);
     expect(json.workflow.status).toBe('success');
