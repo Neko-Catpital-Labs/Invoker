@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
@@ -88,7 +88,8 @@ describe('retryTask cascade pays a full active-workflow refresh even with no dow
         // long-running DO1 owner has accumulated over its lifetime.
         orchestrator.syncAllFromDb();
 
-        const targetTaskId = 'wf-seed-1/t3';
+        const loadTasksForWorkflowsSpy = vi.spyOn(bootAdapter, 'loadTasksForWorkflows');
+        const loadTasksSpy = vi.spyOn(bootAdapter, 'loadTasks');
         const cascadeStart = performance.now();
         const affected = orchestrator.cascadeInvalidationToDownstream('wf-seed-1');
         const cascadeMs = performance.now() - cascadeStart;
@@ -98,10 +99,8 @@ describe('retryTask cascade pays a full active-workflow refresh even with no dow
         expect(affected).toEqual([]);
         // eslint-disable-next-line no-console
         console.log(`cascadeInvalidationToDownstream (zero downstream) took ${cascadeMs.toFixed(1)}ms for ${WORKFLOW_COUNT} tracked workflows`);
-        // Before the fix this paid a full refreshFromDb() (~87ms measured
-        // pre-fix for this seed) even with nothing downstream to process;
-        // after the fix, only the cheap listWorkflows() lookup runs.
-        expect(cascadeMs, `cascadeMs=${cascadeMs} for ${WORKFLOW_COUNT} tracked workflows, zero downstream`).toBeLessThan(60);
+        expect(loadTasksForWorkflowsSpy).not.toHaveBeenCalled();
+        expect(loadTasksSpy).not.toHaveBeenCalled();
       } finally {
         bootAdapter.close();
       }
