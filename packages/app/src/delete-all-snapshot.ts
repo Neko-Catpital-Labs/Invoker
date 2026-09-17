@@ -71,11 +71,13 @@ function removeFailedSnapshotFiles(paths: string[]): void {
 }
 
 const SNAPSHOT_NAME = /^invoker\.db\..+-\d{8}-\d{6}-\d{3}Z$/;
+const inFlightSnapshotPaths = new Set<string>();
 
 function removeRawSnapshotsWithGzSibling(backupDir: string): void {
   const names = new Set(readdirSync(backupDir));
   for (const name of names) {
     if (!SNAPSHOT_NAME.test(name) || !names.has(`${name}.gz`)) continue;
+    if (inFlightSnapshotPaths.has(path.join(backupDir, name))) continue;
     for (const leftover of [name, `${name}.gz`]) {
       const leftoverPath = path.join(backupDir, leftover);
       try {
@@ -107,14 +109,18 @@ async function createDbSnapshot(
   const stamp = utcTimestampCompact();
   const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
 
+  inFlightSnapshotPaths.add(snapshotPath);
   try {
-    await writeRawSnapshot(dbPath, snapshotPath, backup);
-  } catch (err) {
-    removeFailedSnapshotFiles([snapshotPath, `${snapshotPath}-journal`]);
-    throw err;
+    try {
+      await writeRawSnapshot(dbPath, snapshotPath, backup);
+    } catch (err) {
+      removeFailedSnapshotFiles([snapshotPath, `${snapshotPath}-journal`]);
+      throw err;
+    }
+    return await gzipInPlace(snapshotPath);
+  } finally {
+    inFlightSnapshotPaths.delete(snapshotPath);
   }
-
-  return gzipInPlace(snapshotPath);
 }
 
 async function writeRawSnapshot(

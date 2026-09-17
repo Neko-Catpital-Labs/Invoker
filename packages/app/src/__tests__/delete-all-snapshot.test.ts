@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { gunzipSync } from 'node:zlib';
 import {
@@ -307,6 +308,28 @@ describe('hourly snapshot compression', () => {
 });
 
 describe('interrupted snapshot cleanup', () => {
+  it('leaves a snapshot that is still being compressed alone when another snapshot starts', async () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const payload = randomBytes(64 * 1024 * 1024);
+    let slowRawPath = '';
+    const slow = createHourlySnapshot(root, async (destination) => {
+      slowRawPath = destination;
+      writeFileSync(destination, payload);
+    });
+    while (!slowRawPath || !existsSync(`${slowRawPath}.gz`)) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const other = await createDeleteAllSnapshot(root);
+    const slowResult = await slow;
+
+    expect(slowResult).toBe(`${slowRawPath}.gz`);
+    expect(existsSync(slowResult as string)).toBe(true);
+    expect(gunzipSync(readFileSync(slowResult as string)).equals(payload)).toBe(true);
+    expect(readSnapshotText(other as string)).toBe('db-main');
+  });
+
   it('removes a raw snapshot and its partial .gz left by an earlier interrupted run', async () => {
     const root = makeDbRoot();
     writeFileSync(join(root, 'invoker.db'), 'db-main');
