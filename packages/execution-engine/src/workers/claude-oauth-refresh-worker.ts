@@ -6,6 +6,7 @@ import type { Logger } from '@invoker/contracts';
 
 import {
   isOauthTokenExpiring,
+  parseClaudeOauthBlob,
   refreshClaudeOauthCredentials,
   type OauthFetchFn,
 } from '../claude-oauth-refresh.js';
@@ -119,11 +120,22 @@ function buildPortableBase64DecodeFunction(functionName = 'invoker_base64_decode
 }`;
 }
 
+function remotePathAssignment(remotePath: string): string {
+  if (remotePath === '~') return 'REMOTE_PATH="$HOME"';
+  if (remotePath.startsWith('~/')) return `REMOTE_PATH="$HOME/${remotePath.slice(2)}"`;
+  return `REMOTE_PATH="${remotePath}"`;
+}
+
+export function buildReadCredentialsScript(remotePath: string): string {
+  return `${remotePathAssignment(remotePath)}
+cat "$REMOTE_PATH" 2>/dev/null || true`;
+}
+
 export function buildDistributeCredentialsScript(remotePath: string, credentialsJson: string): string {
   const contentB64 = base64Encode(credentialsJson);
   return `set -euo pipefail
 ${buildPortableBase64DecodeFunction()}
-REMOTE_PATH="${remotePath}"
+${remotePathAssignment(remotePath)}
 mkdir -p "$(dirname "$REMOTE_PATH")"
 TMP_PATH="$REMOTE_PATH.tmp-$$"
 printf '%s' '${contentB64}' | invoker_base64_decode > "$TMP_PATH"
@@ -165,16 +177,12 @@ function defaultDistributeCodex(target: ClaudeOauthRefreshTarget, authJson: stri
 
 async function defaultReadRemoteFile(target: ClaudeOauthRefreshTarget, remotePath: string, phase: string): Promise<string | null> {
   const sshArgs = buildSshConnectionArgs(target.connection, { batchMode: true });
-  try {
-    const output = await execRemoteCapture({
-      sshArgs,
-      script: `cat "${remotePath}" 2>/dev/null || true`,
-      phase,
-    });
-    return output.trim() ? output : null;
-  } catch {
-    return null;
-  }
+  const output = await execRemoteCapture({
+    sshArgs,
+    script: buildReadCredentialsScript(remotePath),
+    phase,
+  });
+  return output.trim() ? output : null;
 }
 
 async function defaultReadRemoteCredentials(target: ClaudeOauthRefreshTarget): Promise<string | null> {
@@ -223,6 +231,10 @@ async function distributeToTarget(
 ): Promise<void> {
   try {
     await distribute(target, credentialsJson);
+    options.logger.info(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] distributed credentials to ${target.name}: ${summary}`, {
+      module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+      target: target.name,
+    });
     recordDecision(options.store, subjectId, 'completed', summary);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -232,6 +244,18 @@ async function distributeToTarget(
     });
     recordDecision(options.store, subjectId, 'failed', `Failed to distribute credentials to ${target.name}: ${detail}`);
   }
+}
+
+function hasClaudeAccessToken(credentialsJson: string): boolean {
+  const accessToken = parseClaudeOauthBlob(credentialsJson)?.accessToken;
+  return typeof accessToken === 'string' && accessToken.trim() !== '';
+}
+
+function describeRemoteClaudeCredentials(remoteJson: string | null, now: number): string | null {
+  if (remoteJson === null) return 'unreadable or missing';
+  if (!hasClaudeAccessToken(remoteJson)) return 'logged out (no access token)';
+  if (isOauthTokenExpiring(remoteJson, now)) return 'expired or expiring';
+  return null;
 }
 
 export async function runClaudeOauthRefreshCheck(options: ClaudeOauthRefreshWorkerOptions): Promise<void> {
@@ -252,6 +276,13 @@ export async function runClaudeOauthRefreshCheck(options: ClaudeOauthRefreshWork
   }
 
   if (!isOauthTokenExpiring(credentialsJson, now())) {
+    if (!hasClaudeAccessToken(credentialsJson)) {
+      options.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] ${options.credentialsPath} holds no access token; not distributing it to any remote target`, {
+        module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+      });
+      recordDecision(options.store, 'local', 'failed', 'Local Claude credentials hold no access token; distribution skipped');
+      return;
+    }
     // The owner's own token can stay healthy (refreshed by its own live CLI
     // usage) for a long time while a remote target's separate copy silently
     // expires on its own clock -- checked here, independently of the local
@@ -268,9 +299,16 @@ export async function runClaudeOauthRefreshCheck(options: ClaudeOauthRefreshWork
         });
         remoteJson = null;
       }
-      const remoteNeedsDistribution = remoteJson === null || isOauthTokenExpiring(remoteJson, now());
-      if (!remoteNeedsDistribution) continue;
-      await distributeToTarget(options, distribute, target, credentialsJson, `Distributed current credentials to ${target.name} (its own copy was stale)`);
+      const staleReason = describeRemoteClaudeCredentials(remoteJson, now());
+      if (staleReason === null) {
+        options.logger.info(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] skipping ${target.name}: its credentials are still valid`, {
+          module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+          target: target.name,
+        });
+        recordDecision(options.store, target.name, 'skipped', `Skipped ${target.name}: its credentials are still valid`);
+        continue;
+      }
+      await distributeToTarget(options, distribute, target, credentialsJson, `Distributed current credentials to ${target.name} (its own copy was ${staleReason})`);
     }
     return;
   }
