@@ -6,9 +6,14 @@
 // in flight.
 import { execFileSync, execSync } from 'node:child_process';
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
@@ -1580,9 +1585,26 @@ export function loadState() {
   return normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
 }
 
-export function saveState(state) {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(STATE_FILE, JSON.stringify(normalizeState(state), null, 2));
+function fsyncFile(path) {
+  const fd = openSync(path, 'r+');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function saveState(state, { stateFile = STATE_FILE, writeFile = writeFileSync } = {}) {
+  mkdirSync(dirname(stateFile), { recursive: true });
+  const tmpFile = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFile(tmpFile, JSON.stringify(normalizeState(state), null, 2));
+    fsyncFile(tmpFile);
+    renameSync(tmpFile, stateFile);
+  } catch (error) {
+    rmSync(tmpFile, { force: true });
+    throw new Error(`Failed to save CI regression watcher state to ${stateFile}: ${error.message}`, { cause: error });
+  }
 }
 
 export function appendSweepLog(entry) {
