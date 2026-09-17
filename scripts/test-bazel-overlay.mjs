@@ -81,6 +81,28 @@ for (const pkg of enabled.packages ?? []) {
   );
 }
 
+for (const pkg of enabled.packages ?? []) {
+  const build = readFileSync(`packages/${pkg}/BUILD.bazel`, 'utf8');
+  for (const target of build.matchAll(/^sh_(?:test|binary)\([\s\S]*?^\)/gm)) {
+    assert(
+      !target[0].includes('run_pnpm_filter.sh') || target[0].includes('"no-remote-exec"'),
+      `packages/${pkg}/BUILD.bazel: run_pnpm_filter.sh targets need the runner checkout and must be tagged no-remote-exec`,
+    );
+  }
+}
+
+assert(
+  !/container-image=docker:\/\/ghcr\.io\/buildbuddy-io\/executor-docker-default/.test(bazelrc),
+  '.bazelrc build:rbe must use a publicly pullable executor image; ghcr.io/buildbuddy-io/executor-docker-default returns 403',
+);
+
+const rbeTargets = spawnSync(process.execPath, ['scripts/bazel/list-test-targets.mjs', 'rbe'], { encoding: 'utf8' });
+assert(rbeTargets.status === 0, `list-test-targets rbe failed: ${rbeTargets.stderr}`);
+assert(
+  rbeTargets.stdout.split(/\s+/).includes('//scripts/bazel:rbe_smoke_test'),
+  'rbe targets must include //scripts/bazel:rbe_smoke_test so the pilot executes at least one action remotely',
+);
+
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const mergeConditions = (mergify.queue_rules ?? [])
   .filter((rule) => rule.name === 'default')
@@ -113,7 +135,7 @@ try {
 require('node:fs').writeFileSync(process.env.BAZEL_AUTH_CAPTURE, JSON.stringify(process.argv.slice(2)));
 `, { mode: 0o755 });
   for (const [name, job] of [['bazel-cache-pilot', pilot], ['bazel-rbe-pilot', rbePilot]]) {
-    const step = job.steps.find((step) => step.env?.BUILDBUDDY_API_KEY);
+    const step = job.steps.find((step) => step.env?.BUILDBUDDY_API_KEY && /\bbazelisk\b/.test(step.run ?? ''));
     assert(step?.env.BUILDBUDDY_API_KEY === '${{ secrets.BUILDBUDDY_API_KEY }}', `${name} must use the repository secret`);
     for (const key of ['dummy-key with spaces', '']) {
       rmSync(capture, { force: true });

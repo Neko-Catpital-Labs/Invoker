@@ -8,7 +8,7 @@ sh_binary(
     srcs = ["//scripts/bazel:run_pnpm_filter.sh"],
     args = ["@invoker/slack-bug-scan", "build"],
     data = glob(["**"], exclude = ["node_modules/**", "dist/**", "coverage/**", "BUILD.bazel"]),
-    tags = ["no-sandbox", "kind_tsup"],
+    tags = ["no-sandbox", "kind_tsup", "no-remote-exec"],
 )
 
 sh_test(
@@ -17,5 +17,5 @@ sh_test(
     args = ["@invoker/slack-bug-scan", "test"],
     size = "large",
     data = glob(["**"], exclude = ["node_modules/**", "dist/**", "coverage/**", "BUILD.bazel"]),
-    tags = ["no-sandbox", "kind_tsup"],
+    tags = ["no-sandbox", "kind_tsup", "no-remote-exec"],
 )

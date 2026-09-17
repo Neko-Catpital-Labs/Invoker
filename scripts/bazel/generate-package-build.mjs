@@ -33,10 +33,7 @@ function renderPackageBuild(dirName, pkg) {
   const kind = packageKind(dirName, pkg);
   const hasTest = Boolean(pkg.scripts?.test) && !String(pkg.scripts.test).startsWith('echo');
   const hasBuild = Boolean(pkg.scripts?.build);
-  const tags = ['no-sandbox', `kind_${kind}`];
-  if (kind === 'electron' || kind === 'vite') {
-    tags.push('no-remote-exec');
-  }
+  const tags = ['no-sandbox', `kind_${kind}`, 'no-remote-exec'];
   const tagLit = tags.map((t) => `"${t}"`).join(', ');
   const dataGlob = 'glob(["**"], exclude = ["node_modules/**", "dist/**", "coverage/**", "BUILD.bazel"])';
   const lines = [HEADER, 'exports_files(["package.json"])', ''];
@@ -79,6 +76,13 @@ function renderScriptsBazelBuild() {
     '    "run_pnpm_filter.sh",',
     '    "run_workspace_cmd.sh",',
     '])',
+    '',
+    'sh_test(',
+    '    name = "rbe_smoke_test",',
+    '    srcs = ["rbe_smoke_test.sh"],',
+    '    size = "small",',
+    '    tags = ["manual", "rbe"],',
+    ')',
     '',
   ].join('\n');
 }
