@@ -1152,7 +1152,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
   const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
     ownerCapability: true,
     outputDir: join(dbDir, 'outputs'),
-    ...(options.json ? { slowQueryThresholdMs: 0 } : {}),
+    ...(options.json ? { slowQueryThresholdMs: 0, logCheckpointTiming: false } : {}),
   });
   const stdoutWrite = process.stdout.write;
   if (options.json) {
