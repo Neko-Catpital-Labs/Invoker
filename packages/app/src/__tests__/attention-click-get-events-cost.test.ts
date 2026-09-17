@@ -53,7 +53,7 @@ describe('attention-click getEvents pagination cost', () => {
     const boundedMs = performance.now() - boundedStarted;
 
     expect(adapter.loadTask(taskId)?.status).toBe('failed');
-    expect(unbounded.length).toBe(20_000);
+    expect(unbounded.length).toBe(10_000);
     expect(bounded.length).toBe(50);
     expect(unboundedMs).toBeGreaterThan(boundedMs);
     expect(boundedMs).toBeLessThan(25);

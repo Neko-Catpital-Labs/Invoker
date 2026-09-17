@@ -79,6 +79,7 @@ describe('recreate-class auto-fix eligibility', () => {
     orchestrator.loadPlan({
       name: 'recreate resets auto-fix eligibility',
       onFinish: 'none',
+      repoUrl: 'https://example.com/repo.git',
       tasks: [{ id: 'build', description: 'build', command: 'pnpm build' }],
     });
     const workflowId = orchestrator.getWorkflowIds()[0]!;

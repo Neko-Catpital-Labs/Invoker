@@ -33,6 +33,7 @@ import {
   MergeGateExecutor,
   BaseExecutor,
   getEffectivePath,
+  defaultCodexSpendGatePath,
   registerBuiltinAgents as registerBuiltinAgentsStatic,
   type Executor,
   type ExecutorHandle,
@@ -64,6 +65,11 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 import { existsSync } from 'node:fs';
+
+function mockPathsExistExceptSpendGateTrip(): void {
+  const spendGatePath = defaultCodexSpendGatePath();
+  vi.mocked(existsSync).mockImplementation((path) => path !== spendGatePath);
+}
 
 /** Host shell for worktree branch-checkout terminal specs (see WorktreeExecutor.getRestoredTerminalSpec). */
 const worktreeCheckoutShell = process.platform === 'darwin' ? 'zsh' : 'bash';
@@ -1106,7 +1112,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
         cacheDir: '/tmp/cache',
         agentRegistry,
       });
-      vi.mocked(existsSync).mockReturnValue(true);
+      mockPathsExistExceptSpendGateTrip();
       const meta: PersistedTaskMeta = {
         taskId: 'task-codex',
         runnerKind: 'worktree',
@@ -1154,7 +1160,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
         cacheDir: '/tmp/cache',
         agentRegistry,
       });
-      vi.mocked(existsSync).mockReturnValue(true);
+      mockPathsExistExceptSpendGateTrip();
       const meta: PersistedTaskMeta = {
         taskId: 'task-default',
         runnerKind: 'worktree',
@@ -1308,7 +1314,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   }
 
   it('fix with codex → terminal launches codex, not claude', () => {
-    vi.mocked(existsSync).mockReturnValue(true);
+    mockPathsExistExceptSpendGateTrip();
     const agentRegistry = registerBuiltinAgents();
     const wt = new WorktreeExecutor({
       worktreeBaseDir: '/tmp/wt',
@@ -1352,7 +1358,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   });
 
   it('completed command task with only last agent metadata launches codex resume', () => {
-    vi.mocked(existsSync).mockReturnValue(true);
+    mockPathsExistExceptSpendGateTrip();
     const agentRegistry = registerBuiltinAgents();
     const wt = new WorktreeExecutor({
       worktreeBaseDir: '/tmp/wt',
@@ -1422,7 +1428,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   });
 
   it('prompt task with stale claude agent_name still launches configured codex resume', async () => {
-    vi.mocked(existsSync).mockReturnValue(true);
+    mockPathsExistExceptSpendGateTrip();
     const { resolveTaskTerminalSpec } = await import('../open-terminal-for-task.js');
     const agentRegistry = registerBuiltinAgents();
     vi.spyOn(agentRegistry, 'getSessionDriver').mockReturnValue({
@@ -1470,7 +1476,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   });
 
   it('fix with no agent specified → terminal defaults to codex', () => {
-    vi.mocked(existsSync).mockReturnValue(true);
+    mockPathsExistExceptSpendGateTrip();
     const agentRegistry = registerBuiltinAgents();
     const wt = new WorktreeExecutor({
       worktreeBaseDir: '/tmp/wt',

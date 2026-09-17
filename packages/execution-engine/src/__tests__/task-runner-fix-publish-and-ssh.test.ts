@@ -1347,46 +1347,57 @@ describe('TaskRunner', () => {
     });
 
     it('publishReviewStackWithMakePrSkill does not invoke Claude when Codex is registered', async () => {
-      const codexAgent = {
-        name: 'codex',
-        stdinMode: 'ignore',
-        bundledSkillRoot: '/tmp/codex-skills',
-        bundledSkills: ['make-pr'],
-        buildCommand: () => ({
-          cmd: 'node',
-          args: ['-e', 'var b=["## Summary","","x","","## Review Claim","","x","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","x","","## Slice Rationale","","x","","## Non-goals","- none","","## Test Plan","- [x] x","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))'],
-          sessionId: 'sess-codex',
-        }),
-        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
-      };
-      const claudeAgent = {
-        name: 'claude',
-        stdinMode: 'ignore',
-        bundledSkillRoot: '/tmp/claude-skills',
-        bundledSkills: ['make-pr'],
-        buildCommand: () => { throw new Error('Claude must not be invoked'); },
-        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
-      };
-      const executor = new TaskRunner({
-        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
-        persistence: { logEvent: vi.fn() } as any,
-        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
-        executionAgentRegistry: {
-          get: (name: string) => name === 'codex' ? codexAgent : name === 'claude' ? claudeAgent : undefined,
-          getOrThrow: vi.fn(),
-          getSessionDriver: vi.fn().mockReturnValue(undefined),
-          listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
-        } as any,
-        cwd: '/tmp',
-      });
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
 
-      const result = await (executor as any).publishReviewStackWithMakePrSkill({
-        workflowId: 'wf-codex-only', title: 'Stack', baseBranch: 'master', featureBranch: 'plan/feature',
-        workflowSummary: 'summary', cwd: '/tmp', mergeNodeTaskId: '__merge__wf-codex-only', expectedGeneration: 1,
-      });
+      try {
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'var b=["## Summary","","x","","## Review Claim","","x","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","x","","## Slice Rationale","","x","","## Non-goals","- none","","## Test Plan","- [x] x","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))'],
+            sessionId: 'sess-codex',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkillRoot: '/tmp/claude-skills',
+          bundledSkills: ['make-pr'],
+          buildCommand: () => { throw new Error('Claude must not be invoked'); },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const executor = new TaskRunner({
+          orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+          persistence: { logEvent: vi.fn() } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => name === 'codex' ? codexAgent : name === 'claude' ? claudeAgent : undefined,
+            getOrThrow: vi.fn(),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
+          } as any,
+          cwd: '/tmp',
+        });
 
-      expect(result.agentName).toBe('codex');
-      expect(result.artifacts).toHaveLength(1);
+        const result = await (executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-codex-only', title: 'Stack', baseBranch: 'master', featureBranch: 'plan/feature',
+          workflowSummary: 'summary', cwd: '/tmp', mergeNodeTaskId: '__merge__wf-codex-only', expectedGeneration: 1,
+        });
+
+        expect(result.agentName).toBe('codex');
+        expect(result.artifacts).toHaveLength(1);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
     });
 
     it('publishReviewStackWithMakePrSkill reuses an existing review stack when live bodies validate', async () => {

@@ -1583,6 +1583,20 @@ test_lint_accepts_hook_readme_beside_detect_py() {
   fi
 }
 
+test_lint_reads_sections_after_blank_lines_in_blocks() {
+  local fixture="$POSITIVE_DIR/13-blank-lines-inside-blocks.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected lint to read description and prompt sections that follow a blank line, got: $output" >&2
+    return 1
+  fi
+}
+
 test_lint_rejects_behavior_plus_unrelated_docs() {
   local fixture="$NEGATIVE_DIR/anti-pattern-q-behavior-plus-unrelated-docs.yaml"
   local output
@@ -1772,6 +1786,7 @@ run_test "Lint: reject missing review lane" test_lint_requires_review_lane
 run_test "Lint: reject behavior lane mixed with proof files" test_lint_rejects_behavior_plus_proof_files
 run_test "Lint: accept hook README beside detect.py" test_lint_accepts_hook_readme_beside_detect_py
 run_test "Lint: reject behavior lane mixed with unrelated docs" test_lint_rejects_behavior_plus_unrelated_docs
+run_test "Lint: read block sections after blank lines" test_lint_reads_sections_after_blank_lines_in_blocks
 run_test "Lint: reject refactor lane mixed with field additions" test_lint_rejects_refactor_plus_fields
 run_test "Lint: reject inter-task ephemeral carry without commit" test_lint_rejects_inter_task_ephemeral_carry_without_commit
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
