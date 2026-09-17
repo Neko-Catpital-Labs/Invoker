@@ -1,8 +1,9 @@
 {
   "packages/contracts/src/config-diagnostics.ts": 1,
+  "packages/contracts/src/rotating-log.ts": 1,
   "packages/contracts/src/task-filter.ts": 1,
   "packages/execution-engine/src/agents/claude-execution-agent.ts": 1,
-  "packages/execution-engine/src/base-executor.ts": 7,
+  "packages/execution-engine/src/base-executor.ts": 8,
   "packages/execution-engine/src/ci-failure-infra-classifier.ts": 1,
   "packages/execution-engine/src/conflict-resolver.ts": 3,
   "packages/execution-engine/src/docker-executor.ts": 4,
