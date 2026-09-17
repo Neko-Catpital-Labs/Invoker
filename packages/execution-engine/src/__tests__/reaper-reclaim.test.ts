@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -24,6 +25,7 @@ import {
   reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
   reapStaleDevelopmentHomes,
+  reapStaleDevelopmentWorktrees,
   reapStaleMergeClones,
   reapStaleWorktrees,
   STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS,
@@ -457,6 +459,130 @@ describe('reapStaleDevelopmentHomes', () => {
   it('does nothing when there is no dev folder', async () => {
     const { root, home } = makeHome();
     expect(await reapStaleDevelopmentHomes({ invokerHome: home, userHome: root })).toEqual({
+      ok: true,
+      removed: [],
+      unchecked: [],
+    });
+  });
+});
+
+describe('reapStaleDevelopmentWorktrees', () => {
+  const staleAge = (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000;
+
+  function makeLiveDevHome(home: string, id: string): string {
+    const devHome = join(home, 'dev', id);
+    mkdirSync(join(devHome, 'repos', 'repohash1'), { recursive: true });
+    writeFileSync(join(devHome, 'invoker.db'), 'dev-db');
+    writeFileSync(join(devHome, 'invoker.log'), 'log');
+    return devHome;
+  }
+
+  function makeWorktree(devHome: string, repoHash: string, branch: string, ageMs?: number): string {
+    const path = join(devHome, 'worktrees', repoHash, branch);
+    mkdirSync(join(path, 'src'), { recursive: true });
+    writeFileSync(join(path, 'src', 'index.ts'), 'x');
+    if (ageMs !== undefined) {
+      backdate(join(path, 'src', 'index.ts'), ageMs);
+      backdate(join(path, 'src'), ageMs);
+      backdate(path, ageMs);
+    }
+    return path;
+  }
+
+  it('removes an old worktree inside a live dev home and keeps a fresh one, the database, logs, and repos', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeLiveDevHome(home, 'aaaa000001');
+    const oldOne = makeWorktree(devHome, 'repohash1', 'experiment-old', staleAge);
+    const freshOne = makeWorktree(devHome, 'repohash1', 'experiment-fresh');
+    const oldDbTime = staleAge * 10;
+    backdate(join(devHome, 'invoker.db'), oldDbTime);
+    const runLocalGit = vi.fn(async () => {});
+
+    const result = await reapStaleDevelopmentWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit,
+    });
+
+    expect(result).toEqual({ ok: true, removed: [oldOne], unchecked: [] });
+    expect(existsSync(oldOne)).toBe(false);
+    expect(existsSync(freshOne)).toBe(true);
+    expect(readFileSync(join(devHome, 'invoker.db'), 'utf8')).toBe('dev-db');
+    expect(existsSync(join(devHome, 'invoker.log'))).toBe(true);
+    expect(existsSync(join(devHome, 'repos', 'repohash1'))).toBe(true);
+    expect(runLocalGit).toHaveBeenCalledWith(
+      ['-C', join(devHome, 'repos', 'repohash1'), 'worktree', 'prune'],
+      STALE_WORKTREE_GIT_TIMEOUT_MS,
+    );
+  });
+
+  it('keeps an old worktree whose file changed recently', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeLiveDevHome(home, 'bbbb000002');
+    const path = makeWorktree(devHome, 'repohash1', 'experiment-touched', staleAge);
+    writeFileSync(join(path, 'src', 'index.ts'), 'written today');
+    backdate(join(path, 'src'), staleAge);
+    backdate(path, staleAge);
+
+    const result = await reapStaleDevelopmentWorktrees({ invokerHome: home, userHome: root });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [] });
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it('keeps an old worktree whose repo has a fresh in-use mark', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeLiveDevHome(home, 'cccc000003');
+    const path = makeWorktree(devHome, 'repohash1', 'experiment-marked', staleAge);
+    mkdirSync(join(devHome, 'in-use', 'worktrees', 'repohash1'), { recursive: true });
+    writeFileSync(join(devHome, 'in-use', 'worktrees', 'repohash1', 'experiment-marked'), '');
+
+    const result = await reapStaleDevelopmentWorktrees({ invokerHome: home, userHome: root });
+
+    expect(result).toEqual({ ok: true, removed: [], unchecked: [] });
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it('removes an old worktree whose in-use mark is itself old', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeLiveDevHome(home, 'dddd000004');
+    const path = makeWorktree(devHome, 'repohash1', 'experiment-old-mark', staleAge);
+    const markPath = join(devHome, 'in-use', 'worktrees', 'repohash1', 'experiment-old-mark');
+    mkdirSync(join(devHome, 'in-use', 'worktrees', 'repohash1'), { recursive: true });
+    writeFileSync(markPath, '');
+    backdate(markPath, staleAge);
+
+    const result = await reapStaleDevelopmentWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit: async () => {},
+    });
+
+    expect(result).toEqual({ ok: true, removed: [path], unchecked: [] });
+    expect(existsSync(markPath)).toBe(true);
+  });
+
+  it('keeps an old worktree it cannot read and reports it as unchecked', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeLiveDevHome(home, 'eeee000005');
+    const path = makeWorktree(devHome, 'repohash1', 'experiment-locked', staleAge);
+    const locked = join(path, 'src');
+    chmodSync(locked, 0o000);
+    try {
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+      const result = await reapStaleDevelopmentWorktrees({ invokerHome: home, userHome: root, logger });
+
+      expect(result).toEqual({ ok: true, removed: [], unchecked: [path] });
+      expect(existsSync(path)).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(locked), expect.anything());
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  it('does nothing when there is no dev folder', async () => {
+    const { root, home } = makeHome();
+    expect(await reapStaleDevelopmentWorktrees({ invokerHome: home, userHome: root })).toEqual({
       ok: true,
       removed: [],
       unchecked: [],
