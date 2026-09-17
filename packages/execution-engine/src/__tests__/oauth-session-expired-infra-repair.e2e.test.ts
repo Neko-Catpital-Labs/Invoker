@@ -225,8 +225,12 @@ describe('oauth-session-expired infra repair with a dummy repo', () => {
     const task = orchestrator.getAllTasks().find((candidate) => !candidate.config.isMergeNode);
     expect(task).toBeDefined();
     if (!task) return;
-    expect(task.config.runnerKind).toBe('ssh');
+    expect(task.config.poolId).toBe('ssh-pool');
+    expect(task.config.runnerKind).toBeUndefined();
 
+    persistence.updateTask(task.id, {
+      config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
+    });
     persistence.logEvent(task.id, 'task.executor.selected', {
       runnerKind: 'ssh',
       poolMemberId: 'remote-1',
