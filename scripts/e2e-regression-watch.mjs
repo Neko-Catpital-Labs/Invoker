@@ -1328,7 +1328,7 @@ export function renderOptionalReflectTaskYaml(vars) {
       skill edits there only — never edit Invoker.
       Review claim: Any skill edit is a catstack PR traceable to a cited
       finding from this repair's own transcript, not a speculative rewrite.
-      Review lane: docs
+      Review lane: behavior
       Safety invariant: This task never edits Invoker files and never merges
       a catstack PR on its own authority. If /reflect finds nothing durable,
       it makes no changes and exits 0.
@@ -1363,7 +1363,7 @@ export function renderOptionalReflectTaskYaml(vars) {
       CI job \`${jobName}\` (first observed failing at ${sha}).
       Review claim: Any drafted skill edit is a catstack PR traceable to a
       cited finding from this repair's own transcript.
-      Review lane: docs
+      Review lane: behavior
       Safety invariant: Never edit Invoker files. Never merge a catstack PR
       on this task's own authority. If there is no durable finding, make no
       changes.
