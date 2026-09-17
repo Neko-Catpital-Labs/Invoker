@@ -17,7 +17,7 @@ build:remote --remote_timeout=600
 
 build:rbe --config=remote
 build:rbe --remote_executor=grpcs://remote.buildbuddy.io
-build:rbe --remote_default_exec_properties=container-image=docker://ghcr.io/buildbuddy-io/executor-docker-default:latest
+build:rbe --remote_default_exec_properties=container-image=docker://gcr.io/flame-public/rbe-ubuntu22-04:latest
 build:rbe --jobs=50
 
 try-import %workspace%/.bazelrc.user
