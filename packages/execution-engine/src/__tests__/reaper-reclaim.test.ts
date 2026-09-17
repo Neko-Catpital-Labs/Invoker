@@ -20,6 +20,7 @@ import {
   buildDeletingOrphanReapScript,
   buildStaleWorktreeReapScript,
   DELETING_ORPHAN_MIN_AGE_MINUTES,
+  CRITICAL_PRESSURE_SNAPSHOT_RETENTION,
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
   reapStaleInvokerCliTempDirs,
@@ -697,6 +698,19 @@ describe('enforceHourlySnapshotRetention', () => {
 
     expect(removed).toBe(0);
     expect(readdirSync(backupDir)).toHaveLength(10);
+  });
+
+  it('uses the configured INVOKER_DISK_CRITICAL_PERCENT as the critical threshold', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
+    vi.stubEnv('INVOKER_DISK_CRITICAL_PERCENT', '90');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      readDiskUsedPercent: () => 92,
+    });
+
+    expect(removed).toBe(4);
+    expect(readdirSync(backupDir)).toHaveLength(CRITICAL_PRESSURE_SNAPSHOT_RETENTION);
   });
 
   it('keeps the configured retention and warns when disk usage is unreadable', () => {

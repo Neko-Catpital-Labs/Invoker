@@ -19,7 +19,7 @@ import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from
 import { hasFreshInUseMark, IN_USE_MARK_DIR } from '../workspace-in-use-mark.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
-import { DEFAULT_DISK_CRITICAL_PERCENT } from './disk-headroom.js';
+import { resolveDiskHeadroomThresholds } from './disk-headroom.js';
 import {
   computeProtectedLocalPaths,
   expandTildeHome,
@@ -1008,7 +1008,7 @@ export function enforceHourlySnapshotRetention(
   try {
     const usedPercent = (opts.readDiskUsedPercent ?? readDiskUsedPercent)(home);
     if (!Number.isFinite(usedPercent)) throw new Error(`disk used percent is not a number: ${usedPercent}`);
-    if (usedPercent >= DEFAULT_DISK_CRITICAL_PERCENT) {
+    if (usedPercent >= resolveDiskHeadroomThresholds().criticalPercent) {
       retention = Math.min(configured, CRITICAL_PRESSURE_SNAPSHOT_RETENTION);
     }
   } catch (err) {
