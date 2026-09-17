@@ -124,6 +124,7 @@ while IFS= read -r pr; do
   q_num="$(shell_quote "$num")"
   q_fingerprint="$(shell_quote "$fingerprint")"
   q_tsv_kind="$(shell_quote "orphan-attempt")"
+  q_target_repo="$(shell_quote "$TARGET_REPO")"
 
   plan_file="$PLAN_DIR/repair-pr-$num.yaml"
   {
@@ -165,6 +166,12 @@ while IFS= read -r pr; do
       printf 'kind=%s\n' "$q_tsv_kind"
       printf 'key=%s\n' "$q_num"
       printf 'marker=%s\n' "$q_fingerprint"
+      printf 'repo=%s\n' "$q_target_repo"
+      printf 'pr_state="$(gh pr view "$key" --repo "$repo" --json state --jq .state 2>/dev/null || true)"\n'
+      printf 'if [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then\n'
+      printf '  echo "pr-worker-safe-push: PR #$key is already $pr_state; nothing to push" >&2\n'
+      printf '  exit 0\n'
+      printf 'fi\n'
       printf 'ref="refs/heads/$branch"\n'
       printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
       printf 'if [ "$live" != "$expected" ]; then\n'
