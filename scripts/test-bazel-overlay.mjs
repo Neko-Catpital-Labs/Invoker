@@ -81,6 +81,18 @@ for (const pkg of enabled.packages ?? []) {
   );
 }
 
+assert(
+  !/container-image=docker:\/\/ghcr\.io\/buildbuddy-io\/executor-docker-default/.test(bazelrc),
+  '.bazelrc build:rbe must use a publicly pullable executor image; ghcr.io/buildbuddy-io/executor-docker-default returns 403',
+);
+
+const rbeTargets = spawnSync(process.execPath, ['scripts/bazel/list-test-targets.mjs', 'rbe'], { encoding: 'utf8' });
+assert(rbeTargets.status === 0, `list-test-targets rbe failed: ${rbeTargets.stderr}`);
+assert(
+  rbeTargets.stdout.trim() === '//scripts/bazel:rbe_smoke_test',
+  'rbe targets must be only the hermetic //scripts/bazel:rbe_smoke_test; pnpm-wrapped package tests need the runner checkout',
+);
+
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
 const mergeConditions = (mergify.queue_rules ?? [])
   .filter((rule) => rule.name === 'default')

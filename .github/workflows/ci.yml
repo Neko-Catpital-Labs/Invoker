@@ -1376,7 +1376,7 @@ jobs:
             echo "common --bes_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
           } > .bazelrc.user
 
-      - name: Bazel RBE for sandboxed tsup packages when keyed
+      - name: Bazel RBE smoke test when keyed
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
