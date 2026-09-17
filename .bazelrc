@@ -4,6 +4,10 @@ common --registry=https://bcr.bazel.build
 build --incompatible_strict_action_env
 build --action_env=PATH
 test --test_env=PATH
+test --test_env=HOME
+test --test_env=CI
+test --test_env=GITHUB_ACTIONS
+test --test_env=GIT_CONFIG_GLOBAL
 test --test_output=errors
 
 build --disk_cache=~/.cache/invoker-bazel-disk
