@@ -1585,21 +1585,25 @@ export function loadState() {
   return normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
 }
 
+function fsyncFile(path) {
+  const fd = openSync(path, 'r+');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function saveState(state, { stateFile = STATE_FILE, writeFile = writeFileSync } = {}) {
   mkdirSync(dirname(stateFile), { recursive: true });
   const tmpFile = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
   try {
     writeFile(tmpFile, JSON.stringify(normalizeState(state), null, 2));
-    const fd = openSync(tmpFile, 'r');
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
+    fsyncFile(tmpFile);
     renameSync(tmpFile, stateFile);
   } catch (error) {
     rmSync(tmpFile, { force: true });
-    throw new Error(`failed to save watcher state to ${stateFile}: ${error.message}`, { cause: error });
+    throw new Error(`Failed to save CI regression watcher state to ${stateFile}: ${error.message}`, { cause: error });
   }
 }
 

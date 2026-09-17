@@ -1,6 +1,6 @@
 xcodeVersion: 15.0
 actions:
   - name: "Invoker linux"
-    container-image: "docker://ghcr.io/buildbuddy-io/executor-docker-default:latest"
+    container-image: "docker://gcr.io/flame-public/rbe-ubuntu22-04:latest"
     os: "linux"
     arch: "amd64"

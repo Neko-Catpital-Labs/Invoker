@@ -8,8 +8,17 @@ import {
   registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
-import { resolvePrMaintenanceWorkerConfig, type InvokerConfig } from '../config.js';
+import {
+  DEFAULT_PR_MAINTENANCE_TARGET_REPO,
+  resolvePrMaintenanceWorkerConfig,
+  type InvokerConfig,
+} from '../config.js';
 import { ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, BUILT_IN_WORKER_KINDS } from '../worker-control.js';
+
+const DEFAULT_TARGET_REPO_ENV = {
+  INVOKER_GITHUB_TARGET_REPOS: DEFAULT_PR_MAINTENANCE_TARGET_REPO,
+  INVOKER_GITHUB_TARGET_REPO: DEFAULT_PR_MAINTENANCE_TARGET_REPO,
+};
 
 const silentLogger = {
   debug: () => {},
@@ -49,7 +58,7 @@ describe('resolvePrMaintenanceWorkerConfig', () => {
       resolvePrMaintenanceWorkerConfig({
         prMaintenance: { repoRoot: '/srv/invoker', intervalMs: 60000 },
       }),
-    ).toEqual({ repoRoot: '/srv/invoker', intervalMs: 60000 });
+    ).toEqual({ repoRoot: '/srv/invoker', intervalMs: 60000, env: DEFAULT_TARGET_REPO_ENV });
   });
 
   it('builds the launch config from present fields', () => {
@@ -64,7 +73,7 @@ describe('resolvePrMaintenanceWorkerConfig', () => {
     });
     expect(resolved).toEqual({
       repoRoot: '/srv/invoker',
-      env: { INVOKER_PR_CRON_LOCK: '/tmp/pr.lock' },
+      env: { INVOKER_PR_CRON_LOCK: '/tmp/pr.lock', ...DEFAULT_TARGET_REPO_ENV },
       intervalMs: 120000,
       lockPath: '/tmp/pr.lock',
       shell: '/bin/bash',
@@ -72,8 +81,8 @@ describe('resolvePrMaintenanceWorkerConfig', () => {
     expect(resolved).not.toHaveProperty('enabled');
   });
 
-  it('returns an empty launch object when the block has no launch fields', () => {
-    expect(resolvePrMaintenanceWorkerConfig({ prMaintenance: {} })).toEqual({});
+  it('returns only the target-repo env when the block has no launch fields', () => {
+    expect(resolvePrMaintenanceWorkerConfig({ prMaintenance: {} })).toEqual({ env: DEFAULT_TARGET_REPO_ENV });
   });
 });
 
@@ -86,7 +95,11 @@ describe('registered owner PR-maintenance worker dependencies', () => {
     const deps = buildOwnerWorkerDeps({
       prMaintenance: { intervalMs: 90000, shell: '/bin/bash' },
     });
-    expect(deps.prMaintenance).toEqual({ intervalMs: 90000, shell: '/bin/bash' });
+    expect(deps.prMaintenance).toEqual({
+      intervalMs: 90000,
+      shell: '/bin/bash',
+      env: DEFAULT_TARGET_REPO_ENV,
+    });
   });
 
   it('builds the surviving PR-maintenance workers from the owner deps without starting them', () => {
