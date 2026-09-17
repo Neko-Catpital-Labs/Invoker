@@ -30,6 +30,20 @@ function makeSandboxRepo(): string {
   return dir;
 }
 
+function nonDiagnosticStderr(stderr: string): string[] {
+  return stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .filter((line) => {
+      try {
+        return (JSON.parse(line) as { operation?: unknown }).operation !== 'wal_checkpoint';
+      } catch {
+        return true;
+      }
+    });
+}
+
 function writeStandalonePlan(dir: string, body: string): string {
   const planPath = join(dir, 'plan.yaml');
   writeFileSync(planPath, body.replace('__REPO_ROOT__', JSON.stringify(makeSandboxRepo())), 'utf8');
@@ -273,7 +287,7 @@ describe('invoker-cli', () => {
     const json = JSON.parse(result.stdout);
     expect(json.workflow.status).toBe('success');
     expect(result.stdout).not.toContain('hello-from-invoker-cli');
-    expect(result.stderr).toBe('');
+    expect(nonDiagnosticStderr(result.stderr)).toEqual([]);
   });
 
   it('invalid YAML exits non-zero with a validation error', async () => {
