@@ -83,7 +83,7 @@ describe('headless query review-gate', () => {
 
   it('prints the resolved record as JSON', async () => {
     await runHeadless(['query', 'review-gate', '999', '--output', 'json'], mockDeps);
-    expect(findReviewGateByPr).toHaveBeenCalledWith('999');
+    expect(findReviewGateByPr).toHaveBeenCalledWith('999', undefined);
     const output = stdoutSpy.mock.calls[0][0] as string;
     expect(JSON.parse(output)).toEqual(record);
   });
@@ -93,12 +93,12 @@ describe('headless query review-gate', () => {
       ['query', 'review-gate', 'https://github.com/owner/repo/pull/999', '--output', 'json'],
       mockDeps,
     );
-    expect(findReviewGateByPr).toHaveBeenCalledWith('999');
+    expect(findReviewGateByPr).toHaveBeenCalledWith('999', 'owner/repo');
   });
 
   it('prints an empty object and exits cleanly when no workflow matches', async () => {
     await runHeadless(['query', 'review-gate', '123456', '--output', 'json'], mockDeps);
-    expect(findReviewGateByPr).toHaveBeenCalledWith('123456');
+    expect(findReviewGateByPr).toHaveBeenCalledWith('123456', undefined);
     const output = stdoutSpy.mock.calls[0][0] as string;
     expect(JSON.parse(output)).toEqual({});
   });
