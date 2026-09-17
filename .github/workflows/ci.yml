@@ -1246,6 +1246,7 @@ jobs:
 
   bazel-cache-pilot:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    needs: build-artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 90
     name: bazel-cache-pilot
@@ -1280,6 +1281,27 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workspace }}/.invoker-bazel-disk
           repository-cache: true
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
       - name: Overlay self-check
         run: node scripts/test-bazel-overlay.mjs
