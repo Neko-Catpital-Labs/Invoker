@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  statfsSync,
 } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from
 import { hasFreshInUseMark, IN_USE_MARK_DIR } from '../workspace-in-use-mark.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
+import { DEFAULT_DISK_CRITICAL_PERCENT } from './disk-headroom.js';
 import {
   computeProtectedLocalPaths,
   expandTildeHome,
@@ -980,10 +982,40 @@ export async function reapStaleInvokerCliTempDirs(opts: {
   return removed.sort();
 }
 
+export const CRITICAL_PRESSURE_SNAPSHOT_RETENTION = 6;
+
+export function readDiskUsedPercent(path: string): number {
+  const stats = statfsSync(path);
+  const blocks = Number(stats.blocks);
+  const available = Number(stats.bavail);
+  if (!Number.isFinite(blocks) || !Number.isFinite(available) || blocks <= 0) {
+    throw new Error(`statfs returned unusable block counts (blocks=${stats.blocks}, bavail=${stats.bavail})`);
+  }
+  return ((blocks - available) / blocks) * 100;
+}
+
 export function enforceHourlySnapshotRetention(
   invokerHome: string,
   userHome: string = homedir(),
+  opts: {
+    logger?: Pick<Logger, 'warn'>;
+    readDiskUsedPercent?: (path: string) => number;
+  } = {},
 ): number {
   const home = expandTildeHome(invokerHome, userHome);
-  return pruneHourlySnapshots(join(home, 'db-backups'), hourlySnapshotRetention());
+  const configured = hourlySnapshotRetention();
+  let retention = configured;
+  try {
+    const usedPercent = (opts.readDiskUsedPercent ?? readDiskUsedPercent)(home);
+    if (!Number.isFinite(usedPercent)) throw new Error(`disk used percent is not a number: ${usedPercent}`);
+    if (usedPercent >= DEFAULT_DISK_CRITICAL_PERCENT) {
+      retention = Math.min(configured, CRITICAL_PRESSURE_SNAPSHOT_RETENTION);
+    }
+  } catch (err) {
+    const warn = opts.logger?.warn?.bind(opts.logger) ?? console.warn;
+    warn(`[reaper] disk usage unreadable for ${home}, keeping ${configured} hourly snapshots: ${errorDetail(err)}`, {
+      module: 'reaper',
+    });
+  }
+  return pruneHourlySnapshots(join(home, 'db-backups'), retention);
 }
