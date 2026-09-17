@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -40,6 +40,7 @@ import {
   resolveStateDir,
   resolveTargetRepo,
   RECOVERY_COOLDOWN_MS,
+  saveState,
   shouldSkipFilingAlreadyAddressed,
   STALE_OBSERVATION_MS,
 } from './e2e-regression-watch.mjs';
@@ -1766,5 +1767,43 @@ describe('watch-target-repo config resolution', () => {
     assert.equal(defaultResult.inserted, true);
     assert.equal(catstackResult.inserted, true, 'catstack must claim its own row, not collide with the default repo\'s');
     assert.equal(rows.size, 2);
+  });
+});
+
+describe('saveState', () => {
+  it('writes a parseable state file and leaves no temporary file behind', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-save-'));
+    try {
+      const stateFile = join(dir, 'state.json');
+      const state = loadEmptyState();
+      saveState(state, { stateFile });
+
+      assert.deepEqual(JSON.parse(readFileSync(stateFile, 'utf8')), normalizeState(state));
+      assert.deepEqual(readdirSync(dir), ['state.json']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the previous state file intact and removes the temporary file when the write throws', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-save-'));
+    try {
+      const stateFile = join(dir, 'state.json');
+      const previous = JSON.stringify(normalizeState(loadEmptyState()), null, 2);
+      writeFileSync(stateFile, previous);
+      const failingWrite = (path, data) => {
+        writeFileSync(path, data.slice(0, 5));
+        throw new Error('ENOSPC: no space left on device');
+      };
+
+      assert.throws(
+        () => saveState(loadEmptyState(), { stateFile, writeFile: failingWrite }),
+        (error) => error.message.includes(stateFile) && error.message.includes('ENOSPC'),
+      );
+      assert.equal(readFileSync(stateFile, 'utf8'), previous);
+      assert.deepEqual(readdirSync(dir), ['state.json']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
