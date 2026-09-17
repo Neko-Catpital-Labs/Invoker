@@ -1,7 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { writeFileSync, readFileSync } from 'node:fs';
 
 const CHECK = 'scripts/check-regex-migration.mjs';
 const BASELINE = 'scripts/regex-boundary-baseline.json';
@@ -35,14 +33,22 @@ try {
     regressed.out.includes(TARGET) && /\d+ -> \d+/.test(regressed.out), regressed.out);
   writeFileSync(TARGET, savedTarget);
 
-  const dir = mkdtempSync(join(tmpdir(), 'regex-baseline-'));
-  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(TARGET, `${savedTarget}\nconst EXTRA_C = SOME_PATTERN.exec(text);\nconst EXTRA_D = [...text.matchAll(/y/g)];\n`);
+  const widened = run();
+  check('regex .exec( and .matchAll( fail the ratchet', widened.code === 1, `exit ${widened.code}`);
+  check('widened failure counts both added lines', /: \d+ -> \d+/.test(widened.out) && widened.out.includes(TARGET), widened.out);
+  writeFileSync(TARGET, savedTarget);
+
+  writeFileSync(TARGET, `${savedTarget}\nconst EXTRA_E = await this.exec('gh', args, cwd);\n`);
+  const subprocess = run();
+  check('a subprocess this.exec( call does not trip the gate', subprocess.code === 0, `exit ${subprocess.code}: ${subprocess.out}`);
+  writeFileSync(TARGET, savedTarget);
+
   writeFileSync(BASELINE, '{ not json');
   const unreadable = run();
   check('unreadable baseline is neither pass nor regression (exit 2)', unreadable.code === 2, `exit ${unreadable.code}`);
   check('unreadable baseline says the check could not run',
     unreadable.out.includes('does not pass'), unreadable.out);
-  rmSync(dir, { recursive: true, force: true });
 } finally {
   writeFileSync(BASELINE, savedBaseline);
   writeFileSync(TARGET, savedTarget);
