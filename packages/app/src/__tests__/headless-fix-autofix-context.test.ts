@@ -121,16 +121,13 @@ describe('headless fix auto-fix context', () => {
     expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ reviewGateContext });
   });
 
-  it('passes the on-disk PR-author gate into fix-with-agent', async () => {
+  it('does not pass a PR-author gate into fix-with-agent', async () => {
     const { runHeadless } = await import('../headless.js');
-    const { deps, autoApproveAuthorGate } = makeDeps();
+    const { deps } = makeDeps();
 
     await runHeadless(['fix', 'wf-1/task-1', 'claude'], deps);
 
-    expect(fixWithAgentActionMock.mock.calls[0][1]).toEqual(
-      expect.objectContaining({
-        autoApproveAuthorGate,
-      }),
-    );
+    expect(fixWithAgentActionMock).toHaveBeenCalledTimes(1);
+    expect(fixWithAgentActionMock.mock.calls[0][1]).not.toHaveProperty('autoApproveAuthorGate');
   });
 });
