@@ -71,7 +71,7 @@ function makeRecoveryPolicyHarness(
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[],
   attemptLedger = createAutoFixAttemptLedger(),
 ) {
-  const workflows = [{ id: 'wf-1' }];
+  const workflows = [{ id: 'wf-1', repoUrl: 'https://example.com/repo.git' }];
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const intents: WorkflowMutationIntent[] = [...existingIntents];
   const actions = new Map<string, WorkerActionRecord>();
