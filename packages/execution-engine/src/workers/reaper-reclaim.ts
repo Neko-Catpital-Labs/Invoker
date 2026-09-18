@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statfsSync,
   statSync,
 } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -18,6 +19,7 @@ import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from
 import { hasFreshInUseMark, IN_USE_MARK_DIR } from '../workspace-in-use-mark.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
+import { DEFAULT_DISK_CRITICAL_PERCENT } from './disk-headroom.js';
 import {
   computeProtectedLocalPaths,
   expandTildeHome,
@@ -980,10 +982,41 @@ export async function reapStaleInvokerCliTempDirs(opts: {
   return removed.sort();
 }
 
+export const CRITICAL_PRESSURE_SNAPSHOT_RETENTION = 6;
+
+export interface HourlySnapshotRetentionOptions {
+  logger?: Logger;
+  readDiskUsedPercent?: (path: string) => number | null;
+}
+
 export function enforceHourlySnapshotRetention(
   invokerHome: string,
   userHome: string = homedir(),
+  opts: HourlySnapshotRetentionOptions = {},
 ): number {
   const home = expandTildeHome(invokerHome, userHome);
-  return pruneHourlySnapshots(join(home, 'db-backups'), hourlySnapshotRetention());
+  const usedPercent = (opts.readDiskUsedPercent ?? readDiskUsedPercent)(home);
+  const configured = hourlySnapshotRetention();
+  if (usedPercent === null) {
+    opts.logger?.warn?.(
+      `[reaper] disk usage unreadable for ${home}; keeping hourly snapshot retention ${configured}`,
+    );
+  }
+  const retention =
+    usedPercent !== null && usedPercent >= DEFAULT_DISK_CRITICAL_PERCENT
+      ? Math.min(configured, CRITICAL_PRESSURE_SNAPSHOT_RETENTION)
+      : configured;
+  return pruneHourlySnapshots(join(home, 'db-backups'), retention);
+}
+
+function readDiskUsedPercent(path: string): number | null {
+  try {
+    const stats = statfsSync(path);
+    const blocks = Number(stats.blocks);
+    const available = Number(stats.bavail);
+    if (!Number.isFinite(blocks) || !Number.isFinite(available) || blocks <= 0) return null;
+    return ((blocks - available) / blocks) * 100;
+  } catch {
+    return null;
+  }
 }
