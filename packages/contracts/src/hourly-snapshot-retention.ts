@@ -1,7 +1,8 @@
-import { readdirSync, rmSync } from 'node:fs';
+import { readdirSync, rmSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 
 const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
+const DEFAULT_HOURLY_SNAPSHOT_MAX_BYTES = 10 * 1024 * 1024 * 1024;
 const HOURLY_SNAPSHOT_PREFIX = 'invoker.db.hourly-auto-';
 
 export function hourlySnapshotRetention(): number {
@@ -16,6 +17,23 @@ export function hourlySnapshotRetention(): number {
     : DEFAULT_HOURLY_SNAPSHOT_RETENTION;
 }
 
+export function hourlySnapshotMaxBytes(): number {
+  const raw = process.env.INVOKER_HOURLY_BACKUP_MAX_BYTES;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_HOURLY_SNAPSHOT_MAX_BYTES;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.floor(parsed)
+    : DEFAULT_HOURLY_SNAPSHOT_MAX_BYTES;
+}
+
+function snapshotByteSize(filePath: string): number {
+  try {
+    return statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Delete the oldest `hourly-auto` snapshots (and any legacy `-wal`/`-shm`
  * sidecars left over from the pre-fix raw-copy era) so at most `retain`
@@ -25,7 +43,11 @@ export function hourlySnapshotRetention(): number {
  * pre-delete-all snapshots are left untouched. Returns the number of
  * snapshots removed.
  */
-export function pruneHourlySnapshots(backupDir: string, retain: number): number {
+export function pruneHourlySnapshots(
+  backupDir: string,
+  retain: number,
+  maxBytes: number = hourlySnapshotMaxBytes(),
+): number {
   if (retain <= 0) return 0;
   let entries: string[];
   try {
@@ -33,20 +55,29 @@ export function pruneHourlySnapshots(backupDir: string, retain: number): number 
   } catch {
     return 0;
   }
-  // Base snapshot files only; the timestamp suffix (YYYYMMDD-HHMMSS-mmmZ) sorts
-  // chronologically, so the oldest snapshots come first.
-  const snapshots = entries
+  const newestFirst = entries
     .filter(
       (name) =>
         name.startsWith(HOURLY_SNAPSHOT_PREFIX) &&
         !name.endsWith('-wal') &&
         !name.endsWith('-shm'),
     )
-    .sort();
-  const excess = snapshots.length - retain;
-  if (excess <= 0) return 0;
+    .sort()
+    .reverse();
+  const keep = new Set<string>();
+  let keptBytes = 0;
+  for (const name of newestFirst) {
+    if (keep.size >= retain) break;
+    const isNewest = keep.size === 0;
+    const size = snapshotByteSize(path.join(backupDir, name));
+    if (!isNewest && keptBytes + size > maxBytes) continue;
+    keep.add(name);
+    keptBytes += size;
+  }
+  const toRemove = newestFirst.filter((name) => !keep.has(name));
+  if (toRemove.length === 0) return 0;
   let removed = 0;
-  for (const name of snapshots.slice(0, excess)) {
+  for (const name of toRemove) {
     for (const suffix of ['', '-wal', '-shm']) {
       try {
         rmSync(path.join(backupDir, `${name}${suffix}`), { force: true });
