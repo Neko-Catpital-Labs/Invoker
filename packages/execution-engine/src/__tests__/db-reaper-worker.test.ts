@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_DB_REAPER_START_DELAY_MS,
   DB_REAPER_WORKER_KIND,
   DEFAULT_EVENTS_RETENTION_DAYS,
   DEFAULT_SYNC_JOURNAL_RETENTION_DAYS,
@@ -117,6 +118,33 @@ describe('createDbReaperWorker', () => {
 
     expect(store.pruneOldEventsCalls).toEqual([DEFAULT_EVENTS_RETENTION_DAYS]);
     expect(store.pruneOldSyncJournalCalls).toEqual([DEFAULT_SYNC_JOURNAL_RETENTION_DAYS]);
+  });
+
+  it('delays the automatic startup maintenance pass by default', async () => {
+    vi.useFakeTimers();
+    const store = new FakeDbReaperStore();
+    const worker = createDbReaperWorker({
+      logger: makeLogger(),
+      store,
+      eventsRetentionDays: 14,
+      syncJournalRetentionDays: 14,
+      intervalMs: 0,
+    });
+
+    try {
+      worker.start();
+      await vi.advanceTimersByTimeAsync(DEFAULT_DB_REAPER_START_DELAY_MS - 1);
+      expect(store.pruneOldEventsCalls).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runOnlyPendingTimersAsync();
+      expect(store.pruneOldEventsCalls).toEqual([14]);
+      await vi.runOnlyPendingTimersAsync();
+      expect(store.pruneOldSyncJournalCalls).toEqual([14]);
+    } finally {
+      await worker.stop();
+      vi.useRealTimers();
+    }
   });
 
   it('yields to queued mutations between batches and caps a full backlog per tick', async () => {
