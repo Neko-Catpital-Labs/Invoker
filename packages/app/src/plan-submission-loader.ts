@@ -79,18 +79,13 @@ export async function loadPlanSubmissionBundle(
         ],
       };
     }
-    backupPlan(plan, undefined, deps.logger);
+    backupPlan(plan, submission.plans.length === 1 ? planText : undefined, deps.logger);
     const loadedWorkflowId = deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
-    const workflow = deps.persistence.loadWorkflow?.(loadedWorkflowId)
-      ?? deps.persistence.listWorkflows().find((candidate) => candidate.id === loadedWorkflowId);
-    if (!workflow) {
-      throw new Error('Loaded plan did not create a workflow.');
+    if (options?.staged) {
+      deps.persistence.updateWorkflow(loadedWorkflowId, { staged: true });
     }
-    if (options?.staged && workflow.staged !== true) {
-      deps.persistence.updateWorkflow(workflow.id, { staged: true });
-    }
-    loadedWorkflowIds.push(workflow.id);
-    upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+    loadedWorkflowIds.push(loadedWorkflowId);
+    upstream = { workflowId: loadedWorkflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
   }
 
   const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];

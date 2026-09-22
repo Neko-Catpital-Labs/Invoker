@@ -20,7 +20,7 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
-import { appendJournalEntry, appendJournalEntryWithoutReadback, LOCAL_SYNC_ORIGIN } from './sync-journal.js';
+import { appendJournalEntry, appendJournalEntryWithoutReadback } from './sync-journal.js';
 import { SQLITE_MAX_VARIABLE_NUMBER } from './sqlite-workflow-repository.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
@@ -402,19 +402,13 @@ export class SqliteTaskAttemptRepository {
       for (const record of records) {
         this.syncCrashPreservationState(record.task.id, undefined, record.task.execution);
       }
-
-      const payloads = this.loadTaskJournalPayloads(records.map((record) => record.task.id));
-      this.appendTaskJournalEntries(records.map((record) => {
-        const payload = payloads.get(record.task.id);
-        if (!payload) {
-          throw new Error(`Failed to load task ${record.task.id} after insert for sync journal`);
-        }
-        return { taskId: record.task.id, payload };
-      }));
     });
   }
 
-  private buildSaveTaskRecord(workflowId: string, inputTask: TaskState): { task: TaskState; values: unknown[] } {
+  private buildSaveTaskRecord(
+    workflowId: string,
+    inputTask: TaskState,
+  ): { task: TaskState; values: unknown[] } {
     let task = inputTask;
     const cfg = resolveTaskConfig(task.config);
     if (cfg !== task.config) {
@@ -485,42 +479,6 @@ export class SqliteTaskAttemptRepository {
     ];
     assertSaveTaskPersistsSelectedAttemptId([...SAVE_TASK_COLUMNS], values, exec);
     return { task, values };
-  }
-
-  private loadTaskJournalPayloads(taskIds: string[]): Map<string, Record<string, unknown>> {
-    const payloads = new Map<string, Record<string, unknown>>();
-    for (let offset = 0; offset < taskIds.length; offset += SQLITE_MAX_VARIABLE_NUMBER) {
-      const chunk = taskIds.slice(offset, offset + SQLITE_MAX_VARIABLE_NUMBER);
-      const rows = this.exec.queryAll(
-        `SELECT * FROM tasks WHERE id IN (${chunk.map(() => '?').join(', ')})`,
-        chunk,
-      );
-      for (const row of rows) {
-        payloads.set(String(row.id), row);
-      }
-    }
-    return payloads;
-  }
-
-  private appendTaskJournalEntries(entries: Array<{ taskId: string; payload: Record<string, unknown> }>): void {
-    const columnsPerRow = 6;
-    const rowsPerInsert = Math.max(1, Math.floor(SQLITE_MAX_VARIABLE_NUMBER / columnsPerRow));
-    for (let offset = 0; offset < entries.length; offset += rowsPerInsert) {
-      const chunk = entries.slice(offset, offset + rowsPerInsert);
-      const params = chunk.flatMap((entry) => [
-        'task',
-        entry.taskId,
-        'upsert',
-        JSON.stringify(entry.payload ?? null),
-        LOCAL_SYNC_ORIGIN,
-        new Date().toISOString(),
-      ]);
-      this.exec.execRun(
-        `INSERT INTO sync_journal (entity_type, entity_id, op, payload, origin, created_at)
-         VALUES ${chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(', ')}`,
-        params,
-      );
-    }
   }
 
   updateTask(

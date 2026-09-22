@@ -1737,7 +1737,6 @@ export class Orchestrator {
       );
     }
 
-    this.reconcileMergeLeaves(workflowId);
     return workflowId;
   }
 
