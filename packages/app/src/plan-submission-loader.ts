@@ -1,5 +1,10 @@
 import type { InAppPlanningRepoBinding, Logger } from '@invoker/contracts';
 import { PINNED_WORKFLOW_BASE_BRANCH, type PlanDefinition } from '@invoker/workflow-core';
+import {
+  registerBuiltinAgents,
+  assertPlanExecutionAgentsRegistered,
+  type AgentRegistry,
+} from '@invoker/execution-engine';
 import { backupPlan } from './plan-backup.js';
 
 export interface PlanSubmissionLoadResult {
@@ -18,6 +23,7 @@ export interface PlanSubmissionLoadDeps {
   orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean; staged?: boolean }): string };
   allowGraphMutation?: boolean;
   logger?: Logger;
+  executionAgentRegistry?: AgentRegistry;
 }
 
 export interface PlanSubmissionLoadOptions {
@@ -51,6 +57,11 @@ export async function loadPlanSubmissionBundle(
   }
   if (options?.taskHandles && !options.preserveTaskHandles) {
     options.taskHandles.clear();
+  }
+
+  const execRegistry = deps.executionAgentRegistry ?? registerBuiltinAgents();
+  for (const parsedPlan of submission.plans) {
+    assertPlanExecutionAgentsRegistered(parsedPlan, execRegistry);
   }
 
   for (const parsedPlan of submission.plans) {
