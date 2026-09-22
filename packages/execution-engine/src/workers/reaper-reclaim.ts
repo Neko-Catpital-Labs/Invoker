@@ -1003,19 +1003,21 @@ export function enforceHourlySnapshotRetention(
   } = {},
 ): number {
   const home = expandTildeHome(invokerHome, userHome);
+  const backupDir = join(home, 'db-backups');
+  const measuredPath = existsSync(backupDir) ? backupDir : home;
   const configured = hourlySnapshotRetention();
   let retention = configured;
   try {
-    const usedPercent = (opts.readDiskUsedPercent ?? readDiskUsedPercent)(home);
+    const usedPercent = (opts.readDiskUsedPercent ?? readDiskUsedPercent)(measuredPath);
     if (!Number.isFinite(usedPercent)) throw new Error(`disk used percent is not a number: ${usedPercent}`);
     if (usedPercent >= resolveDiskHeadroomThresholds().criticalPercent) {
       retention = Math.min(configured, CRITICAL_PRESSURE_SNAPSHOT_RETENTION);
     }
   } catch (err) {
     const warn = opts.logger?.warn?.bind(opts.logger) ?? console.warn;
-    warn(`[reaper] disk usage unreadable for ${home}, keeping ${configured} hourly snapshots: ${errorDetail(err)}`, {
+    warn(`[reaper] disk usage unreadable for ${measuredPath}, keeping ${configured} hourly snapshots: ${errorDetail(err)}`, {
       module: 'reaper',
     });
   }
-  return pruneHourlySnapshots(join(home, 'db-backups'), retention);
+  return pruneHourlySnapshots(backupDir, retention);
 }

@@ -713,6 +713,23 @@ describe('enforceHourlySnapshotRetention', () => {
     expect(readdirSync(backupDir)).toHaveLength(CRITICAL_PRESSURE_SNAPSHOT_RETENTION);
   });
 
+  it('measures the db-backups directory, not the invoker home, when choosing retention', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+    const measured: string[] = [];
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      readDiskUsedPercent: (target) => {
+        measured.push(target);
+        return target === backupDir ? DEFAULT_DISK_CRITICAL_PERCENT : 10;
+      },
+    });
+
+    expect(measured).toEqual([backupDir]);
+    expect(removed).toBe(4);
+    expect(readdirSync(backupDir)).toHaveLength(CRITICAL_PRESSURE_SNAPSHOT_RETENTION);
+  });
+
   it('keeps the configured retention and warns when disk usage is unreadable', () => {
     vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '10');
     const { root, home, backupDir } = seedHourlySnapshots(10);
