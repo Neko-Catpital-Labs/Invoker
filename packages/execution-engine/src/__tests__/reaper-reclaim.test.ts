@@ -25,6 +25,7 @@ import {
   DELETING_ORPHAN_MIN_AGE_MINUTES,
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
+  reapStaleAgentArtifacts,
   reapStaleInvokerCliTempDirs,
   reapLocalStaleWorktrees,
   reapStaleAutomationCheckouts,
@@ -32,6 +33,7 @@ import {
   reapStaleDevelopmentWorktrees,
   reapStaleMergeClones,
   reapStaleWorktrees,
+  STALE_AGENT_ARTIFACT_MIN_AGE_DAYS,
   STALE_DEVELOPMENT_HOME_MIN_AGE_DAYS,
   STALE_MERGE_CLONE_MIN_AGE_HOURS,
   STALE_WORKTREE_GIT_TIMEOUT_MS,
@@ -622,6 +624,62 @@ describe('reapStaleDevelopmentWorktrees', () => {
       removed: [],
       unchecked: [],
     });
+  });
+});
+
+describe('reapStaleAgentArtifacts', () => {
+  const staleAgeMs = (STALE_AGENT_ARTIFACT_MIN_AGE_DAYS + 1) * 24 * 60 * 60 * 1000;
+
+  it('removes old agent-session and task-output files and keeps fresh ones, the spool, and subdirectories', () => {
+    const { home } = makeHome();
+    const sessions = join(home, 'agent-sessions');
+    const full = join(home, 'task-output', 'full');
+    const spool = join(home, 'task-output', 'spool');
+    mkdirSync(join(sessions, 'nested'), { recursive: true });
+    mkdirSync(full, { recursive: true });
+    mkdirSync(spool, { recursive: true });
+    const staleSession = join(sessions, 'old.jsonl');
+    const freshSession = join(sessions, 'new.jsonl');
+    const staleOutput = join(full, 'old.log');
+    const freshOutput = join(full, 'new.log');
+    const staleSpool = join(spool, 'old.log');
+    for (const file of [staleSession, freshSession, staleOutput, freshOutput, staleSpool]) {
+      writeFileSync(file, 'x');
+    }
+    for (const path of [staleSession, staleOutput, staleSpool, join(sessions, 'nested')]) {
+      backdate(path, staleAgeMs);
+    }
+
+    const result = reapStaleAgentArtifacts({ invokerHome: home });
+
+    expect(result.removed.sort()).toEqual([staleSession, staleOutput].sort());
+    expect(result.unchecked).toEqual([]);
+    expect(existsSync(staleSession)).toBe(false);
+    expect(existsSync(staleOutput)).toBe(false);
+    expect(existsSync(freshSession)).toBe(true);
+    expect(existsSync(freshOutput)).toBe(true);
+    expect(existsSync(staleSpool)).toBe(true);
+    expect(existsSync(join(sessions, 'nested'))).toBe(true);
+  });
+
+  it('reports a missing directory as clean, not unchecked', () => {
+    const { home } = makeHome();
+
+    expect(reapStaleAgentArtifacts({ invokerHome: home })).toEqual({ removed: [], unchecked: [] });
+  });
+
+  it('reports an unreadable directory as unchecked', () => {
+    const { home } = makeHome();
+    writeFileSync(join(home, 'agent-sessions'), 'not a directory');
+
+    const result = reapStaleAgentArtifacts({ invokerHome: home });
+
+    expect(result.removed).toEqual([]);
+    expect(result.unchecked).toEqual([join(home, 'agent-sessions')]);
+  });
+
+  it('refuses an unsafe invoker home', () => {
+    expect(reapStaleAgentArtifacts({ invokerHome: '/' })).toEqual({ removed: [], unchecked: ['/'] });
   });
 });
 

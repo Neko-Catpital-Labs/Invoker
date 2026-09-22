@@ -46,6 +46,8 @@ export const AUTOMATION_CHECKOUT_MIN_AGE_HOURS = 48;
 export const STALE_WORKTREE_MIN_AGE_HOURS = 48;
 export const STALE_WORKTREE_GIT_TIMEOUT_MS = 5 * 60 * 1000;
 export const STALE_INVOKER_CLI_TEMP_MIN_AGE_HOURS = 48;
+export const STALE_AGENT_ARTIFACT_MIN_AGE_DAYS = 14;
+export const AGENT_ARTIFACT_DIRS = ['agent-sessions', join('task-output', 'full')] as const;
 
 function errorDetail(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -998,6 +1000,56 @@ export async function reapStaleInvokerCliTempDirs(opts: {
   };
   await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, worker));
   return removed.sort();
+}
+
+export interface StaleAgentArtifactReapResult {
+  removed: string[];
+  unchecked: string[];
+}
+
+export function reapStaleAgentArtifacts(opts: {
+  invokerHome: string;
+  userHome?: string;
+  nowMs?: number;
+  minAgeDays?: number;
+  logger?: Logger;
+}): StaleAgentArtifactReapResult {
+  const userHome = opts.userHome ?? homedir();
+  if (!isSafeInvokerHome(opts.invokerHome, userHome)) {
+    opts.logger?.warn?.(`[reaper] refusing agent artifact reap for unsafe home ${opts.invokerHome}`, { module: 'reaper' });
+    return { removed: [], unchecked: [opts.invokerHome] };
+  }
+  const home = expandTildeHome(opts.invokerHome, userHome);
+  const nowMs = opts.nowMs ?? Date.now();
+  const minAgeMs = (opts.minAgeDays ?? STALE_AGENT_ARTIFACT_MIN_AGE_DAYS) * 24 * 60 * 60 * 1000;
+  const removed: string[] = [];
+  const unchecked: string[] = [];
+
+  for (const relativeDir of AGENT_ARTIFACT_DIRS) {
+    const dir = join(home, relativeDir);
+    if (!existsSync(dir)) continue;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch (err) {
+      unchecked.push(dir);
+      opts.logger?.warn?.(`[reaper] cannot list agent artifact directory ${dir}: ${errorDetail(err)}`, { module: 'reaper' });
+      continue;
+    }
+    for (const name of entries) {
+      const path = join(dir, name);
+      try {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || nowMs - stat.mtimeMs < minAgeMs) continue;
+        rmSync(path, { force: true });
+        removed.push(path);
+      } catch (err) {
+        unchecked.push(path);
+        opts.logger?.warn?.(`[reaper] failed to remove stale agent artifact ${path}: ${errorDetail(err)}`, { module: 'reaper' });
+      }
+    }
+  }
+  return { removed, unchecked };
 }
 
 export const CRITICAL_PRESSURE_SNAPSHOT_RETENTION = 6;
