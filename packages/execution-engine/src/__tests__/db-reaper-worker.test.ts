@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { MaintenanceBatchResult } from '@invoker/data-store';
+
 import {
+  DB_REAPER_MAX_BATCHES_PER_OPERATION,
   DB_REAPER_WORKER_KIND,
   DEFAULT_EVENTS_RETENTION_DAYS,
   DEFAULT_SYNC_JOURNAL_RETENTION_DAYS,
@@ -10,6 +13,8 @@ import {
 } from '../workers/db-reaper-worker.js';
 import { createWorkerRegistry } from '../worker-registry.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
+
+const FAKE_BATCH_SCAN = 1000;
 
 class FakeDbReaperStore implements DbReaperWorkerStore {
   readonly pruneOldEventsCalls: number[] = [];
@@ -21,16 +26,22 @@ class FakeDbReaperStore implements DbReaperWorkerStore {
     private readonly syncJournalPruned = 0,
     private readonly freelistPages = 0,
     private readonly pagesVacuumed = 0,
+    private readonly backlogBatches = 1,
   ) {}
 
-  pruneOldEvents(retentionDays: number): number {
+  pruneOldEvents(retentionDays: number): MaintenanceBatchResult {
     this.pruneOldEventsCalls.push(retentionDays);
-    return this.eventsPruned;
+    return this.batch(this.eventsPruned, this.pruneOldEventsCalls.length);
   }
 
-  pruneOldSyncJournal(retentionDays: number): number {
+  pruneOldSyncJournal(retentionDays: number): MaintenanceBatchResult {
     this.pruneOldSyncJournalCalls.push(retentionDays);
-    return this.syncJournalPruned;
+    return this.batch(this.syncJournalPruned, this.pruneOldSyncJournalCalls.length);
+  }
+
+  private batch(deleted: number, callCount: number): MaintenanceBatchResult {
+    const passDrained = callCount >= this.backlogBatches;
+    return { deleted, scanned: passDrained ? deleted : FAKE_BATCH_SCAN, passDrained };
   }
 
   getFreelistPageCount(): number {
@@ -40,6 +51,29 @@ class FakeDbReaperStore implements DbReaperWorkerStore {
   runIncrementalVacuum(maxPages: number): number {
     this.runIncrementalVacuumCalls.push(maxPages);
     return this.pagesVacuumed;
+  }
+}
+
+class ScriptedPruneStore implements DbReaperWorkerStore {
+  readonly pruneOldEventsCalls: number[] = [];
+
+  constructor(private readonly script: MaintenanceBatchResult[]) {}
+
+  pruneOldEvents(retentionDays: number): MaintenanceBatchResult {
+    this.pruneOldEventsCalls.push(retentionDays);
+    return this.script[Math.min(this.pruneOldEventsCalls.length - 1, this.script.length - 1)]!;
+  }
+
+  pruneOldSyncJournal(): MaintenanceBatchResult {
+    return { deleted: 0, scanned: 0, passDrained: true };
+  }
+
+  getFreelistPageCount(): number {
+    return 0;
+  }
+
+  runIncrementalVacuum(): number {
+    return 0;
   }
 }
 
@@ -120,7 +154,7 @@ describe('createDbReaperWorker', () => {
   });
 
   it('yields to queued mutations between batches and caps a full backlog per tick', async () => {
-    const store = new FakeDbReaperStore(1000, 1000);
+    const store = new FakeDbReaperStore(1000, 1000, 0, 0, Number.POSITIVE_INFINITY);
     const logger = makeLogger();
     let requestRan = false;
     const original = store.pruneOldEvents.bind(store);
@@ -134,8 +168,8 @@ describe('createDbReaperWorker', () => {
     await worker.tick();
     expect(requestRan).toBe(true);
     expect(store.pruneOldEventsCalls.length).toBeGreaterThan(1);
-    expect(store.pruneOldEventsCalls.length).toBeLessThanOrEqual(20);
-    expect(store.pruneOldSyncJournalCalls.length).toBeLessThanOrEqual(20);
+    expect(store.pruneOldEventsCalls.length).toBeLessThanOrEqual(DB_REAPER_MAX_BATCHES_PER_OPERATION);
+    expect(store.pruneOldSyncJournalCalls.length).toBeLessThanOrEqual(DB_REAPER_MAX_BATCHES_PER_OPERATION);
     expect(logger.info).toHaveBeenCalledWith('DB maintenance batch finished',
       expect.objectContaining({ operation: 'events.retention', duration_ms: expect.any(Number), affected: 1000 }));
   });
@@ -147,11 +181,82 @@ describe('createDbReaperWorker', () => {
     store.pruneOldEvents = () => {
       store.pruneOldEventsCalls.push(14);
       setImmediate(() => { void worker.stop(); });
-      return 1000;
+      return { deleted: 1000, scanned: 1000, passDrained: false };
     };
     await worker.tick();
     expect(store.pruneOldEventsCalls).toHaveLength(1);
     expect(store.pruneOldSyncJournalCalls).toHaveLength(0);
+  });
+
+  it('keeps pruning past a candidate window that deleted nothing until the store reports the pass drained', async () => {
+    const store = new ScriptedPruneStore([
+      { deleted: 0, scanned: 1000, passDrained: false },
+      { deleted: 0, scanned: 1000, passDrained: false },
+      { deleted: 7, scanned: 1000, passDrained: false },
+      { deleted: 0, scanned: 0, passDrained: true },
+    ]);
+    const logger = makeLogger();
+    const worker = createDbReaperWorker({
+      logger,
+      store,
+      eventsRetentionDays: 14,
+      syncJournalRetentionDays: 14,
+      tickOnStart: false,
+    });
+
+    await worker.tick();
+
+    expect(store.pruneOldEventsCalls).toHaveLength(4);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('7 old event row(s) pruned'),
+      expect.anything(),
+    );
+  });
+
+  it('does not record a completed pass while retention batches are still pending', async () => {
+    const store = new FakeDbReaperStore(1000, 1000, 0, 0, Number.POSITIVE_INFINITY);
+    const upsertWorkerAction = vi.fn();
+    const logger = makeLogger();
+    const worker = createDbReaperWorker({
+      logger,
+      store,
+      eventsRetentionDays: 14,
+      syncJournalRetentionDays: 14,
+      tickOnStart: false,
+      decisionStore: { upsertWorkerAction },
+    });
+
+    await worker.tick();
+
+    const [action] = upsertWorkerAction.mock.calls[0]!;
+    expect(action.status).toBe('pending');
+    expect(action.completedAt).toBeUndefined();
+    expect(action.summary).toContain('pending: events.retention, sync_journal.retention');
+    expect(action.payload).toMatchObject({ pending: true });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('pending: events.retention, sync_journal.retention'),
+      expect.anything(),
+    );
+  });
+
+  it('records a completed pass once every retention scan reaches the end of its keyspace', async () => {
+    const store = new FakeDbReaperStore(3, 4);
+    const upsertWorkerAction = vi.fn();
+    const worker = createDbReaperWorker({
+      logger: makeLogger(),
+      store,
+      eventsRetentionDays: 14,
+      syncJournalRetentionDays: 14,
+      tickOnStart: false,
+      decisionStore: { upsertWorkerAction },
+    });
+
+    await worker.tick();
+
+    const [action] = upsertWorkerAction.mock.calls[0]!;
+    expect(action.status).toBe('completed');
+    expect(action.summary).not.toContain('pending:');
+    expect(action.payload).toMatchObject({ pending: false });
   });
 
   it('records a worker decision summarizing what was pruned', async () => {
