@@ -13,6 +13,7 @@ export const DEFAULT_EVENTS_RETENTION_DAYS = 14;
 export const DEFAULT_SYNC_JOURNAL_RETENTION_DAYS = 14;
 export const DEFAULT_VACUUM_FREELIST_THRESHOLD_PAGES = 10_000;
 export const DEFAULT_VACUUM_MAX_PAGES_PER_TICK = 2_000;
+export const DEFAULT_DB_REAPER_START_DELAY_MS = 30_000;
 
 export interface DbReaperWorkerStore {
   pruneOldEvents(retentionDays: number): number;
@@ -27,6 +28,7 @@ export interface DbReaperWorkerConfig {
   syncJournalRetentionDays?: number;
   vacuumFreelistThresholdPages?: number;
   vacuumMaxPagesPerTick?: number;
+  startDelayMs?: number;
   tickOnStart?: boolean;
   store?: WorkerDecisionStore;
   onTick?: WorkerTick;
@@ -40,6 +42,7 @@ export interface DbReaperWorkerOptions {
   syncJournalRetentionDays: number;
   vacuumFreelistThresholdPages?: number;
   vacuumMaxPagesPerTick?: number;
+  startDelayMs?: number;
   tickOnStart?: boolean;
   decisionStore?: WorkerDecisionStore;
   onTick?: WorkerTick;
@@ -50,6 +53,7 @@ export function createDbReaperWorker(options: DbReaperWorkerOptions): WorkerRunt
     kind: DB_REAPER_WORKER_KIND,
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_DB_REAPER_INTERVAL_MS,
+    startDelayMs: options.startDelayMs ?? DEFAULT_DB_REAPER_START_DELAY_MS,
     tickOnStart: options.tickOnStart ?? true,
     onTick: async (ctx) => {
       ctx.signal?.throwIfAborted();
@@ -147,6 +151,7 @@ export function registerDbReaperWorker(
         syncJournalRetentionDays: deps.dbReaper?.syncJournalRetentionDays ?? DEFAULT_SYNC_JOURNAL_RETENTION_DAYS,
         vacuumFreelistThresholdPages: deps.dbReaper?.vacuumFreelistThresholdPages,
         vacuumMaxPagesPerTick: deps.dbReaper?.vacuumMaxPagesPerTick,
+        startDelayMs: deps.dbReaper?.startDelayMs,
         tickOnStart: deps.dbReaper?.tickOnStart,
       }),
   });
