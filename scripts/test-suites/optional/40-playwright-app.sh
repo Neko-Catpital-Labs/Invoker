@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=scripts/lib/require-headless-display.sh
+source "$ROOT/scripts/lib/require-headless-display.sh"
+
 sanitize_label() {
   printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
 }
@@ -46,13 +49,20 @@ if [ -n "${INVOKER_PLAYWRIGHT_FILES:-}" ]; then
   PLAYWRIGHT_ARGS+=( "${PLAYWRIGHT_FILES[@]}" )
 fi
 
-ARTIFACT_ROOT="$ROOT/.playwright-artifacts/$RUN_LABEL"
+ARTIFACT_ROOT="$(git rev-parse --path-format=absolute --git-path "playwright-artifacts/$RUN_LABEL")"
 mkdir -p "$ARTIFACT_ROOT"
 
 export INVOKER_E2E_BARE_REPO="${INVOKER_E2E_BARE_REPO:-/tmp/invoker-e2e-repo-${RUN_LABEL}.git}"
 export INVOKER_PLAYWRIGHT_JSON_OUTPUT="${INVOKER_PLAYWRIGHT_JSON_OUTPUT:-$ARTIFACT_ROOT/results.json}"
 
-exec pnpm --filter @invoker/app exec xvfb-run --auto-servernum playwright test \
+invoker_require_headless_display "40-playwright-app.sh"
+
+PLAYWRIGHT_COMMAND=(playwright test)
+if command -v xvfb-run >/dev/null 2>&1; then
+  PLAYWRIGHT_COMMAND=(xvfb-run --auto-servernum playwright test)
+fi
+
+exec pnpm --filter @invoker/app exec "${PLAYWRIGHT_COMMAND[@]}" \
   --output "$ARTIFACT_ROOT/test-results" \
   "${PLAYWRIGHT_ARGS[@]}" \
   "$@"
