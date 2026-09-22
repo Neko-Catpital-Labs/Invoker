@@ -22,7 +22,22 @@ const gitEnv = {
 
 const repoRoot = resolveRepoRoot(__dirname);
 
+export function assertHeadlessDisplay(
+  platform: string = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (platform === 'linux') return;
+  if (env.INVOKER_ALLOW_HEADED_E2E === '1') return;
+  throw new Error(
+    `Refusing to run Electron e2e on ${platform}: Playwright would open real windows ` +
+      'on an interactive desktop. Run this suite on a Linux CI runner, or set ' +
+      'INVOKER_ALLOW_HEADED_E2E=1 to opt in.',
+  );
+}
+
 export default function globalSetup(): void {
+  assertHeadlessDisplay();
+
   // Build dependent packages and the app itself if artifacts are missing.
   if (!existsSync(path.join(repoRoot, 'packages', 'ui', 'dist', 'index.html'))) {
     execSync('pnpm --filter @invoker/ui build', { cwd: repoRoot, stdio: 'inherit' });
