@@ -1,6 +1,8 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
+  symlinkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -564,13 +566,22 @@ describe('reapStaleDevelopmentWorktrees', () => {
     expect(existsSync(markPath)).toBe(true);
   });
 
-  it('keeps an old worktree it cannot read and reports it as unchecked', async () => {
+  it('keeps an old worktree it cannot read and reports it as unchecked', async (ctx) => {
     const { root, home } = makeHome();
     const devHome = makeLiveDevHome(home, 'eeee000005');
     const path = makeWorktree(devHome, 'repohash1', 'experiment-locked', staleAge);
     const locked = join(path, 'src');
     chmodSync(locked, 0o000);
     try {
+      let unreadable = false;
+      try {
+        readdirSync(locked);
+      } catch {
+        unreadable = true;
+      }
+      if (!unreadable) {
+        ctx.skip(`chmod 0o000 is not enforced for uid ${process.getuid?.() ?? 'unknown'}`);
+      }
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
       const result = await reapStaleDevelopmentWorktrees({ invokerHome: home, userHome: root, logger });
 
@@ -580,6 +591,28 @@ describe('reapStaleDevelopmentWorktrees', () => {
     } finally {
       chmodSync(locked, 0o755);
     }
+  });
+
+  it('never follows a symlinked worktree entry and reports it as unchecked', async () => {
+    const { root, home } = makeHome();
+    const devHome = makeLiveDevHome(home, 'eeee000006');
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'invoker-reaper-outside-'));
+    tempDirs.push(outsideRoot);
+    const outsideFile = join(outsideRoot, 'keep.txt');
+    writeFileSync(outsideFile, 'precious');
+    backdate(outsideFile, staleAge);
+    backdate(outsideRoot, staleAge);
+    const repoRoot = join(devHome, 'worktrees', 'repohash1');
+    mkdirSync(repoRoot, { recursive: true });
+    const linkPath = join(repoRoot, 'experiment-link');
+    symlinkSync(outsideRoot, linkPath);
+
+    const result = await reapStaleDevelopmentWorktrees({ invokerHome: home, userHome: root });
+
+    expect(result.removed).toEqual([]);
+    expect(result.unchecked).toEqual([linkPath]);
+    expect(existsSync(outsideFile)).toBe(true);
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
   });
 
   it('does nothing when there is no dev folder', async () => {

@@ -638,6 +638,15 @@ function pathKind(path: string): PathKind {
   }
 }
 
+function isSymlink(path: string): { state: 'symlink' | 'other' | 'missing' } | { state: 'error'; detail: string } {
+  try {
+    return lstatSync(path).isSymbolicLink() ? { state: 'symlink' } : { state: 'other' };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
+    return { state: 'error', detail: `${path}: ${errorDetail(err)}` };
+  }
+}
+
 function parsePid(raw: string): number | null {
   const value = raw.trim();
   if (!/^[1-9]\d*$/.test(value)) return null;
@@ -889,6 +898,15 @@ export async function reapStaleDevelopmentWorktrees(opts: {
       let removedInRepo = 0;
       for (const branch of branches.names) {
         const path = join(repoWorktreeRoot, branch);
+        const link = isSymlink(path);
+        if (link.state === 'error') {
+          keepUnchecked(path, link.detail);
+          continue;
+        }
+        if (link.state === 'symlink') {
+          keepUnchecked(path, `${path}: symbolic link`);
+          continue;
+        }
         const kind = pathKind(path);
         if (kind.state === 'error') {
           keepUnchecked(path, kind.detail);
