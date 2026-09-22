@@ -315,4 +315,26 @@ describe('interpretRequestTiming evidence limits', () => {
     expect(execution.uncoveredIntervals).toEqual([]);
     expect(execution.spans.find((span) => span.name === 'pushBranch')!.containedBy).toBe('dispatch');
   });
+
+  it('splits an uncovered interval at an ambient observation without attributing it', () => {
+    const model = interpretRequestTiming([
+      mutation(0, 'dispatch', 'started', BOOT_ONE),
+      mutation(1000, 'dispatch', 'completed', { ...BOOT_ONE, durationMs: 1000 }),
+      { operation: 'db-reaper-pass', event: 'end', wall_time: at(3000) },
+      mutation(5000, 'settleIntent', 'completed', BOOT_ONE),
+    ]);
+    const execution = model.intents[0]!.executions[0]!;
+
+    expect(
+      execution.uncoveredIntervals.map((interval) => ({
+        durationMs: interval.durationMs,
+        endsAtObservation: interval.endsAtObservation?.label ?? null,
+        attributedTo: interval.attributedTo,
+      })),
+    ).toEqual([
+      { durationMs: 2000, endsAtObservation: 'db-reaper-pass:end', attributedTo: null },
+      { durationMs: 2000, endsAtObservation: 'settleIntent:completed', attributedTo: null },
+    ]);
+    expect(execution.uncoveredMs).toBe(4000);
+  });
 })
