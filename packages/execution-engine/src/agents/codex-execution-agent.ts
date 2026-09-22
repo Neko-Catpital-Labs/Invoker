@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -20,54 +20,95 @@ export interface CodexExecutionAgentConfig {
 
 const CODEX_MODEL_DISCOVERY_TIMEOUT_MS = 3_000;
 const CODEX_MODEL_CACHE_MS = 5 * 60_000;
+const CODEX_DIAGNOSTIC_DETAIL_LIMIT = 120;
+
+type CodexCatalogSource = 'live' | 'bundled';
+
+interface CodexCatalogAttempt {
+  source: CodexCatalogSource;
+  detail: string;
+}
 
 type CodexModelDiscoveryResult =
-  | { kind: 'success'; models: readonly ExecutionModelOption[] }
-  | { kind: 'failed' };
+  | { kind: 'success'; source: CodexCatalogSource; models: readonly ExecutionModelOption[] }
+  | { kind: 'unavailable'; attempts: readonly CodexCatalogAttempt[] };
 
-const CODEX_FALLBACK_MODELS: readonly ExecutionModelOption[] = [
-  { id: 'gpt-5.5', label: 'GPT-5.5' },
-  { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
-  { id: 'gpt-5.4', label: 'GPT-5.4' },
-  { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
-  { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano' },
-  { id: 'gpt-5.3', label: 'GPT-5.3' },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
-  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark' },
-  { id: 'gpt-5.2', label: 'GPT-5.2' },
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex' },
-  { id: 'gpt-5.1', label: 'GPT-5.1' },
-  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
-  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max' },
-  { id: 'gpt-5', label: 'GPT-5' },
-  { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
-];
+type CodexCatalogProbeResult =
+  | { kind: 'success'; models: readonly ExecutionModelOption[] }
+  | { kind: 'failed'; detail: string };
+
+type CodexCatalogParseResult =
+  | { ok: true; models: ExecutionModelOption[] }
+  | { ok: false; reason: string };
 
 function normalizeCodexModelId(model: string): string {
   return model.trim().toLowerCase();
 }
 
-function parseDiscoveredCodexModels(stdout: string): ExecutionModelOption[] {
+function parseCodexCatalog(stdout: string): CodexCatalogParseResult {
+  let payload: unknown;
   try {
-    const parsed = JSON.parse(stdout) as {
-      models?: Array<{ slug?: string; display_name?: string }>;
-    };
-    const models: ExecutionModelOption[] = [];
-    const seen = new Set<string>();
-    for (const entry of parsed.models ?? []) {
-      const id = entry.slug?.trim();
-      const label = entry.display_name?.trim();
-      if (!id || !label) continue;
-      const key = normalizeCodexModelId(id);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      models.push({ id, label });
-    }
-    return models;
+    payload = JSON.parse(stdout);
   } catch {
-    return [];
+    return { ok: false, reason: 'output was not valid JSON' };
   }
+  if (typeof payload !== 'object' || payload === null) {
+    return { ok: false, reason: 'output was not a JSON object' };
+  }
+  const entries = (payload as { models?: unknown }).models;
+  if (!Array.isArray(entries)) {
+    return { ok: false, reason: 'output had no models array' };
+  }
+  const models: ExecutionModelOption[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (typeof entry !== 'object' || entry === null) {
+      return { ok: false, reason: 'a catalog entry was not an object' };
+    }
+    const { slug, display_name: displayName } = entry as { slug?: unknown; display_name?: unknown };
+    if (typeof slug !== 'string' || typeof displayName !== 'string') {
+      return { ok: false, reason: 'a catalog entry was missing a string slug or display_name' };
+    }
+    const id = slug.trim();
+    const label = displayName.trim();
+    if (!id || !label) {
+      return { ok: false, reason: 'a catalog entry had an empty slug or display_name' };
+    }
+    const key = normalizeCodexModelId(id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    models.push({ id, label });
+  }
+  return { ok: true, models };
+}
+
+function boundDetail(detail: string): string {
+  return detail.length > CODEX_DIAGNOSTIC_DETAIL_LIMIT
+    ? `${detail.slice(0, CODEX_DIAGNOSTIC_DETAIL_LIMIT)}...`
+    : detail;
+}
+
+function describeProbeFailure(result: SpawnSyncReturns<string>): string | undefined {
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    return code ? `spawn error ${code}` : 'spawn error';
+  }
+  if (result.status !== 0) {
+    return result.signal ? `terminated by signal ${result.signal}` : `exit status ${result.status}`;
+  }
+  return undefined;
+}
+
+function catalogProbeArgs(source: CodexCatalogSource): string[] {
+  return source === 'bundled' ? ['debug', 'models', '--bundled'] : ['debug', 'models'];
+}
+
+function describeDiscoveryUnavailable(
+  executionModel: string,
+  attempts: readonly CodexCatalogAttempt[],
+): string {
+  const probes = attempts.map((attempt) => `${attempt.source}: ${attempt.detail}`).join('; ');
+  return `Codex model discovery is unavailable, so execution model "${executionModel}" could not be verified. Probes: ${probes}.`;
 }
 
 export class CodexExecutionAgent implements ExecutionAgent {
@@ -83,8 +124,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
   private readonly spendGate: CodexSpendGateReader;
   private supportedModelCache?: {
     expiresAt: number;
-    models: readonly ExecutionModelOption[];
-    provenance: SupportedModelsProvenance;
+    discovered: CodexModelDiscoveryResult;
   };
 
   constructor(config: CodexExecutionAgentConfig = {}) {
@@ -95,11 +135,11 @@ export class CodexExecutionAgent implements ExecutionAgent {
     this.bundledSkillRoot = join(homedir(), '.codex', 'skills');
   }
   get supportedModels(): readonly ExecutionModelOption[] {
-    return this.getSupportedModels();
+    const discovered = this.getDiscoveredModels();
+    return discovered.kind === 'success' ? discovered.models : [];
   }
   get supportedModelsProvenance(): SupportedModelsProvenance {
-    this.getSupportedModels();
-    return this.supportedModelCache!.provenance;
+    return this.getDiscoveredModels().kind === 'success' ? 'agent' : 'built-in';
   }
 
 
@@ -131,35 +171,51 @@ export class CodexExecutionAgent implements ExecutionAgent {
     return { cmd: this.command, args, sessionId };
   }
   supportsModel(executionModel: string): boolean {
+    const discovered = this.getDiscoveredModels();
+    if (discovered.kind === 'unavailable') {
+      throw new Error(describeDiscoveryUnavailable(executionModel.trim(), discovered.attempts));
+    }
     const normalized = normalizeCodexModelId(executionModel);
-    return this.getSupportedModels().some((candidate) => normalizeCodexModelId(candidate.id) === normalized);
+    return discovered.models.some((candidate) => normalizeCodexModelId(candidate.id) === normalized);
   }
-  private getSupportedModels(): readonly ExecutionModelOption[] {
+  private getDiscoveredModels(): CodexModelDiscoveryResult {
     const cached = this.supportedModelCache;
     const now = Date.now();
     if (cached && cached.expiresAt > now) {
-      return cached.models;
+      return cached.discovered;
     }
     const discovered = this.discoverSupportedModels();
-    const models = discovered.kind === 'success' ? discovered.models : CODEX_FALLBACK_MODELS;
-    this.supportedModelCache = {
-      expiresAt: now + CODEX_MODEL_CACHE_MS,
-      models,
-      provenance: discovered.kind === 'success' ? 'agent' : 'built-in',
-    };
-    return models;
+    this.supportedModelCache = { expiresAt: now + CODEX_MODEL_CACHE_MS, discovered };
+    return discovered;
   }
 
   private discoverSupportedModels(): CodexModelDiscoveryResult {
-    const result = spawnSync(this.command, ['debug', 'models'], {
+    const attempts: CodexCatalogAttempt[] = [];
+    for (const source of ['live', 'bundled'] as const) {
+      const probe = this.probeCodexCatalog(source);
+      if (probe.kind === 'success') {
+        return { kind: 'success', source, models: probe.models };
+      }
+      attempts.push({ source, detail: probe.detail });
+    }
+    return { kind: 'unavailable', attempts };
+  }
+
+  private probeCodexCatalog(source: CodexCatalogSource): CodexCatalogProbeResult {
+    const result = spawnSync(this.command, catalogProbeArgs(source), {
       encoding: 'utf8',
       timeout: CODEX_MODEL_DISCOVERY_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });
-    if (result.error || result.status !== 0) {
-      return { kind: 'failed' };
+    const failure = describeProbeFailure(result);
+    if (failure) {
+      return { kind: 'failed', detail: boundDetail(failure) };
     }
-    return { kind: 'success', models: parseDiscoveredCodexModels(result.stdout) };
+    const parsed = parseCodexCatalog(result.stdout ?? '');
+    if (!parsed.ok) {
+      return { kind: 'failed', detail: boundDetail(`invalid catalog ${parsed.reason}`) };
+    }
+    return { kind: 'success', models: parsed.models };
   }
 
   private buildModelArgs(executionModel?: string): string[] {
