@@ -252,6 +252,10 @@ export async function runAdminBypassE2eBabysitTick(
   const staleTtlMs = options.staleTtlMs ?? REPAIR_FILING_STALE_TTL_MS;
   const repairFilings = await options.repairFilings.listRepairFilings();
   for (const row of repairFilings) {
+    if (
+      row.kind.startsWith(E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX)
+      || row.kind.startsWith(E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX)
+    ) continue;
     if (!(Date.now() - Date.parse(row.createdAt) > staleTtlMs)) continue;
 
     const subjectId = `${row.kind}:${row.subject}:${row.stateSha}`;

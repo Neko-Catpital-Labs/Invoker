@@ -160,6 +160,37 @@ describe('runAdminBypassE2eBabysitTick', () => {
     expect(planSubmitter.submittedPlans[0]).toContain(oldRow.subject);
   });
 
+  it('never deletes a stale needs-human or investigated-marker row, and still files the investigation', async () => {
+    const now = Date.now();
+    const staleNeedsHumanRow: RepairFilingRow = {
+      kind: `${E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX}playwright-5-of-9:job`,
+      subject: 'master',
+      stateSha: 'sha-stale-needs-human',
+      createdAt: new Date(now - REPAIR_FILING_STALE_TTL_MS - 60_000).toISOString(),
+    };
+    const staleInvestigatedRow: RepairFilingRow = {
+      kind: `${E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX}other-job:job`,
+      subject: 'master',
+      stateSha: 'sha-stale-investigated',
+      createdAt: new Date(now - REPAIR_FILING_STALE_TTL_MS - 60_000).toISOString(),
+    };
+    const repairFilings = new FakeRepairFilingStore([staleNeedsHumanRow, staleInvestigatedRow]);
+    const planSubmitter = new FakeInvestigativePlanSubmitter();
+    const { store } = makeDecisionStore();
+
+    await runAdminBypassE2eBabysitTick({
+      logger: makeLogger(),
+      workerLifecycle: new FakeWorkerLifecycle([]),
+      repairFilings,
+      planSubmitter,
+      store,
+    });
+
+    expect(repairFilings.deleteCalls).toEqual([]);
+    expect(planSubmitter.submittedPlans).toHaveLength(1);
+    expect(planSubmitter.submittedPlans[0]).toContain(staleNeedsHumanRow.kind);
+  });
+
   it('does not submit a plan when there is nothing to act on', async () => {
     const planSubmitter = new FakeInvestigativePlanSubmitter();
     const { store } = makeDecisionStore();
