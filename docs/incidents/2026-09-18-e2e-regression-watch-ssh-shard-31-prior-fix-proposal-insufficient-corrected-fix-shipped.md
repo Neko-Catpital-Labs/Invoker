@@ -8,7 +8,7 @@
 `docs/incidents/2026-09-17-e2e-regression-watch-ssh-shard-31-needs-human-oauth-not-alerted.md`, `docs/incidents/2026-09-18-e2e-regression-watch-ssh-shard-31-needs-human-oauth-still-unresolved.md`, and `docs/incidents/2026-09-18-e2e-regression-watch-ssh-shard-31-needs-human-oauth-still-unfixed.md` all independently reached the same, correct immediate diagnosis: all 3 automated fix attempts for `ssh / shard-31` (`wf-1789645833608-157`, `wf-1789650367764-175`, `wf-1789658282041-13`, all `/fix-ci-f4c2f01-ssh-shard-31`) died on turn one with `Failed to authenticate: OAuth session expired and could not be refreshed`, never touching the real CI failure, and `infra-repair-worker.ts`'s `handleOauthSessionExpiredRecovery` -- which exists specifically to record an operator alert instead of silently burning attempts -- never saw any of them, because its scan (`listInfraRepairScanCandidates:354`) and validator (`validateGenericSshInfraCandidate:394`) both hard-require `task.config.runnerKind === 'ssh'`, and all 3 attempts ran with `runnerKind: 'worktree'`.
 
 Re-verified fresh this session, live `invoker.db`, read-only:
-```
+```sql
 SELECT count(*), min(created_at), max(created_at) FROM tasks WHERE failure_class='ssh-oauth-session-expired'
   -> 136 rows, min=2026-09-16T23:56:21.652Z, max=2026-09-18T03:30:59.962Z
 SELECT runner_kind, count(*) FROM tasks WHERE failure_class='ssh-oauth-session-expired' GROUP BY runner_kind
@@ -22,14 +22,14 @@ All 3 docs propose the same fix: "widen `infra-repair-worker.ts`'s candidate fil
 
 `validateGenericSshInfraCandidate` (`infra-repair-worker.ts:385-408`), even with the `runnerKind` check widened, still calls `resolveRemoteTargetId` → `resolveSelectedRemoteTargetId` (`conflict-resolver.ts:330`), which resolves an SSH pool member from `task.config.poolMemberId` or a `task.executor.selected` event's `poolMemberId` payload. If that returns `undefined`, the candidate is dropped at `if (!targetId) return undefined;` (`:403`) -- before `handleOauthSessionExpiredRecovery` is ever reached. This is not hypothetical; it's the observed state of every real occurrence:
 
-```
+```sql
 SELECT count(*), sum(CASE WHEN pool_member_id IS NOT NULL THEN 1 ELSE 0 END)
   FROM tasks WHERE failure_class='ssh-oauth-session-expired' AND runner_kind IN ('worktree','scratch')
   -> (136, 0)
 ```
 
 **Zero of the 136 non-ssh OAuth-failed tasks have a `pool_member_id`.** All run with `pool_id='local-only'` -- confirmed directly against the 3 named `fix-ci-f4c2f01-ssh-shard-31` tasks:
-```
+```text
 wf-1789645833608-157/fix-ci-f4c2f01-ssh-shard-31  runner_kind=worktree  pool_id=local-only  pool_member_id=NULL
 wf-1789650367764-175/fix-ci-f4c2f01-ssh-shard-31  runner_kind=worktree  pool_id=local-only  pool_member_id=NULL
 wf-1789658282041-13/fix-ci-f4c2f01-ssh-shard-31   runner_kind=worktree  pool_id=local-only  pool_member_id=NULL
