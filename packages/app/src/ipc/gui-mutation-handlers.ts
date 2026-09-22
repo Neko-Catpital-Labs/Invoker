@@ -760,62 +760,81 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
   async function executeHeadlessRun(
     payload: HeadlessRunMutationPayload,
   ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
-    const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
-    const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-    taskHandles.clear();
-    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-    const workflowIds: string[] = [];
-    let upstream: { workflowId: string; featureBranch: string } | undefined;
+    let planName = payload.planPath;
+    let primaryWorkflowId: string | undefined;
+    try {
+      const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
+      const submission = await parsePlanSubmissionBundleFile(payload.planPath);
+      planName = submission.name;
+      taskHandles.clear();
+      const workflowIds: string[] = [];
+      let upstream: { workflowId: string; featureBranch: string } | undefined;
 
-    for (const parsedPlan of submission.plans) {
-      let plan = applyConfiguredPlanDefaults(parsedPlan);
-      if (upstream) {
-        plan = {
-          ...plan,
-          baseBranch: upstream.featureBranch,
-          externalDependencies: [
-            ...(plan.externalDependencies ?? []),
-            {
-              workflowId: upstream.workflowId,
-              taskId: '__merge__',
-              requiredStatus: 'completed',
-              gatePolicy: 'review_ready',
-            } as const,
-          ],
-        };
+      for (const parsedPlan of submission.plans) {
+        let plan = applyConfiguredPlanDefaults(parsedPlan);
+        if (upstream) {
+          plan = {
+            ...plan,
+            baseBranch: upstream.featureBranch,
+            externalDependencies: [
+              ...(plan.externalDependencies ?? []),
+              {
+                workflowId: upstream.workflowId,
+                taskId: '__merge__',
+                requiredStatus: 'completed',
+                gatePolicy: 'review_ready',
+              } as const,
+            ],
+          };
+        }
+        const loadedWorkflowId = orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        const workflow = persistence.loadWorkflow(loadedWorkflowId);
+        if (!workflow) {
+          throw new Error('Loaded plan did not create a workflow.');
+        }
+        workflowIds.push(workflow.id);
+        primaryWorkflowId = workflow.id;
+        upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+        setImmediate(() => {
+          try {
+            backupPlan(plan, undefined, logger);
+          } catch (err) {
+            logger.error(
+              `headless.run deferred plan backup failed plan="${submission.name}" workflow="${workflow.id}": ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'ipc-delegate' },
+            );
+          }
+        });
       }
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-      if (!workflow) {
+
+      const workflowId = workflowIds[workflowIds.length - 1];
+      if (!workflowId) {
         throw new Error('Loaded plan did not create a workflow.');
       }
-      existingWorkflowIds.add(workflow.id);
-      workflowIds.push(workflow.id);
-      upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+      const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+      setImmediate(() => {
+        try {
+          const started = orchestrator.startWorkflowExecution(workflowId);
+          logger.info(
+            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+            { module: 'ipc-delegate' },
+          );
+        } catch (err) {
+          logger.error(
+            `headless.run deferred startExecution failed plan="${submission.name}" workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+            { module: 'ipc-delegate' },
+          );
+        }
+      });
+      scheduleRemoteRepoUrlProbes(workflowIds);
+      return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
+    } catch (err) {
+      logger.error(
+        `headless.run intake failed plan="${planName}" workflow="${primaryWorkflowId ?? '<unassigned>'}": ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'ipc-delegate' },
+      );
+      throw err;
     }
-
-    const workflowId = workflowIds[workflowIds.length - 1];
-    if (!workflowId) {
-      throw new Error('Loaded plan did not create a workflow.');
-    }
-    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-    setImmediate(() => {
-      try {
-        const started = orchestrator.startExecution();
-        logger.info(
-          `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
-          { module: 'ipc-delegate' },
-        );
-      } catch (err) {
-        logger.error(
-          `headless.run deferred startExecution failed workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
-          { module: 'ipc-delegate' },
-        );
-      }
-    });
-    scheduleRemoteRepoUrlProbes(workflowIds);
-    return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
   }
 
   async function executeHeadlessResume(payload: HeadlessResumeMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
