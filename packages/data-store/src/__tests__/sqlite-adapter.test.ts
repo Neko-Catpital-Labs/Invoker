@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter, isLaunchDispatchCandidateStale, runWithFreedStatement, assertOwnerCapabilityForWritableOpen } from '../sqlite-adapter.js';
+import { MAINTENANCE_BATCH_SCAN_LIMIT, SQLiteAdapter, isLaunchDispatchCandidateStale, runWithFreedStatement, assertOwnerCapabilityForWritableOpen } from '../sqlite-adapter.js';
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID, createAttempt, resolveTaskConfig, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
@@ -6544,12 +6544,29 @@ describe('SQLiteAdapter', () => {
       for (let i = 0; i < 1000; i += 1) insertEvent('wf-1/t1');
       insertEvent('wf-1/t2');
       (adapter as any).db.run("UPDATE events SET created_at = datetime('now','-30 days')");
-      expect(adapter.pruneOldEvents(14)).toBe(0);
+      expect(adapter.pruneOldEvents(14).deleted).toBe(0);
       expect(adapter.getEvents('wf-1/t2')).toHaveLength(1);
-      expect(adapter.pruneOldEvents(14)).toBe(1);
-      expect(adapter.pruneOldEvents(14)).toBe(0); // reset at end of keyspace
+      expect(adapter.pruneOldEvents(14).deleted).toBe(1);
+      expect(adapter.pruneOldEvents(14).deleted).toBe(0); // reset at end of keyspace
       adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
-      expect(adapter.pruneOldEvents(14)).toBe(1000);
+      expect(adapter.pruneOldEvents(14).deleted).toBe(1000);
+    });
+
+    it('reports the candidate scan size and whether the pass drained, so maintenance continues past ineligible rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'running', config: { workflowId: 'wf-1' } }));
+      adapter.saveTask('wf-1', makeTask('wf-1/t2', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      for (let i = 0; i < MAINTENANCE_BATCH_SCAN_LIMIT; i += 1) insertEvent('wf-1/t1');
+      insertEvent('wf-1/t2');
+      (adapter as any).db.run("UPDATE events SET created_at = datetime('now','-30 days')");
+
+      expect(adapter.pruneOldEvents(14)).toEqual({
+        deleted: 0, scanned: MAINTENANCE_BATCH_SCAN_LIMIT, passDrained: false,
+      });
+      expect(adapter.getEvents('wf-1/t2')).toHaveLength(1);
+      expect(adapter.pruneOldEvents(14)).toEqual({ deleted: 1, scanned: 1, passDrained: false });
+      expect(adapter.getEvents('wf-1/t2')).toHaveLength(0);
+      expect(adapter.pruneOldEvents(14)).toEqual({ deleted: 0, scanned: 0, passDrained: true });
     });
 
     function backdateEvent(eventId: number, daysAgo: number): void {
@@ -6574,7 +6591,7 @@ describe('SQLiteAdapter', () => {
       const eventId = insertEvent('wf-1/t1');
       backdateEvent(eventId, 30);
 
-      const pruned = adapter.pruneOldEvents(14);
+      const pruned = adapter.pruneOldEvents(14).deleted;
 
       expect(pruned).toBe(1);
       expect(adapter.getEvents('wf-1/t1')).toHaveLength(0);
@@ -6585,7 +6602,7 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'completed', config: { workflowId: 'wf-1' } }));
       insertEvent('wf-1/t1');
 
-      const pruned = adapter.pruneOldEvents(14);
+      const pruned = adapter.pruneOldEvents(14).deleted;
 
       expect(pruned).toBe(0);
       expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
@@ -6597,7 +6614,7 @@ describe('SQLiteAdapter', () => {
       const eventId = insertEvent('wf-1/t1');
       backdateEvent(eventId, 30);
 
-      const pruned = adapter.pruneOldEvents(14);
+      const pruned = adapter.pruneOldEvents(14).deleted;
 
       expect(pruned).toBe(0);
       expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
@@ -6610,7 +6627,7 @@ describe('SQLiteAdapter', () => {
       backdateEvent(eventId, 30);
       adapter.saveTask('wf-1', makeTask('wf-1/t1', { status: 'running', config: { workflowId: 'wf-1' } }));
 
-      const pruned = adapter.pruneOldEvents(14);
+      const pruned = adapter.pruneOldEvents(14).deleted;
 
       expect(pruned).toBe(0);
       expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
@@ -6622,8 +6639,8 @@ describe('SQLiteAdapter', () => {
       const eventId = insertEvent('wf-1/t1');
       backdateEvent(eventId, 3650);
 
-      expect(adapter.pruneOldEvents(0)).toBe(0);
-      expect(adapter.pruneOldEvents(-1)).toBe(0);
+      expect(adapter.pruneOldEvents(0).deleted).toBe(0);
+      expect(adapter.pruneOldEvents(-1).deleted).toBe(0);
       expect(adapter.getEvents('wf-1/t1')).toHaveLength(1);
     });
   });
@@ -6632,13 +6649,13 @@ describe('SQLiteAdapter', () => {
     it('limits deletes to 1000 candidates and eventually revisits unacknowledged rows', () => {
       for (let i = 0; i < 2001; i += 1) insertJournalRow(30);
       insertCursor('peer', 1500);
-      expect(adapter.pruneOldSyncJournal(14)).toBe(1000);
-      expect(adapter.pruneOldSyncJournal(14)).toBe(500);
-      expect(adapter.pruneOldSyncJournal(14)).toBe(0);
+      expect(adapter.pruneOldSyncJournal(14).deleted).toBe(1000);
+      expect(adapter.pruneOldSyncJournal(14).deleted).toBe(500);
+      expect(adapter.pruneOldSyncJournal(14).deleted).toBe(0);
       expect(journalRowCount()).toBe(501);
-      expect(adapter.pruneOldSyncJournal(14)).toBe(0); // reset at end of keyspace
+      expect(adapter.pruneOldSyncJournal(14).deleted).toBe(0); // reset at end of keyspace
       (adapter as any).db.run('UPDATE sync_cursors SET last_sent_seq = 2001');
-      expect(adapter.pruneOldSyncJournal(14)).toBe(501);
+      expect(adapter.pruneOldSyncJournal(14).deleted).toBe(501);
     });
 
     function insertJournalRow(daysAgo: number, seq?: number): number {
@@ -6669,7 +6686,7 @@ describe('SQLiteAdapter', () => {
     it('prunes an old row when no peer has ever registered a cursor', () => {
       insertJournalRow(30);
 
-      const pruned = adapter.pruneOldSyncJournal(14);
+      const pruned = adapter.pruneOldSyncJournal(14).deleted;
 
       expect(pruned).toBe(1);
       expect(journalRowCount()).toBe(0);
@@ -6678,7 +6695,7 @@ describe('SQLiteAdapter', () => {
     it('does not prune a recent row even with no registered peer', () => {
       insertJournalRow(1);
 
-      const pruned = adapter.pruneOldSyncJournal(14);
+      const pruned = adapter.pruneOldSyncJournal(14).deleted;
 
       expect(pruned).toBe(0);
       expect(journalRowCount()).toBe(1);
@@ -6688,7 +6705,7 @@ describe('SQLiteAdapter', () => {
       const seq = insertJournalRow(30);
       insertCursor('peer-a', seq - 1);
 
-      const pruned = adapter.pruneOldSyncJournal(14);
+      const pruned = adapter.pruneOldSyncJournal(14).deleted;
 
       expect(pruned).toBe(0);
       expect(journalRowCount()).toBe(1);
@@ -6699,7 +6716,7 @@ describe('SQLiteAdapter', () => {
       insertCursor('peer-a', seq);
       insertCursor('peer-b', seq + 5);
 
-      const pruned = adapter.pruneOldSyncJournal(14);
+      const pruned = adapter.pruneOldSyncJournal(14).deleted;
 
       expect(pruned).toBe(1);
       expect(journalRowCount()).toBe(0);
@@ -6710,7 +6727,7 @@ describe('SQLiteAdapter', () => {
       insertCursor('peer-a', seq);
       insertCursor('peer-b', seq - 1);
 
-      const pruned = adapter.pruneOldSyncJournal(14);
+      const pruned = adapter.pruneOldSyncJournal(14).deleted;
 
       expect(pruned).toBe(0);
       expect(journalRowCount()).toBe(1);
@@ -6719,8 +6736,8 @@ describe('SQLiteAdapter', () => {
     it('is a no-op for a non-positive retention window', () => {
       insertJournalRow(3650);
 
-      expect(adapter.pruneOldSyncJournal(0)).toBe(0);
-      expect(adapter.pruneOldSyncJournal(-1)).toBe(0);
+      expect(adapter.pruneOldSyncJournal(0).deleted).toBe(0);
+      expect(adapter.pruneOldSyncJournal(-1).deleted).toBe(0);
       expect(journalRowCount()).toBe(1);
     });
   });
