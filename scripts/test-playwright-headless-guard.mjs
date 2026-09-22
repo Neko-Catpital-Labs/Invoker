@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -8,10 +8,29 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'test-suites', 'optional', '40-playwright-app.sh');
 
+const REQUIRED_TOOLS = ['bash', 'basename', 'dirname', 'git', 'mkdir', 'tr'];
+
+function resolveTool(tool) {
+  const found = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' });
+  const resolved = (found.stdout ?? '').trim();
+  if (found.status !== 0 || !resolved) {
+    throw new Error(`test harness needs ${tool} on PATH, but could not resolve it`);
+  }
+  return resolved;
+}
+
+// PATH must contain only these tools, so `command -v xvfb-run` genuinely fails
+// even on a host that has xvfb-run installed.
+function makeDisplaylessBinDir() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pw-headless-guard-'));
+  for (const tool of REQUIRED_TOOLS) symlinkSync(resolveTool(tool), path.join(dir, tool));
+  return dir;
+}
+
 function runWithoutXvfb(env) {
-  const stubDir = mkdtempSync(path.join(tmpdir(), 'pw-headless-guard-'));
-  const marker = path.join(stubDir, 'pnpm-invoked');
-  const pnpmStub = path.join(stubDir, 'pnpm');
+  const binDir = makeDisplaylessBinDir();
+  const marker = path.join(binDir, 'pnpm-invoked');
+  const pnpmStub = path.join(binDir, 'pnpm');
   writeFileSync(pnpmStub, `#!/bin/sh\necho "$@" > "${marker}"\nexit 0\n`, 'utf8');
   chmodSync(pnpmStub, 0o755);
   const result = spawnSync('bash', [SCRIPT], {
@@ -19,13 +38,14 @@ function runWithoutXvfb(env) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: `${stubDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+      PATH: binDir,
       INVOKER_PLAYWRIGHT_RUN_LABEL: 'headless-guard-probe',
       INVOKER_PLAYWRIGHT_FILES: 'e2e/keyboard-navigation.spec.ts',
       ...env,
     },
   });
   return {
+    binDir,
     status: result.status,
     stderr: result.stderr ?? '',
     playwrightLaunched: existsSync(marker),
@@ -36,6 +56,15 @@ function runWithoutXvfb(env) {
 const failures = [];
 
 const blocked = runWithoutXvfb({});
+
+const leaked = spawnSync('sh', ['-c', 'command -v xvfb-run'], {
+  encoding: 'utf8',
+  env: { ...process.env, PATH: blocked.binDir },
+});
+if (leaked.status === 0) {
+  failures.push(`harness PATH still exposes xvfb-run (${(leaked.stdout ?? '').trim()}); the no-xvfb case is not being tested`);
+}
+
 if (blocked.playwrightLaunched) {
   failures.push(
     `no-xvfb run launched Playwright anyway (headed windows): ${blocked.launchArgs.trim()}`,
@@ -51,6 +80,13 @@ if (!/INVOKER_ALLOW_HEADED_E2E/.test(blocked.stderr)) {
 const optedIn = runWithoutXvfb({ INVOKER_ALLOW_HEADED_E2E: '1' });
 if (!optedIn.playwrightLaunched) {
   failures.push(`explicit INVOKER_ALLOW_HEADED_E2E=1 opt-in was still blocked`);
+}
+
+// #12666 moved artifacts out of .git because actions/upload-artifact refuses to
+// upload from hidden repository metadata; ci.yml still uploads .playwright-artifacts.
+const launcherBody = readFileSync(SCRIPT, 'utf8');
+if (!/ARTIFACT_ROOT="\$ROOT\/\.playwright-artifacts\//.test(launcherBody)) {
+  failures.push(`40-playwright-app.sh no longer writes artifacts to $ROOT/.playwright-artifacts (see #12666)`);
 }
 
 const GUARDED_LAUNCHERS = [
@@ -73,4 +109,4 @@ if (failures.length > 0) {
   for (const f of failures) console.error(`  - ${f}`);
   process.exit(1);
 }
-console.log(`PASS test-playwright-headless-guard (3 behavioral + ${GUARDED_LAUNCHERS.length * 2} launcher assertions)`);
+console.log(`PASS test-playwright-headless-guard (5 behavioral + ${GUARDED_LAUNCHERS.length * 2} launcher assertions)`);
