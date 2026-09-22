@@ -1,0 +1,391 @@
+{
+  "arms": {
+    "baseline": {
+      "diff_bytes": 1411,
+      "diff_sha256": "1406c3c7d7026df102ad0750c1c23a0ee8d3a051fd93d8fb68f1fea63f22da2b",
+      "error_tail": "",
+      "exit_code": 0,
+      "grade": {
+        "apply_error": "",
+        "checks": [
+          {
+            "check_id": "check:typecheck",
+            "detail": "clean",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:existing-facade-suite",
+            "detail": "Tests  82 passed (82)",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:exposes-close-idle-task",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:routes-through-command-service",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:closes-review-before-mutation",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:runs-scoped-dispatch-and-topup",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:propagates-command-service-failure",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          }
+        ],
+        "grader_sha256": "48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f",
+        "passed": true,
+        "patch_applied": true,
+        "variant": "baseline"
+      },
+      "human_intervention": "none",
+      "patch_file": "pilot-001-baseline.patch",
+      "raw_output_location": "run-root only; transcripts are never committed",
+      "raw_output_sha256": "9de184647b5db7ed44ae87481cf95623110b55dbe6ab6ab285a628d473aa1d61",
+      "status": "completed",
+      "telemetry": {
+        "cost_telemetry": "native",
+        "cost_usd": 0.8538580000000001,
+        "harness_duration_ms": 80853,
+        "harness_is_error": false,
+        "harness_subtype": "success",
+        "num_turns": 13,
+        "tokens": {
+          "cache_creation": 44238,
+          "cache_read": 520666,
+          "input": 24,
+          "output": 6041
+        }
+      },
+      "timed_out": false,
+      "variant": "baseline",
+      "wall_seconds": 87.08
+    },
+    "treatment": {
+      "diff_bytes": 1275,
+      "diff_sha256": "9e0cbeb046bb83e252b3ae6713b85ccfd48baaa710362c792a21d5ea0aa5a48a",
+      "error_tail": "",
+      "exit_code": 0,
+      "grade": {
+        "apply_error": "",
+        "checks": [
+          {
+            "check_id": "check:typecheck",
+            "detail": "clean",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:existing-facade-suite",
+            "detail": "Tests  82 passed (82)",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:exposes-close-idle-task",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:routes-through-command-service",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:closes-review-before-mutation",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:runs-scoped-dispatch-and-topup",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          },
+          {
+            "check_id": "check:propagates-command-service-failure",
+            "detail": "passed",
+            "exit_code": 0,
+            "passed": true
+          }
+        ],
+        "grader_sha256": "48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f",
+        "passed": true,
+        "patch_applied": true,
+        "variant": "treatment"
+      },
+      "human_intervention": "none",
+      "patch_file": "pilot-001-treatment.patch",
+      "raw_output_location": "run-root only; transcripts are never committed",
+      "raw_output_sha256": "ac50d54151ce8f808a792aa32816fa8c15da1b925ce1209f63a5cf54c3858574",
+      "status": "completed",
+      "telemetry": {
+        "cost_telemetry": "native",
+        "cost_usd": 1.0258705,
+        "harness_duration_ms": 86720,
+        "harness_is_error": false,
+        "harness_subtype": "success",
+        "num_turns": 14,
+        "tokens": {
+          "cache_creation": 61279,
+          "cache_read": 577951,
+          "input": 26,
+          "output": 4959
+        }
+      },
+      "timed_out": false,
+      "variant": "treatment",
+      "wall_seconds": 92.954
+    }
+  },
+  "attempts": {
+    "architecture-memory-close-idle-task|pilot-001|baseline": {
+      "arm": "baseline",
+      "experiment_id": "architecture-memory-close-idle-task",
+      "finished_at": "2026-09-22T15:43:54+00:00",
+      "key": "architecture-memory-close-idle-task|pilot-001|baseline",
+      "note": null,
+      "outcome": "completed",
+      "pair_id": "pilot-001",
+      "started_at": "2026-09-22T15:42:11+00:00",
+      "state": "finished",
+      "variant": "baseline"
+    },
+    "architecture-memory-close-idle-task|pilot-001|treatment": {
+      "arm": "treatment",
+      "experiment_id": "architecture-memory-close-idle-task",
+      "finished_at": "2026-09-22T15:42:01+00:00",
+      "key": "architecture-memory-close-idle-task|pilot-001|treatment",
+      "note": null,
+      "outcome": "completed",
+      "pair_id": "pilot-001",
+      "started_at": "2026-09-22T15:40:13+00:00",
+      "state": "finished",
+      "variant": "treatment"
+    }
+  },
+  "conclusions": {
+    "cost_by_arm": {
+      "baseline": {
+        "cost_telemetry": "native",
+        "cost_usd": 0.8538580000000001
+      },
+      "treatment": {
+        "cost_telemetry": "native",
+        "cost_usd": 1.0258705
+      }
+    },
+    "dollar_conclusion_permitted": true,
+    "dollar_conclusion_reason": "both arms reported native cost telemetry",
+    "per_arm": {
+      "baseline": {
+        "failing_checks": [],
+        "graded_pass": true,
+        "trial_status": "completed"
+      },
+      "treatment": {
+        "failing_checks": [],
+        "graded_pass": true,
+        "trial_status": "completed"
+      }
+    },
+    "statistical_claim": "None. n=1 per arm establishes that the apparatus executes end to end, not that either architecture is better.",
+    "trials_counted": 2
+  },
+  "configuration": {
+    "baseline": {
+      "argv_template": [
+        "--print",
+        "--model",
+        "{model}",
+        "--effort",
+        "{effort}",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+        "--permission-mode",
+        "acceptEdits",
+        "--permission-prompts",
+        "none",
+        "--allowedTools",
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "TodoWrite",
+        "--disallowedTools",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "Bash(git push:*)",
+        "Bash(git remote:*)",
+        "Bash(gh:*)",
+        "Bash(curl:*)",
+        "Bash(wget:*)",
+        "Bash(ssh:*)",
+        "Bash(scp:*)",
+        "Bash(npm publish:*)",
+        "Bash(pnpm publish:*)",
+        "--output-format",
+        "json",
+        "--max-budget-usd",
+        "{budget_usd}"
+      ],
+      "arm": "baseline",
+      "binary": "claude",
+      "binary_path": "<home>/.local/bin/claude",
+      "budget_usd": 12.0,
+      "cost_telemetry": "native",
+      "effort": "high",
+      "env_template_keys": [
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        "DISABLE_AUTOUPDATER",
+        "DISABLE_TELEMETRY"
+      ],
+      "model": "claude-opus-5",
+      "prompt_mode": "stdin",
+      "runner": "claude",
+      "timeout_seconds": 900,
+      "variant": "baseline",
+      "version": "2.1.278 (Claude Code)"
+    },
+    "differences": [],
+    "equal": true,
+    "treatment": {
+      "argv_template": [
+        "--print",
+        "--model",
+        "{model}",
+        "--effort",
+        "{effort}",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+        "--permission-mode",
+        "acceptEdits",
+        "--permission-prompts",
+        "none",
+        "--allowedTools",
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "TodoWrite",
+        "--disallowedTools",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "Bash(git push:*)",
+        "Bash(git remote:*)",
+        "Bash(gh:*)",
+        "Bash(curl:*)",
+        "Bash(wget:*)",
+        "Bash(ssh:*)",
+        "Bash(scp:*)",
+        "Bash(npm publish:*)",
+        "Bash(pnpm publish:*)",
+        "--output-format",
+        "json",
+        "--max-budget-usd",
+        "{budget_usd}"
+      ],
+      "arm": "treatment",
+      "binary": "claude",
+      "binary_path": "<home>/.local/bin/claude",
+      "budget_usd": 12.0,
+      "cost_telemetry": "native",
+      "effort": "high",
+      "env_template_keys": [
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        "DISABLE_AUTOUPDATER",
+        "DISABLE_TELEMETRY"
+      ],
+      "model": "claude-opus-5",
+      "prompt_mode": "stdin",
+      "runner": "claude",
+      "timeout_seconds": 900,
+      "variant": "treatment",
+      "version": "2.1.278 (Claude Code)"
+    }
+  },
+  "created_at": "2026-09-22T15:44:04+00:00",
+  "execution_order": [
+    "treatment",
+    "baseline"
+  ],
+  "experiment_id": "architecture-memory-close-idle-task",
+  "host": {
+    "platform": "Darwin 25.6.0 arm64",
+    "recorded_at": "2026-09-22T15:44:04+00:00"
+  },
+  "order_seed": 897660854,
+  "pair_id": "pilot-001",
+  "provenance": {
+    "archive_sha256": "fbc2db28a1f7cc322073c46306b3fcd45a8405594aaf5770b9e4d97128c30afe",
+    "grader_sha256": "48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f",
+    "manifest_sha256": "6ab2dafea58682dcec40e1e059af1459ac6cc1911640352bbd784b0568b5646a",
+    "prompt_sha256": "be941a75d2fa44e616e1aa12f28401d05183be473c6d0db3e62a2ad7893d5499",
+    "redactions": [
+      "CLAUDE.md",
+      "AGENTS.md",
+      "ARCHITECTURE.md",
+      "CHANGELOG.md",
+      "CONTRIBUTING.md",
+      "LOOP.md",
+      "README.md",
+      ".cursor",
+      ".github",
+      "docs",
+      "evals",
+      "plans",
+      "repro",
+      "skills",
+      "scripts/repro"
+    ],
+    "runners_sha256": "7fc258b09cbe6703f286875efb2398959105db8309fe5a4e0c345b15d3d7babb",
+    "snapshots": {
+      "baseline": {
+        "source_tree_sha256": "759e86dc45041dfe6a632142e4075210b14e076942ab9e7cce1fef8dd325accd",
+        "target_file_sha256": "f64a0eb244841907dd96942f7c3fad21d784fb7097b4cae63108e3b7b99aaf16"
+      },
+      "treatment": {
+        "source_tree_sha256": "018440bedbb345f90b6189762c3c61d670ab08663853de283b245d9a8631ad22",
+        "target_file_sha256": "8486e5e17361c314ed93ab2adaaf8157c250b624ab5de2d0088449216450eabd"
+      }
+    },
+    "source_commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad",
+    "source_remote": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+    "structural_delta_sha256": "880f00b42fc1f0fd7f8cca16238bc6a4405a8a928c6a20f0acc59faf5855416d"
+  },
+  "schema": "architecture-memory/pair-record/1",
+  "structural_delta_summary": "Route every task-scoped facade mutation through one named helper, mutateTaskScoped(taskId, context, mutate), which owns close-review -> mutate -> scoped dispatch + topup. Pure refactor: no behaviour change."
+}

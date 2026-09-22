@@ -1,0 +1,88 @@
+{
+  "schema": "architecture-memory/runners/1",
+  "default_runner": "claude",
+  "runners": {
+    "claude": {
+      "binary": "claude",
+      "version_argv": [
+        "--version"
+      ],
+      "model": "claude-opus-5",
+      "effort": "high",
+      "cost_telemetry": "native",
+      "argv": [
+        "--print",
+        "--model",
+        "{model}",
+        "--effort",
+        "{effort}",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+        "--permission-mode",
+        "acceptEdits",
+        "--permission-prompts",
+        "none",
+        "--allowedTools",
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "TodoWrite",
+        "--disallowedTools",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "Bash(git push:*)",
+        "Bash(git remote:*)",
+        "Bash(gh:*)",
+        "Bash(curl:*)",
+        "Bash(wget:*)",
+        "Bash(ssh:*)",
+        "Bash(scp:*)",
+        "Bash(npm publish:*)",
+        "Bash(pnpm publish:*)",
+        "--output-format",
+        "json",
+        "--max-budget-usd",
+        "{budget_usd}"
+      ],
+      "env": {
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "DISABLE_AUTOUPDATER": "1",
+        "DISABLE_TELEMETRY": "1"
+      },
+      "prompt_mode": "stdin",
+      "isolation_notes": "User plugins, hooks, skills, settings and saved model are dropped with --setting-sources \"\", --strict-mcp-config, --disable-slash-commands and an explicit --model/--effort pin. Cross-session memory and transcripts are denied at the filesystem layer (see amlib/isolation.py) because redirecting CLAUDE_CONFIG_DIR also drops the operator's credentials."
+    },
+    "codex": {
+      "binary": "codex",
+      "version_argv": [
+        "--version"
+      ],
+      "model": "gpt-5-codex",
+      "effort": "high",
+      "cost_telemetry": "unavailable",
+      "argv": [
+        "exec",
+        "--model",
+        "{model}",
+        "-c",
+        "model_reasoning_effort=\"{effort}\"",
+        "--sandbox",
+        "workspace-write",
+        "--skip-git-repo-check",
+        "--json"
+      ],
+      "env": {
+        "CODEX_HOME": "{ephemeral_config_dir}"
+      },
+      "prompt_mode": "stdin",
+      "isolation_notes": "CODEX_HOME is redirected to an ephemeral directory. This runner is registered but was not the harness used for the recorded pair; its isolation is not proven by the committed controls."
+    }
+  }
+}

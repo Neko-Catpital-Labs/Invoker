@@ -1,0 +1,223 @@
+{
+  "checks": [
+    {
+      "detail": "sandbox-exec",
+      "name": "selftest:isolation-mechanism-present",
+      "passed": true
+    },
+    {
+      "detail": "exit=1 0f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/checks/close-idle-task.checks.test.ts: Operation not permitted",
+      "name": "selftest:protected-grader-checks-read-denied",
+      "passed": true
+    },
+    {
+      "detail": "exit=1 1.t13.a-a40f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/patches/baseline/gold.patch: Operation not permitted",
+      "name": "selftest:protected-gold-patch-read-denied",
+      "passed": true
+    },
+    {
+      "detail": "exit=1 /1lflpr1n1jzgkvdc4f6cqfw80000gn/T/architecture-memory-runs/selftest-20260922T154635Z/source.tar: Operation not permitted",
+      "name": "selftest:protected-run-root-read-denied",
+      "passed": true
+    },
+    {
+      "detail": "exit=1 d-run-paired-pilot-g1.t13.a-a40f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/patches: Operation not permitted",
+      "name": "selftest:protected-gold-directory-list-denied",
+      "passed": true
+    },
+    {
+      "detail": "denied=14 leaked=none",
+      "name": "selftest:user-memory-read-denied",
+      "passed": true
+    },
+    {
+      "detail": "exit=1 0f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/checks/close-idle-task.checks.test.ts: Operation not permitted",
+      "name": "selftest:protected-grader-write-denied",
+      "passed": true
+    },
+    {
+      "detail": "exit=0",
+      "name": "selftest:trial-workspace-writable",
+      "passed": true
+    },
+    {
+      "detail": "claude 2.1.278 (Claude Code) model=claude-opus-5 effort=high",
+      "name": "selftest:runner-registry-resolves",
+      "passed": true
+    },
+    {
+      "detail": "exit=0 2.1.278 (Claude Code)",
+      "name": "selftest:harness-runs-under-isolation",
+      "passed": true
+    },
+    {
+      "detail": "timed_out=True exit=124 after 3.0s",
+      "name": "selftest:process-timeout-enforced",
+      "passed": true
+    },
+    {
+      "detail": "differing files: ['packages/app/src/workflow-mutation-facade.ts']",
+      "name": "selftest:variants-differ-only-by-structural-delta",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation', 'check:exposes-close-idle-task', 'check:propagates-command-service-failure', 'check:routes-through-command-service', 'check:runs-scoped-dispatch-and-topup']",
+      "name": "selftest:control:baseline:unedited",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation', 'check:exposes-close-idle-task', 'check:propagates-command-service-failure', 'check:routes-through-command-service', 'check:runs-scoped-dispatch-and-topup']",
+      "name": "selftest:control:baseline:control-noop",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation', 'check:propagates-command-service-failure', 'check:routes-through-command-service', 'check:runs-scoped-dispatch-and-topup']",
+      "name": "selftest:control:baseline:control-stub-only",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation']",
+      "name": "selftest:control:baseline:control-missing-invariant",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:routes-through-command-service']",
+      "name": "selftest:control:baseline:control-wrong-envelope",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: none",
+      "name": "selftest:control:baseline:gold",
+      "passed": true
+    },
+    {
+      "detail": "unedited snapshot typechecks and the upstream facade suite passes",
+      "name": "selftest:baseline-behaviour-equivalent:baseline",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation', 'check:exposes-close-idle-task', 'check:propagates-command-service-failure', 'check:routes-through-command-service', 'check:runs-scoped-dispatch-and-topup']",
+      "name": "selftest:control:treatment:unedited",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation', 'check:exposes-close-idle-task', 'check:propagates-command-service-failure', 'check:routes-through-command-service', 'check:runs-scoped-dispatch-and-topup']",
+      "name": "selftest:control:treatment:control-noop",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation', 'check:propagates-command-service-failure', 'check:routes-through-command-service', 'check:runs-scoped-dispatch-and-topup']",
+      "name": "selftest:control:treatment:control-stub-only",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:closes-review-before-mutation']",
+      "name": "selftest:control:treatment:control-missing-invariant",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: ['check:routes-through-command-service']",
+      "name": "selftest:control:treatment:control-wrong-envelope",
+      "passed": true
+    },
+    {
+      "detail": "failing checks: none",
+      "name": "selftest:control:treatment:gold",
+      "passed": true
+    },
+    {
+      "detail": "unedited snapshot typechecks and the upstream facade suite passes",
+      "name": "selftest:baseline-behaviour-equivalent:treatment",
+      "passed": true
+    },
+    {
+      "detail": "leaked=none evaluatorPresent=False commits=1 target=f64a0eb24484",
+      "name": "selftest:trial-workspace-redacted:baseline",
+      "passed": true
+    },
+    {
+      "detail": "leaked=none evaluatorPresent=False commits=1 target=8486e5e17361",
+      "name": "selftest:trial-workspace-redacted:treatment",
+      "passed": true
+    },
+    {
+      "detail": "a complete, config-equal pair record passes both gates",
+      "name": "selftest:valid-record-accepted",
+      "passed": true
+    },
+    {
+      "detail": "missing arm 'treatment'; execution_order ['baseline'] does not cover both arms exactly once",
+      "name": "selftest:incomplete-record-rejected",
+      "passed": true
+    },
+    {
+      "detail": "arm configurations differ: effort: 'high' != 'low'",
+      "name": "selftest:pair-mismatch-rejected",
+      "passed": true
+    },
+    {
+      "detail": "at least one arm reported no dollar cost; token totals are not dollars",
+      "name": "selftest:cost-conclusion-blocked-without-telemetry",
+      "passed": true
+    },
+    {
+      "detail": "attempt persisted before the harness call with state=started",
+      "name": "selftest:ledger-records-partial-start",
+      "passed": true
+    },
+    {
+      "detail": "attempt architecture-memory-close-idle-task|selftest-pair|baseline is already recorded as state=started outcome=None; no automatic retry is permitted",
+      "name": "selftest:ledger-rejects-duplicate-attempt",
+      "passed": true
+    },
+    {
+      "detail": "gold patches regrade identically from the recorded artefacts",
+      "name": "selftest:replay-regrade-matches",
+      "passed": true
+    },
+    {
+      "detail": "grader check file changed during the run; expected 0000000000000000000000000000000000000000000000000000000000000000, found 48aef6b50311e82b287f3c67e35a42deeeae7",
+      "name": "selftest:grader-immutability-detected",
+      "passed": true
+    }
+  ],
+  "passed_at": "2026-09-22T15:49:41+00:00",
+  "provenance": {
+    "archive_sha256": "fbc2db28a1f7cc322073c46306b3fcd45a8405594aaf5770b9e4d97128c30afe",
+    "grader_sha256": "48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f",
+    "manifest_sha256": "6ab2dafea58682dcec40e1e059af1459ac6cc1911640352bbd784b0568b5646a",
+    "prompt_sha256": "be941a75d2fa44e616e1aa12f28401d05183be473c6d0db3e62a2ad7893d5499",
+    "redactions": [
+      "CLAUDE.md",
+      "AGENTS.md",
+      "ARCHITECTURE.md",
+      "CHANGELOG.md",
+      "CONTRIBUTING.md",
+      "LOOP.md",
+      "README.md",
+      ".cursor",
+      ".github",
+      "docs",
+      "evals",
+      "plans",
+      "repro",
+      "skills",
+      "scripts/repro"
+    ],
+    "runners_sha256": "7fc258b09cbe6703f286875efb2398959105db8309fe5a4e0c345b15d3d7babb",
+    "snapshots": {
+      "baseline": {
+        "source_tree_sha256": "759e86dc45041dfe6a632142e4075210b14e076942ab9e7cce1fef8dd325accd",
+        "target_file_sha256": "f64a0eb244841907dd96942f7c3fad21d784fb7097b4cae63108e3b7b99aaf16"
+      },
+      "treatment": {
+        "source_tree_sha256": "018440bedbb345f90b6189762c3c61d670ab08663853de283b245d9a8631ad22",
+        "target_file_sha256": "8486e5e17361c314ed93ab2adaaf8157c250b624ab5de2d0088449216450eabd"
+      }
+    },
+    "source_commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad",
+    "source_remote": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+    "structural_delta_sha256": "880f00b42fc1f0fd7f8cca16238bc6a4405a8a928c6a20f0acc59faf5855416d"
+  },
+  "schema": "architecture-memory/controls-stamp/1"
+}

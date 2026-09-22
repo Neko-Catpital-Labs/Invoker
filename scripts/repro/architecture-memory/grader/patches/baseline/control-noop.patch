@@ -1,0 +1,8 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -617,3 +617,4 @@
+     await this.closeReviewForWorkflow(workflowId);
+   }
+ }
++

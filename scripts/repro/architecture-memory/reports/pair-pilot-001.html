@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Architecture-as-memory paired pilot — pilot-001</title>
+<style>
+:root { color-scheme: light dark; }
+body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+       margin: 0 auto; max-width: 62rem; padding: 2rem 1.25rem 4rem; }
+h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+h2 { font-size: 1.15rem; margin-top: 2.25rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+h3 { font-size: 1rem; margin-top: 1.5rem; }
+.sub { opacity: .7; margin-top: 0; }
+table { border-collapse: collapse; width: 100%; margin: .75rem 0 1.25rem; font-size: .92rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #8883; vertical-align: top; }
+th { font-weight: 600; opacity: .8; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86em; }
+.pass { color: #1a7f37; font-weight: 600; }
+.fail { color: #b3261e; font-weight: 600; }
+.pill { display: inline-block; border: 1px solid #8886; border-radius: 999px;
+        padding: .05rem .55rem; font-size: .8rem; }
+.note { border-left: 3px solid #8886; padding: .4rem 0 .4rem .85rem; margin: .9rem 0; opacity: .92; }
+ul { padding-left: 1.2rem; }
+</style></head><body>
+<h1>Architecture-as-memory paired pilot</h1>
+<p class="sub">Experiment <code>architecture-memory-close-idle-task</code> ·
+pair <code>pilot-001</code> · recorded 2026-09-22T15:44:04+00:00</p>
+
+<div class="note"><strong>What this one pair establishes.</strong>
+None. n=1 per arm establishes that the apparatus executes end to end, not that either architecture is better.</div>
+
+<h2>Provenance</h2>
+<table><tr><th>source commit</th><td class='mono'>0ca415e4d69a3f59a4b666e65f6362adf2d947ad</td></tr><tr><th>source remote</th><td class='mono'>https://github.com/Neko-Catpital-Labs/Invoker.git</td></tr><tr><th>source archive sha256</th><td class='mono'>fbc2db28a1f7cc322073c46306b3fcd45a8405594aaf5770b9e4d97128c30afe</td></tr><tr><th>manifest sha256</th><td class='mono'>6ab2dafea58682dcec40e1e059af1459ac6cc1911640352bbd784b0568b5646a</td></tr><tr><th>grader sha256</th><td class='mono'>48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f</td></tr><tr><th>structural delta sha256</th><td class='mono'>880f00b42fc1f0fd7f8cca16238bc6a4405a8a928c6a20f0acc59faf5855416d</td></tr><tr><th>task prompt sha256</th><td class='mono'>be941a75d2fa44e616e1aa12f28401d05183be473c6d0db3e62a2ad7893d5499</td></tr><tr><th>baseline source tree sha256</th><td class='mono'>759e86dc45041dfe6a632142e4075210b14e076942ab9e7cce1fef8dd325accd</td></tr><tr><th>treatment source tree sha256</th><td class='mono'>018440bedbb345f90b6189762c3c61d670ab08663853de283b245d9a8631ad22</td></tr><tr><th>baseline target file sha256</th><td class='mono'>f64a0eb244841907dd96942f7c3fad21d784fb7097b4cae63108e3b7b99aaf16</td></tr><tr><th>treatment target file sha256</th><td class='mono'>8486e5e17361c314ed93ab2adaaf8157c250b624ab5de2d0088449216450eabd</td></tr><tr><th>trial workspace redactions</th><td class='mono'>CLAUDE.md, AGENTS.md, ARCHITECTURE.md, CHANGELOG.md, CONTRIBUTING.md, LOOP.md, README.md, .cursor, .github, docs, evals, plans, repro, skills, scripts/repro</td></tr></table>
+<p>Route every task-scoped facade mutation through one named helper, mutateTaskScoped(taskId, context, mutate), which owns close-review -&gt; mutate -&gt; scoped dispatch + topup. Pure refactor: no behaviour change.</p>
+
+<h2>Configuration equality</h2>
+<table><tr><th>equal</th><td class='mono'>True</td></tr><tr><th>differences</th><td class='mono'>none</td></tr><tr><th>runner</th><td class='mono'>claude</td></tr><tr><th>harness version</th><td class='mono'>2.1.278 (Claude Code)</td></tr><tr><th>model</th><td class='mono'>claude-opus-5</td></tr><tr><th>effort</th><td class='mono'>high</td></tr><tr><th>per-trial timeout (s)</th><td class='mono'>900</td></tr><tr><th>per-trial budget (usd)</th><td class='mono'>12.0</td></tr><tr><th>execution order</th><td class='mono'>treatment -&gt; baseline</td></tr><tr><th>order seed</th><td class='mono'>897660854</td></tr></table>
+
+<h2>Controls (run before the pair)</h2>
+<table><tr><th>control</th><th>result</th><th>detail</th></tr><tr><td class='mono'>selftest:isolation-mechanism-present</td><td><span class="pass">PASS</span></td><td class='mono'>sandbox-exec</td></tr><tr><td class='mono'>selftest:protected-grader-checks-read-denied</td><td><span class="pass">PASS</span></td><td class='mono'>exit=1 0f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/checks/close-idle-task.checks.test.ts: Operation not permitted</td></tr><tr><td class='mono'>selftest:protected-gold-patch-read-denied</td><td><span class="pass">PASS</span></td><td class='mono'>exit=1 1.t13.a-a40f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/patches/baseline/gold.patch: Operation not permitted</td></tr><tr><td class='mono'>selftest:protected-run-root-read-denied</td><td><span class="pass">PASS</span></td><td class='mono'>exit=1 /1lflpr1n1jzgkvdc4f6cqfw80000gn/T/architecture-memory-runs/selftest-20260922T154635Z/source.tar: Operation not permitted</td></tr><tr><td class='mono'>selftest:protected-gold-directory-list-denied</td><td><span class="pass">PASS</span></td><td class='mono'>exit=1 d-run-paired-pilot-g1.t13.a-a40f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/patches: Operation not permitted</td></tr><tr><td class='mono'>selftest:user-memory-read-denied</td><td><span class="pass">PASS</span></td><td class='mono'>denied=14 leaked=none</td></tr><tr><td class='mono'>selftest:protected-grader-write-denied</td><td><span class="pass">PASS</span></td><td class='mono'>exit=1 0f8a775-5eb79fe2/scripts/repro/architecture-memory/grader/checks/close-idle-task.checks.test.ts: Operation not permitted</td></tr><tr><td class='mono'>selftest:trial-workspace-writable</td><td><span class="pass">PASS</span></td><td class='mono'>exit=0</td></tr><tr><td class='mono'>selftest:runner-registry-resolves</td><td><span class="pass">PASS</span></td><td class='mono'>claude 2.1.278 (Claude Code) model=claude-opus-5 effort=high</td></tr><tr><td class='mono'>selftest:harness-runs-under-isolation</td><td><span class="pass">PASS</span></td><td class='mono'>exit=0 2.1.278 (Claude Code)</td></tr><tr><td class='mono'>selftest:process-timeout-enforced</td><td><span class="pass">PASS</span></td><td class='mono'>timed_out=True exit=124 after 3.0s</td></tr><tr><td class='mono'>selftest:variants-differ-only-by-structural-delta</td><td><span class="pass">PASS</span></td><td class='mono'>differing files: [&#x27;packages/app/src/workflow-mutation-facade.ts&#x27;]</td></tr><tr><td class='mono'>selftest:control:baseline:unedited</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;, &#x27;check:exposes-close-idle-task&#x27;, &#x27;check:propagates-command-service-failure&#x27;, &#x27;check:routes-through-command-service&#x27;, &#x27;check:runs-scoped-dispatch-and-topup&#x27;]</td></tr><tr><td class='mono'>selftest:control:baseline:control-noop</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;, &#x27;check:exposes-close-idle-task&#x27;, &#x27;check:propagates-command-service-failure&#x27;, &#x27;check:routes-through-command-service&#x27;, &#x27;check:runs-scoped-dispatch-and-topup&#x27;]</td></tr><tr><td class='mono'>selftest:control:baseline:control-stub-only</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;, &#x27;check:propagates-command-service-failure&#x27;, &#x27;check:routes-through-command-service&#x27;, &#x27;check:runs-scoped-dispatch-and-topup&#x27;]</td></tr><tr><td class='mono'>selftest:control:baseline:control-missing-invariant</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;]</td></tr><tr><td class='mono'>selftest:control:baseline:control-wrong-envelope</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:routes-through-command-service&#x27;]</td></tr><tr><td class='mono'>selftest:control:baseline:gold</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: none</td></tr><tr><td class='mono'>selftest:baseline-behaviour-equivalent:baseline</td><td><span class="pass">PASS</span></td><td class='mono'>unedited snapshot typechecks and the upstream facade suite passes</td></tr><tr><td class='mono'>selftest:control:treatment:unedited</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;, &#x27;check:exposes-close-idle-task&#x27;, &#x27;check:propagates-command-service-failure&#x27;, &#x27;check:routes-through-command-service&#x27;, &#x27;check:runs-scoped-dispatch-and-topup&#x27;]</td></tr><tr><td class='mono'>selftest:control:treatment:control-noop</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;, &#x27;check:exposes-close-idle-task&#x27;, &#x27;check:propagates-command-service-failure&#x27;, &#x27;check:routes-through-command-service&#x27;, &#x27;check:runs-scoped-dispatch-and-topup&#x27;]</td></tr><tr><td class='mono'>selftest:control:treatment:control-stub-only</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;, &#x27;check:propagates-command-service-failure&#x27;, &#x27;check:routes-through-command-service&#x27;, &#x27;check:runs-scoped-dispatch-and-topup&#x27;]</td></tr><tr><td class='mono'>selftest:control:treatment:control-missing-invariant</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:closes-review-before-mutation&#x27;]</td></tr><tr><td class='mono'>selftest:control:treatment:control-wrong-envelope</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: [&#x27;check:routes-through-command-service&#x27;]</td></tr><tr><td class='mono'>selftest:control:treatment:gold</td><td><span class="pass">PASS</span></td><td class='mono'>failing checks: none</td></tr><tr><td class='mono'>selftest:baseline-behaviour-equivalent:treatment</td><td><span class="pass">PASS</span></td><td class='mono'>unedited snapshot typechecks and the upstream facade suite passes</td></tr><tr><td class='mono'>selftest:trial-workspace-redacted:baseline</td><td><span class="pass">PASS</span></td><td class='mono'>leaked=none evaluatorPresent=False commits=1 target=f64a0eb24484</td></tr><tr><td class='mono'>selftest:trial-workspace-redacted:treatment</td><td><span class="pass">PASS</span></td><td class='mono'>leaked=none evaluatorPresent=False commits=1 target=8486e5e17361</td></tr><tr><td class='mono'>selftest:valid-record-accepted</td><td><span class="pass">PASS</span></td><td class='mono'>a complete, config-equal pair record passes both gates</td></tr><tr><td class='mono'>selftest:incomplete-record-rejected</td><td><span class="pass">PASS</span></td><td class='mono'>missing arm &#x27;treatment&#x27;; execution_order [&#x27;baseline&#x27;] does not cover both arms exactly once</td></tr><tr><td class='mono'>selftest:pair-mismatch-rejected</td><td><span class="pass">PASS</span></td><td class='mono'>arm configurations differ: effort: &#x27;high&#x27; != &#x27;low&#x27;</td></tr><tr><td class='mono'>selftest:cost-conclusion-blocked-without-telemetry</td><td><span class="pass">PASS</span></td><td class='mono'>at least one arm reported no dollar cost; token totals are not dollars</td></tr><tr><td class='mono'>selftest:ledger-records-partial-start</td><td><span class="pass">PASS</span></td><td class='mono'>attempt persisted before the harness call with state=started</td></tr><tr><td class='mono'>selftest:ledger-rejects-duplicate-attempt</td><td><span class="pass">PASS</span></td><td class='mono'>attempt architecture-memory-close-idle-task|selftest-pair|baseline is already recorded as state=started outcome=None; no automatic retry is permitted</td></tr><tr><td class='mono'>selftest:replay-regrade-matches</td><td><span class="pass">PASS</span></td><td class='mono'>gold patches regrade identically from the recorded artefacts</td></tr><tr><td class='mono'>selftest:grader-immutability-detected</td><td><span class="pass">PASS</span></td><td class='mono'>grader check file changed during the run; expected 0000000000000000000000000000000000000000000000000000000000000000, found 48aef6b50311e82b287f3c67e35a42deeeae7</td></tr></table>
+
+<h2>Trials</h2>
+
+<h3>treatment arm <span class="pill">completed</span>
+ <span class="pass">PASS</span></h3>
+<table><tr><th>trial status</th><td class='mono'>completed</td></tr><tr><th>harness exit code</th><td class='mono'>0</td></tr><tr><th>timed out</th><td class='mono'>False</td></tr><tr><th>wall seconds</th><td class='mono'>92.954</td></tr><tr><th>human intervention</th><td class='mono'>none</td></tr><tr><th>final diff sha256</th><td class='mono'>9e0cbeb046bb83e252b3ae6713b85ccfd48baaa710362c792a21d5ea0aa5a48a</td></tr><tr><th>final diff bytes</th><td class='mono'>1275</td></tr><tr><th>replay patch</th><td class='mono'>records/patches/pilot-001-treatment.patch</td></tr><tr><th>cost usd</th><td class='mono'>1.0258705</td></tr><tr><th>cost telemetry</th><td class='mono'>native</td></tr><tr><th>input tokens</th><td class='mono'>26</td></tr><tr><th>output tokens</th><td class='mono'>4959</td></tr><tr><th>cache read tokens</th><td class='mono'>577951</td></tr><tr><th>turns</th><td class='mono'>14</td></tr></table>
+<table><tr><th>check</th><th>result</th><th>exit</th><th>detail</th></tr><tr><td class='mono'>check:typecheck</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>clean</td></tr><tr><td class='mono'>check:existing-facade-suite</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>Tests  82 passed (82)</td></tr><tr><td class='mono'>check:exposes-close-idle-task</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:routes-through-command-service</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:closes-review-before-mutation</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:runs-scoped-dispatch-and-topup</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:propagates-command-service-failure</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr></table>
+
+<h3>baseline arm <span class="pill">completed</span>
+ <span class="pass">PASS</span></h3>
+<table><tr><th>trial status</th><td class='mono'>completed</td></tr><tr><th>harness exit code</th><td class='mono'>0</td></tr><tr><th>timed out</th><td class='mono'>False</td></tr><tr><th>wall seconds</th><td class='mono'>87.08</td></tr><tr><th>human intervention</th><td class='mono'>none</td></tr><tr><th>final diff sha256</th><td class='mono'>1406c3c7d7026df102ad0750c1c23a0ee8d3a051fd93d8fb68f1fea63f22da2b</td></tr><tr><th>final diff bytes</th><td class='mono'>1411</td></tr><tr><th>replay patch</th><td class='mono'>records/patches/pilot-001-baseline.patch</td></tr><tr><th>cost usd</th><td class='mono'>0.8538580000000001</td></tr><tr><th>cost telemetry</th><td class='mono'>native</td></tr><tr><th>input tokens</th><td class='mono'>24</td></tr><tr><th>output tokens</th><td class='mono'>6041</td></tr><tr><th>cache read tokens</th><td class='mono'>520666</td></tr><tr><th>turns</th><td class='mono'>13</td></tr></table>
+<table><tr><th>check</th><th>result</th><th>exit</th><th>detail</th></tr><tr><td class='mono'>check:typecheck</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>clean</td></tr><tr><td class='mono'>check:existing-facade-suite</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>Tests  82 passed (82)</td></tr><tr><td class='mono'>check:exposes-close-idle-task</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:routes-through-command-service</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:closes-review-before-mutation</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:runs-scoped-dispatch-and-topup</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr><tr><td class='mono'>check:propagates-command-service-failure</td><td><span class="pass">PASS</span></td><td class='mono'>0</td><td class='mono'>passed</td></tr></table>
+
+
+<h2>Observed outcome</h2>
+<table><tr><th>arm</th><th>trial status</th><th>graded</th><th>failing checks</th></tr><tr><td class='mono'>baseline</td><td class='mono'>completed</td><td><span class="pass">PASS</span></td><td class='mono'>none</td></tr><tr><td class='mono'>treatment</td><td class='mono'>completed</td><td><span class="pass">PASS</span></td><td class='mono'>none</td></tr></table><p>Both arms produced a graded pass, so this pair separates nothing. That is a real result about the task, not a failure of the run: this behavioural task was inside both arms' reach at this model and effort. A discriminating protocol needs harder tasks, repeats, or both.</p>
+
+<h2>Cost accounting</h2>
+<table><tr><th>dollar conclusion permitted</th><td class='mono'>True</td></tr><tr><th>reason</th><td class='mono'>both arms reported native cost telemetry</td></tr><tr><th>trials counted</th><td class='mono'>2</td></tr></table>
+<p>Measured trial cost is the per-trial telemetry above. Apparatus development and
+setup cost is not part of it and is not reported here as a trial cost.</p>
+
+<h2>What was exercised</h2>
+<ul>
+  <li>Two snapshots built from one immutable upstream commit, differing only at
+      <code>packages/app/src/workflow-mutation-facade.ts</code>.</li>
+  <li>Verified filesystem isolation: the grader, the gold patches, and the run
+      directory were proven unreadable from inside a trial before any trial ran.</li>
+  <li>An external behavioural grader: typecheck, the upstream facade suite, and
+      five evaluator-owned checks asserting the requested behaviour and the
+      close-review-before-mutation ownership invariant.</li>
+  <li>One A/B pair, randomized order, one attempt per arm, no automatic retries.</li>
+</ul>
+
+<h2>What was not exercised</h2>
+<ul>
+  <li>Repetition. One pair cannot separate an architecture effect from run-to-run variance.</li>
+  <li>Task breadth. One behavioural task on one module in one package.</li>
+  <li>Harness breadth. One registered harness, one pinned model, one effort level.</li>
+  <li>The production execution path. Nothing here runs inside the app.</li>
+</ul>
+
+<h2>What would invalidate this pair</h2>
+<ul>
+  <li>A provenance hash that no longer reproduces from the recorded commit.</li>
+  <li>Any configuration difference between the arms beyond the structural delta.</li>
+  <li>A grader or gold patch reachable from inside a trial workspace.</li>
+  <li>A control regression: the unedited snapshot passing, or a gold patch failing.</li>
+  <li>More recorded trials than the attempt ledger's terminal entries, or a rerun
+      after an unsuccessful result.</li>
+</ul>
+
+<h2>The protocol this defers</h2>
+<p>The planned expansion is six behavioural tasks by five repeats per arm
+(60 trials), with the same apparatus, the same pinned configuration, per-task
+randomized order, and per-task control matrices rerun before each batch. It is
+deliberately <em>not</em> launched here: the point of this slice is that the
+apparatus is trustworthy first.</p>
+
+<h2>Machine-readable record</h2>
+<pre class="mono">{
+  &quot;arms&quot;: {
+    &quot;baseline&quot;: {
+      &quot;diff_bytes&quot;: 1411,
+      &quot;diff_sha256&quot;: &quot;1406c3c7d7026df102ad0750c1c23a0ee8d3a051fd93d8fb68f1fea63f22da2b&quot;,
+      &quot;error_tail&quot;: &quot;&quot;,
+      &quot;exit_code&quot;: 0,
+      &quot;grade&quot;: {
+        &quot;apply_error&quot;: &quot;&quot;,
+        &quot;checks&quot;: [
+          {
+            &quot;check_id&quot;: &quot;check:typecheck&quot;,
+            &quot;detail&quot;: &quot;clean&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:existing-facade-suite&quot;,
+            &quot;detail&quot;: &quot;Tests  82 passed (82)&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:exposes-close-idle-task&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:routes-through-command-service&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:closes-review-before-mutation&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:runs-scoped-dispatch-and-topup&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:propagates-command-service-failure&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          }
+        ],
+        &quot;grader_sha256&quot;: &quot;48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f&quot;,
+        &quot;passed&quot;: true,
+        &quot;patch_applied&quot;: true,
+        &quot;variant&quot;: &quot;baseline&quot;
+      },
+      &quot;human_intervention&quot;: &quot;none&quot;,
+      &quot;patch_file&quot;: &quot;pilot-001-baseline.patch&quot;,
+      &quot;raw_output_location&quot;: &quot;run-root only; transcripts are never committed&quot;,
+      &quot;raw_output_sha256&quot;: &quot;9de184647b5db7ed44ae87481cf95623110b55dbe6ab6ab285a628d473aa1d61&quot;,
+      &quot;status&quot;: &quot;completed&quot;,
+      &quot;telemetry&quot;: {
+        &quot;cost_telemetry&quot;: &quot;native&quot;,
+        &quot;cost_usd&quot;: 0.8538580000000001,
+        &quot;harness_duration_ms&quot;: 80853,
+        &quot;harness_is_error&quot;: false,
+        &quot;harness_subtype&quot;: &quot;success&quot;,
+        &quot;num_turns&quot;: 13,
+        &quot;tokens&quot;: {
+          &quot;cache_creation&quot;: 44238,
+          &quot;cache_read&quot;: 520666,
+          &quot;input&quot;: 24,
+          &quot;output&quot;: 6041
+        }
+      },
+      &quot;timed_out&quot;: false,
+      &quot;variant&quot;: &quot;baseline&quot;,
+      &quot;wall_seconds&quot;: 87.08
+    },
+    &quot;treatment&quot;: {
+      &quot;diff_bytes&quot;: 1275,
+      &quot;diff_sha256&quot;: &quot;9e0cbeb046bb83e252b3ae6713b85ccfd48baaa710362c792a21d5ea0aa5a48a&quot;,
+      &quot;error_tail&quot;: &quot;&quot;,
+      &quot;exit_code&quot;: 0,
+      &quot;grade&quot;: {
+        &quot;apply_error&quot;: &quot;&quot;,
+        &quot;checks&quot;: [
+          {
+            &quot;check_id&quot;: &quot;check:typecheck&quot;,
+            &quot;detail&quot;: &quot;clean&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:existing-facade-suite&quot;,
+            &quot;detail&quot;: &quot;Tests  82 passed (82)&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:exposes-close-idle-task&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:routes-through-command-service&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:closes-review-before-mutation&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:runs-scoped-dispatch-and-topup&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          },
+          {
+            &quot;check_id&quot;: &quot;check:propagates-command-service-failure&quot;,
+            &quot;detail&quot;: &quot;passed&quot;,
+            &quot;exit_code&quot;: 0,
+            &quot;passed&quot;: true
+          }
+        ],
+        &quot;grader_sha256&quot;: &quot;48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f&quot;,
+        &quot;passed&quot;: true,
+        &quot;patch_applied&quot;: true,
+        &quot;variant&quot;: &quot;treatment&quot;
+      },
+      &quot;human_intervention&quot;: &quot;none&quot;,
+      &quot;patch_file&quot;: &quot;pilot-001-treatment.patch&quot;,
+      &quot;raw_output_location&quot;: &quot;run-root only; transcripts are never committed&quot;,
+      &quot;raw_output_sha256&quot;: &quot;ac50d54151ce8f808a792aa32816fa8c15da1b925ce1209f63a5cf54c3858574&quot;,
+      &quot;status&quot;: &quot;completed&quot;,
+      &quot;telemetry&quot;: {
+        &quot;cost_telemetry&quot;: &quot;native&quot;,
+        &quot;cost_usd&quot;: 1.0258705,
+        &quot;harness_duration_ms&quot;: 86720,
+        &quot;harness_is_error&quot;: false,
+        &quot;harness_subtype&quot;: &quot;success&quot;,
+        &quot;num_turns&quot;: 14,
+        &quot;tokens&quot;: {
+          &quot;cache_creation&quot;: 61279,
+          &quot;cache_read&quot;: 577951,
+          &quot;input&quot;: 26,
+          &quot;output&quot;: 4959
+        }
+      },
+      &quot;timed_out&quot;: false,
+      &quot;variant&quot;: &quot;treatment&quot;,
+      &quot;wall_seconds&quot;: 92.954
+    }
+  },
+  &quot;conclusions&quot;: {
+    &quot;cost_by_arm&quot;: {
+      &quot;baseline&quot;: {
+        &quot;cost_telemetry&quot;: &quot;native&quot;,
+        &quot;cost_usd&quot;: 0.8538580000000001
+      },
+      &quot;treatment&quot;: {
+        &quot;cost_telemetry&quot;: &quot;native&quot;,
+        &quot;cost_usd&quot;: 1.0258705
+      }
+    },
+    &quot;dollar_conclusion_permitted&quot;: true,
+    &quot;dollar_conclusion_reason&quot;: &quot;both arms reported native cost telemetry&quot;,
+    &quot;per_arm&quot;: {
+      &quot;baseline&quot;: {
+        &quot;failing_checks&quot;: [],
+        &quot;graded_pass&quot;: true,
+        &quot;trial_status&quot;: &quot;completed&quot;
+      },
+      &quot;treatment&quot;: {
+        &quot;failing_checks&quot;: [],
+        &quot;graded_pass&quot;: true,
+        &quot;trial_status&quot;: &quot;completed&quot;
+      }
+    },
+    &quot;statistical_claim&quot;: &quot;None. n=1 per arm establishes that the apparatus executes end to end, not that either architecture is better.&quot;,
+    &quot;trials_counted&quot;: 2
+  },
+  &quot;configuration&quot;: {
+    &quot;baseline&quot;: {
+      &quot;argv_template&quot;: [
+        &quot;--print&quot;,
+        &quot;--model&quot;,
+        &quot;{model}&quot;,
+        &quot;--effort&quot;,
+        &quot;{effort}&quot;,
+        &quot;--setting-sources&quot;,
+        &quot;&quot;,
+        &quot;--strict-mcp-config&quot;,
+        &quot;--disable-slash-commands&quot;,
+        &quot;--no-session-persistence&quot;,
+        &quot;--permission-mode&quot;,
+        &quot;acceptEdits&quot;,
+        &quot;--permission-prompts&quot;,
+        &quot;none&quot;,
+        &quot;--allowedTools&quot;,
+        &quot;Bash&quot;,
+        &quot;Read&quot;,
+        &quot;Edit&quot;,
+        &quot;Write&quot;,
+        &quot;Glob&quot;,
+        &quot;Grep&quot;,
+        &quot;TodoWrite&quot;,
+        &quot;--disallowedTools&quot;,
+        &quot;WebFetch&quot;,
+        &quot;WebSearch&quot;,
+        &quot;Task&quot;,
+        &quot;Bash(git push:*)&quot;,
+        &quot;Bash(git remote:*)&quot;,
+        &quot;Bash(gh:*)&quot;,
+        &quot;Bash(curl:*)&quot;,
+        &quot;Bash(wget:*)&quot;,
+        &quot;Bash(ssh:*)&quot;,
+        &quot;Bash(scp:*)&quot;,
+        &quot;Bash(npm publish:*)&quot;,
+        &quot;Bash(pnpm publish:*)&quot;,
+        &quot;--output-format&quot;,
+        &quot;json&quot;,
+        &quot;--max-budget-usd&quot;,
+        &quot;{budget_usd}&quot;
+      ],
+      &quot;arm&quot;: &quot;baseline&quot;,
+      &quot;binary&quot;: &quot;claude&quot;,
+      &quot;binary_path&quot;: &quot;&lt;home&gt;/.local/bin/claude&quot;,
+      &quot;budget_usd&quot;: 12.0,
+      &quot;cost_telemetry&quot;: &quot;native&quot;,
+      &quot;effort&quot;: &quot;high&quot;,
+      &quot;env_template_keys&quot;: [
+        &quot;CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC&quot;,
+        &quot;DISABLE_AUTOUPDATER&quot;,
+        &quot;DISABLE_TELEMETRY&quot;
+      ],
+      &quot;model&quot;: &quot;claude-opus-5&quot;,
+      &quot;prompt_mode&quot;: &quot;stdin&quot;,
+      &quot;runner&quot;: &quot;claude&quot;,
+      &quot;timeout_seconds&quot;: 900,
+      &quot;variant&quot;: &quot;baseline&quot;,
+      &quot;version&quot;: &quot;2.1.278 (Claude Code)&quot;
+    },
+    &quot;differences&quot;: [],
+    &quot;equal&quot;: true,
+    &quot;treatment&quot;: {
+      &quot;argv_template&quot;: [
+        &quot;--print&quot;,
+        &quot;--model&quot;,
+        &quot;{model}&quot;,
+        &quot;--effort&quot;,
+        &quot;{effort}&quot;,
+        &quot;--setting-sources&quot;,
+        &quot;&quot;,
+        &quot;--strict-mcp-config&quot;,
+        &quot;--disable-slash-commands&quot;,
+        &quot;--no-session-persistence&quot;,
+        &quot;--permission-mode&quot;,
+        &quot;acceptEdits&quot;,
+        &quot;--permission-prompts&quot;,
+        &quot;none&quot;,
+        &quot;--allowedTools&quot;,
+        &quot;Bash&quot;,
+        &quot;Read&quot;,
+        &quot;Edit&quot;,
+        &quot;Write&quot;,
+        &quot;Glob&quot;,
+        &quot;Grep&quot;,
+        &quot;TodoWrite&quot;,
+        &quot;--disallowedTools&quot;,
+        &quot;WebFetch&quot;,
+        &quot;WebSearch&quot;,
+        &quot;Task&quot;,
+        &quot;Bash(git push:*)&quot;,
+        &quot;Bash(git remote:*)&quot;,
+        &quot;Bash(gh:*)&quot;,
+        &quot;Bash(curl:*)&quot;,
+        &quot;Bash(wget:*)&quot;,
+        &quot;Bash(ssh:*)&quot;,
+        &quot;Bash(scp:*)&quot;,
+        &quot;Bash(npm publish:*)&quot;,
+        &quot;Bash(pnpm publish:*)&quot;,
+        &quot;--output-format&quot;,
+        &quot;json&quot;,
+        &quot;--max-budget-usd&quot;,
+        &quot;{budget_usd}&quot;
+      ],
+      &quot;arm&quot;: &quot;treatment&quot;,
+      &quot;binary&quot;: &quot;claude&quot;,
+      &quot;binary_path&quot;: &quot;&lt;home&gt;/.local/bin/claude&quot;,
+      &quot;budget_usd&quot;: 12.0,
+      &quot;cost_telemetry&quot;: &quot;native&quot;,
+      &quot;effort&quot;: &quot;high&quot;,
+      &quot;env_template_keys&quot;: [
+        &quot;CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC&quot;,
+        &quot;DISABLE_AUTOUPDATER&quot;,
+        &quot;DISABLE_TELEMETRY&quot;
+      ],
+      &quot;model&quot;: &quot;claude-opus-5&quot;,
+      &quot;prompt_mode&quot;: &quot;stdin&quot;,
+      &quot;runner&quot;: &quot;claude&quot;,
+      &quot;timeout_seconds&quot;: 900,
+      &quot;variant&quot;: &quot;treatment&quot;,
+      &quot;version&quot;: &quot;2.1.278 (Claude Code)&quot;
+    }
+  },
+  &quot;created_at&quot;: &quot;2026-09-22T15:44:04+00:00&quot;,
+  &quot;execution_order&quot;: [
+    &quot;treatment&quot;,
+    &quot;baseline&quot;
+  ],
+  &quot;experiment_id&quot;: &quot;architecture-memory-close-idle-task&quot;,
+  &quot;host&quot;: {
+    &quot;platform&quot;: &quot;Darwin 25.6.0 arm64&quot;,
+    &quot;recorded_at&quot;: &quot;2026-09-22T15:44:04+00:00&quot;
+  },
+  &quot;order_seed&quot;: 897660854,
+  &quot;pair_id&quot;: &quot;pilot-001&quot;,
+  &quot;provenance&quot;: {
+    &quot;archive_sha256&quot;: &quot;fbc2db28a1f7cc322073c46306b3fcd45a8405594aaf5770b9e4d97128c30afe&quot;,
+    &quot;grader_sha256&quot;: &quot;48aef6b50311e82b287f3c67e35a42deeeae7e83b276e5ba44f5eec09039872f&quot;,
+    &quot;manifest_sha256&quot;: &quot;6ab2dafea58682dcec40e1e059af1459ac6cc1911640352bbd784b0568b5646a&quot;,
+    &quot;prompt_sha256&quot;: &quot;be941a75d2fa44e616e1aa12f28401d05183be473c6d0db3e62a2ad7893d5499&quot;,
+    &quot;redactions&quot;: [
+      &quot;CLAUDE.md&quot;,
+      &quot;AGENTS.md&quot;,
+      &quot;ARCHITECTURE.md&quot;,
+      &quot;CHANGELOG.md&quot;,
+      &quot;CONTRIBUTING.md&quot;,
+      &quot;LOOP.md&quot;,
+      &quot;README.md&quot;,
+      &quot;.cursor&quot;,
+      &quot;.github&quot;,
+      &quot;docs&quot;,
+      &quot;evals&quot;,
+      &quot;plans&quot;,
+      &quot;repro&quot;,
+      &quot;skills&quot;,
+      &quot;scripts/repro&quot;
+    ],
+    &quot;runners_sha256&quot;: &quot;7fc258b09cbe6703f286875efb2398959105db8309fe5a4e0c345b15d3d7babb&quot;,
+    &quot;snapshots&quot;: {
+      &quot;baseline&quot;: {
+        &quot;source_tree_sha256&quot;: &quot;759e86dc45041dfe6a632142e4075210b14e076942ab9e7cce1fef8dd325accd&quot;,
+        &quot;target_file_sha256&quot;: &quot;f64a0eb244841907dd96942f7c3fad21d784fb7097b4cae63108e3b7b99aaf16&quot;
+      },
+      &quot;treatment&quot;: {
+        &quot;source_tree_sha256&quot;: &quot;018440bedbb345f90b6189762c3c61d670ab08663853de283b245d9a8631ad22&quot;,
+        &quot;target_file_sha256&quot;: &quot;8486e5e17361c314ed93ab2adaaf8157c250b624ab5de2d0088449216450eabd&quot;
+      }
+    },
+    &quot;source_commit&quot;: &quot;0ca415e4d69a3f59a4b666e65f6362adf2d947ad&quot;,
+    &quot;source_remote&quot;: &quot;https://github.com/Neko-Catpital-Labs/Invoker.git&quot;,
+    &quot;structural_delta_sha256&quot;: &quot;880f00b42fc1f0fd7f8cca16238bc6a4405a8a928c6a20f0acc59faf5855416d&quot;
+  },
+  &quot;schema&quot;: &quot;architecture-memory/pair-record/1&quot;,
+  &quot;structural_delta_summary&quot;: &quot;Route every task-scoped facade mutation through one named helper, mutateTaskScoped(taskId, context, mutate), which owns close-review -&gt; mutate -&gt; scoped dispatch + topup. Pure refactor: no behaviour change.&quot;
+}</pre>
+</body></html>

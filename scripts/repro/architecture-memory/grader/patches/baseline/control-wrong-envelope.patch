@@ -1,0 +1,21 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -177,6 +177,17 @@
+     return this.finalizeWithTopup(started, 'facade.retry-task', { scopedTaskIds: [taskId] });
+   }
+ 
++  async closeIdleTask(taskId: string): Promise<MutationResult> {
++    await this.closeReviewForTask(taskId);
++    const result = await this.deps.commandService.closeIdleTask(
++      makeEnvelope('facade.retry-task', 'surface', 'task', { taskId }),
++    );
++    if (!result.ok) {
++      throw new Error(result.error.message);
++    }
++    return this.finalizeWithTopup([], 'facade.close-idle-task', { scopedTaskIds: [taskId] });
++  }
++
+   async recreateTask(taskId: string): Promise<MutationResult> {
+     await this.closeReviewForTask(taskId);
+     const started = await this.runViaCommandService(

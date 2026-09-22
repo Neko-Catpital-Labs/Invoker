@@ -1,0 +1,29 @@
+{
+  "attempts": {
+    "architecture-memory-close-idle-task|pilot-001|baseline": {
+      "arm": "baseline",
+      "experiment_id": "architecture-memory-close-idle-task",
+      "finished_at": "2026-09-22T15:43:54+00:00",
+      "key": "architecture-memory-close-idle-task|pilot-001|baseline",
+      "note": null,
+      "outcome": "completed",
+      "pair_id": "pilot-001",
+      "started_at": "2026-09-22T15:42:11+00:00",
+      "state": "finished",
+      "variant": "baseline"
+    },
+    "architecture-memory-close-idle-task|pilot-001|treatment": {
+      "arm": "treatment",
+      "experiment_id": "architecture-memory-close-idle-task",
+      "finished_at": "2026-09-22T15:42:01+00:00",
+      "key": "architecture-memory-close-idle-task|pilot-001|treatment",
+      "note": null,
+      "outcome": "completed",
+      "pair_id": "pilot-001",
+      "started_at": "2026-09-22T15:40:13+00:00",
+      "state": "finished",
+      "variant": "treatment"
+    }
+  },
+  "schema": "architecture-memory/attempt-ledger/1"
+}

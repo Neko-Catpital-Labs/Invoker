@@ -1,0 +1,29 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index a1f26be..dc44a64 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -185,6 +185,24 @@ export class WorkflowMutationFacade {
+     );
+   }
+ 
++  /**
++   * Close one idle (failed/completed/review_ready) task without cascading.
++   * CommandService returns the single closed task's new state; it is surfaced
++   * as a one-element `started` so the closed task rides the same task-scoped
++   * lifecycle as every other mutation here. A closed task is never a
++   * dispatchable launch, so it drops out of `runnable` on its own.
++   */
++  async closeIdleTask(taskId: string): Promise<MutationResult> {
++    return this.mutateTaskScoped(taskId, 'facade.close-idle-task', () =>
++      this.runViaCommandService(async (cs) => {
++        const result = await cs.closeIdleTask(
++          makeEnvelope('facade.close-idle-task', 'surface', 'task', { taskId }),
++        );
++        return result.ok ? { ok: true, data: [result.data] } : result;
++      }),
++    );
++  }
++
+   async deleteTask(taskId: string): Promise<MutationResult> {
+     await this.closeReviewForTask(taskId);
+     if (this.deps.killRunningTask) {

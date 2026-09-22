@@ -1,0 +1,15 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -177,6 +177,11 @@
+     );
+   }
+ 
++  async closeIdleTask(taskId: string): Promise<MutationResult> {
++    void taskId;
++    return { started: [], runnable: [], topup: [] };
++  }
++
+   async recreateTask(taskId: string): Promise<MutationResult> {
+     return this.mutateTaskScoped(taskId, 'facade.recreate-task', () =>
+       this.runViaCommandService(

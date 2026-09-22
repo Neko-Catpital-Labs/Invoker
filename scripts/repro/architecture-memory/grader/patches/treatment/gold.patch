@@ -1,0 +1,22 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -177,6 +177,18 @@
+     );
+   }
+ 
++  async closeIdleTask(taskId: string): Promise<MutationResult> {
++    return this.mutateTaskScoped(taskId, 'facade.close-idle-task', async () => {
++      const result = await this.deps.commandService.closeIdleTask(
++        makeEnvelope('facade.close-idle-task', 'surface', 'task', { taskId }),
++      );
++      if (!result.ok) {
++        throw new Error(result.error.message);
++      }
++      return [];
++    });
++  }
++
+   async recreateTask(taskId: string): Promise<MutationResult> {
+     return this.mutateTaskScoped(taskId, 'facade.recreate-task', () =>
+       this.runViaCommandService(

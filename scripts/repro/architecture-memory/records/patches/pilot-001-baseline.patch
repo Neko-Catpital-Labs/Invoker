@@ -1,0 +1,28 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index bfc485e..7aaab49 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -199,6 +199,23 @@ export class WorkflowMutationFacade {
+     return this.finalizeWithTopup(started, 'facade.delete-task', { scopedTaskIds: started.map((task) => task.id) });
+   }
+ 
++  /**
++   * Close a single idle task. CommandService returns the closed task's new
++   * state rather than a launch set, so it is wrapped into the shared
++   * `started` shape: `isDispatchableLaunch` keeps a `closed` task out of
++   * `runnable`, while topup still refills the capacity the close freed.
++   */
++  async closeIdleTask(taskId: string): Promise<MutationResult> {
++    await this.closeReviewForTask(taskId);
++    const started = await this.runViaCommandService(async (cs) => {
++      const result = await cs.closeIdleTask(
++        makeEnvelope('facade.close-idle-task', 'surface', 'task', { taskId }),
++      );
++      return result.ok ? { ok: true as const, data: [result.data] } : result;
++    });
++    return this.finalizeWithTopup(started, 'facade.close-idle-task', { scopedTaskIds: [taskId] });
++  }
++
+   async recreateDownstream(taskId: string): Promise<MutationResult> {
+     await this.closeReviewForTask(taskId);
+     const started = await this.runViaCommandService(

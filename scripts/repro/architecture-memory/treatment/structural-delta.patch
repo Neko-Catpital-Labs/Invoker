@@ -1,0 +1,157 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -170,19 +170,19 @@
+   }
+ 
+   async retryTask(taskId: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = await this.runViaCommandService(
+-      (cs) => cs.retryTask(makeEnvelope('facade.retry-task', 'surface', 'task', { taskId })),
+-    );
+-    return this.finalizeWithTopup(started, 'facade.retry-task', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.retry-task', () =>
++      this.runViaCommandService(
++        (cs) => cs.retryTask(makeEnvelope('facade.retry-task', 'surface', 'task', { taskId })),
++      ),
++    );
+   }
+ 
+   async recreateTask(taskId: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = await this.runViaCommandService(
+-      (cs) => cs.recreateTask(makeEnvelope('facade.recreate-task', 'surface', 'task', { taskId })),
+-    );
+-    return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.recreate-task', () =>
++      this.runViaCommandService(
++        (cs) => cs.recreateTask(makeEnvelope('facade.recreate-task', 'surface', 'task', { taskId })),
++      ),
++    );
+   }
+ 
+   async deleteTask(taskId: string): Promise<MutationResult> {
+@@ -211,36 +211,36 @@
+   }
+ 
+   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = sharedSelectExperiment(taskId, experimentId, {
+-      orchestrator: this.deps.orchestrator,
+-    });
+-    return this.finalizeWithTopup(started, 'facade.select-experiment', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.select-experiment', () =>
++      sharedSelectExperiment(taskId, experimentId, {
++        orchestrator: this.deps.orchestrator,
++      }),
++    );
+   }
+ 
+   async selectExperiments(taskId: string, experimentIds: string[]): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = await sharedSelectExperiments(taskId, experimentIds, {
+-      orchestrator: this.deps.orchestrator,
+-      taskExecutor: this.deps.taskExecutor,
+-    });
+-    return this.finalizeWithTopup(started, 'facade.select-experiments', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.select-experiments', () =>
++      sharedSelectExperiments(taskId, experimentIds, {
++        orchestrator: this.deps.orchestrator,
++        taskExecutor: this.deps.taskExecutor,
++      }),
++    );
+   }
+ 
+   async editTaskCommand(taskId: string, newCommand: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = sharedEditTaskCommand(taskId, newCommand, {
+-      orchestrator: this.deps.orchestrator,
+-    });
+-    return this.finalizeWithTopup(started, 'facade.edit-task-command', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.edit-task-command', () =>
++      sharedEditTaskCommand(taskId, newCommand, {
++        orchestrator: this.deps.orchestrator,
++      }),
++    );
+   }
+ 
+   async editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = sharedEditTaskPrompt(taskId, newPrompt, {
+-      orchestrator: this.deps.orchestrator,
+-    });
+-    return this.finalizeWithTopup(started, 'facade.edit-task-prompt', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.edit-task-prompt', () =>
++      sharedEditTaskPrompt(taskId, newPrompt, {
++        orchestrator: this.deps.orchestrator,
++      }),
++    );
+   }
+ 
+   async editTaskType(
+@@ -248,30 +248,30 @@
+     runnerKind: string,
+     poolMemberId?: string,
+   ): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = sharedEditTaskType(
+-      taskId,
+-      runnerKind,
+-      { orchestrator: this.deps.orchestrator },
+-      poolMemberId,
+-    );
+-    return this.finalizeWithTopup(started, 'facade.edit-task-type', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.edit-task-type', () =>
++      sharedEditTaskType(
++        taskId,
++        runnerKind,
++        { orchestrator: this.deps.orchestrator },
++        poolMemberId,
++      ),
++    );
+   }
+ 
+   async editTaskAgent(taskId: string, agentName: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = sharedEditTaskAgent(taskId, agentName, {
+-      orchestrator: this.deps.orchestrator,
+-    });
+-    return this.finalizeWithTopup(started, 'facade.edit-task-agent', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.edit-task-agent', () =>
++      sharedEditTaskAgent(taskId, agentName, {
++        orchestrator: this.deps.orchestrator,
++      }),
++    );
+   }
+ 
+   async editTaskModel(taskId: string, executionModel: string | null): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = sharedEditTaskModel(taskId, executionModel, {
+-      orchestrator: this.deps.orchestrator,
+-    });
+-    return this.finalizeWithTopup(started, 'facade.edit-task-model', { scopedTaskIds: [taskId] });
++    return this.mutateTaskScoped(taskId, 'facade.edit-task-model', () =>
++      sharedEditTaskModel(taskId, executionModel, {
++        orchestrator: this.deps.orchestrator,
++      }),
++    );
+   }
+ 
+   async setTaskExternalGatePolicies(
+@@ -547,6 +547,16 @@
+     };
+   }
+ 
++  private async mutateTaskScoped(
++    taskId: string,
++    context: string,
++    mutate: () => Promise<TaskState[]> | TaskState[],
++  ): Promise<MutationResult> {
++    await this.closeReviewForTask(taskId);
++    const started = await mutate();
++    return this.finalizeWithTopup(started, context, { scopedTaskIds: [taskId] });
++  }
++
+   private async dispatchWithTopup(
+     started: TaskState[],
+     context: string,
