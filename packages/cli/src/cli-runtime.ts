@@ -156,7 +156,7 @@ type CliRuntimeConfig = {
   externalWorkers?: ExternalWorkerConfig[];
 };
 
-type QueryResource = 'workflows' | 'tasks' | 'capacity';
+type QueryResource = 'workflows' | 'tasks' | 'workflow' | 'task' | 'capacity';
 type QueryOutput = 'text' | 'json';
 
 type QueryOptions = {
@@ -225,6 +225,8 @@ function usage(): string {
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli query workflows [--status <status>] [--output text|json] [--standalone]',
     '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json] [--standalone]',
+    '  invoker-cli query workflow <id> [--output text|json]',
+    '  invoker-cli query task <id> [--output text|json]',
     '  invoker-cli query capacity [--output text|json]',
     '  invoker-cli wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
     '  invoker-cli retry-task <taskId>',
@@ -250,6 +252,7 @@ function usage(): string {
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
     '  query workflows|tasks  Read workflows or tasks from a live owner, or from a read-only database view with --standalone.',
+    '  query workflow|task <id>  Read one workflow or task from a live owner.',
     '  query capacity  Show live pool/member slot usage, queue depth by workflow, and the oldest-waiting task. Requires a live owner.',
     '  wait <workflowId>  Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
@@ -337,9 +340,16 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
 
 function parseQueryArgs(argv: string[]): QueryOptions {
   const resource = argv[0];
-  if (resource !== 'workflows' && resource !== 'tasks' && resource !== 'capacity') {
-    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks|capacity>');
+  if (
+    resource !== 'workflows' && resource !== 'tasks'
+    && resource !== 'workflow' && resource !== 'task'
+    && resource !== 'capacity'
+  ) {
+    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks|workflow <id>|task <id>|capacity>');
   }
+
+  const takesId = resource === 'workflow' || resource === 'task';
+  let targetId: string | undefined;
 
   const options: QueryOptions = {
     resource,
@@ -378,12 +388,21 @@ function parseQueryArgs(argv: string[]): QueryOptions {
     } else if (arg === '--standalone') {
       options.mode = 'standalone';
     } else if (arg === '--help' || arg === '-h') {
-      throw new Error('Usage: invoker-cli query <workflows|tasks> [--workflow <id>] [--status <status>] [--output text|json] [--standalone]');
+      throw new Error('Usage: invoker-cli query <workflows|tasks|workflow <id>|task <id>> [--workflow <id>] [--status <status>] [--output text|json] [--standalone]');
     } else if (arg.startsWith('--')) {
       throw new Error(`Unknown query option: ${arg}`);
+    } else if (takesId && targetId === undefined) {
+      targetId = arg;
     } else {
       throw new Error(`Unexpected query argument: ${arg}`);
     }
+  }
+
+  if (takesId) {
+    if (!targetId) {
+      throw new Error(`Missing id. Usage: invoker-cli query ${resource} <id> [--output text|json]`);
+    }
+    options.forwardedFlags.unshift(targetId);
   }
 
   return options;
@@ -560,6 +579,9 @@ function renderTaskText(tasks: TaskState[]): string {
 async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
   if (options.resource === 'capacity') {
     throw new Error('query capacity requires a live owner: start the Invoker app or run `invoker-cli owner serve`.');
+  }
+  if (options.resource === 'workflow' || options.resource === 'task') {
+    throw new Error(`query ${options.resource} requires a live owner: start the Invoker app or run \`invoker-cli owner serve\`.`);
   }
   let parsedFilter: import('@invoker/contracts').TaskFilterNode | undefined;
   if (options.filter !== undefined) {
