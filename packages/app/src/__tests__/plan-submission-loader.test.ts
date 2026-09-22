@@ -1,11 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PlanDefinition } from '@invoker/workflow-core';
+import { AgentRegistry, type ExecutionAgent } from '@invoker/execution-engine';
 
 vi.mock('../plan-backup.js', () => ({
   backupPlan: vi.fn(() => '/tmp/invoker-plan-backup.yaml'),
 }));
 
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
+
+function makeFixedModelRegistry(): AgentRegistry {
+  const registry = new AgentRegistry();
+  const codexAgent: ExecutionAgent = {
+    name: 'codex',
+    stdinMode: 'ignore',
+    supportedModels: [{ id: 'gpt-5.5', label: 'GPT-5.5' }],
+    supportedModelsProvenance: 'built-in',
+    buildCommand: () => ({ cmd: 'codex', args: [] }),
+    buildResumeArgs: () => ({ cmd: 'codex', args: [] }),
+  };
+  registry.registerExecution(codexAgent);
+  return registry;
+}
 
 function makeDeps() {
   const workflows: Array<{ id: string; featureBranch?: string; staged?: boolean }> = [];
@@ -35,6 +50,7 @@ function makeDeps() {
         }),
       },
       allowGraphMutation: true,
+      executionAgentRegistry: makeFixedModelRegistry(),
     },
   };
 }
@@ -182,5 +198,50 @@ tasks:
     await loadPlanSubmissionBundle(plan, deps, { submittedBy: 'worker' });
 
     expect(loadedPlans[0]?.tasks[0]?.priority).toBe(5);
+  });
+
+  it('rejects a plan whose task names an unrunnable agent/model pairing before loading any workflow', async () => {
+    const { deps, loadedPlans } = makeDeps();
+    const plan = `
+name: Bad Model Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build it
+    executionAgent: codex
+    executionModel: gpt-5.6-luna
+`;
+
+    await expect(loadPlanSubmissionBundle(plan, deps)).rejects.toThrow(/build/);
+
+    expect(deps.orchestrator.loadPlan).not.toHaveBeenCalled();
+    expect(loadedPlans).toHaveLength(0);
+    expect(deps.persistence.listWorkflows()).toHaveLength(0);
+  });
+
+  it('rejects the whole bundle when only the second workflow has a bad agent/model pairing', async () => {
+    const { deps, loadedPlans } = makeDeps();
+    const plan = `
+name: Mixed Stack
+repoUrl: git@github.com:test/repo.git
+workflows:
+  - name: Good Step
+    featureBranch: plan/good-step
+    tasks:
+      - id: good
+        description: Fine
+  - name: Bad Step
+    featureBranch: plan/bad-step
+    tasks:
+      - id: bad
+        description: Not fine
+        executionAgent: codex
+        executionModel: gpt-5.6-luna
+`;
+
+    await expect(loadPlanSubmissionBundle(plan, deps)).rejects.toThrow(/bad/);
+
+    expect(deps.orchestrator.loadPlan).not.toHaveBeenCalled();
+    expect(loadedPlans).toHaveLength(0);
   });
 });
