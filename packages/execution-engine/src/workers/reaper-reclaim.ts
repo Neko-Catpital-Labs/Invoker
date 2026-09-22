@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  statfsSync,
 } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from
 import { hasFreshInUseMark, IN_USE_MARK_DIR } from '../workspace-in-use-mark.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
+import { resolveDiskHeadroomThresholds } from './disk-headroom.js';
 import {
   computeProtectedLocalPaths,
   expandTildeHome,
@@ -636,6 +638,15 @@ function pathKind(path: string): PathKind {
   }
 }
 
+function isSymlink(path: string): { state: 'symlink' | 'other' | 'missing' } | { state: 'error'; detail: string } {
+  try {
+    return lstatSync(path).isSymbolicLink() ? { state: 'symlink' } : { state: 'other' };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
+    return { state: 'error', detail: `${path}: ${errorDetail(err)}` };
+  }
+}
+
 function parsePid(raw: string): number | null {
   const value = raw.trim();
   if (!/^[1-9]\d*$/.test(value)) return null;
@@ -887,6 +898,15 @@ export async function reapStaleDevelopmentWorktrees(opts: {
       let removedInRepo = 0;
       for (const branch of branches.names) {
         const path = join(repoWorktreeRoot, branch);
+        const link = isSymlink(path);
+        if (link.state === 'error') {
+          keepUnchecked(path, link.detail);
+          continue;
+        }
+        if (link.state === 'symlink') {
+          keepUnchecked(path, `${path}: symbolic link`);
+          continue;
+        }
         const kind = pathKind(path);
         if (kind.state === 'error') {
           keepUnchecked(path, kind.detail);
@@ -980,10 +1000,42 @@ export async function reapStaleInvokerCliTempDirs(opts: {
   return removed.sort();
 }
 
+export const CRITICAL_PRESSURE_SNAPSHOT_RETENTION = 6;
+
+export function readDiskUsedPercent(path: string): number {
+  const stats = statfsSync(path);
+  const blocks = Number(stats.blocks);
+  const available = Number(stats.bavail);
+  if (!Number.isFinite(blocks) || !Number.isFinite(available) || blocks <= 0) {
+    throw new Error(`statfs returned unusable block counts (blocks=${stats.blocks}, bavail=${stats.bavail})`);
+  }
+  return ((blocks - available) / blocks) * 100;
+}
+
 export function enforceHourlySnapshotRetention(
   invokerHome: string,
   userHome: string = homedir(),
+  opts: {
+    logger?: Pick<Logger, 'warn'>;
+    readDiskUsedPercent?: (path: string) => number;
+  } = {},
 ): number {
   const home = expandTildeHome(invokerHome, userHome);
-  return pruneHourlySnapshots(join(home, 'db-backups'), hourlySnapshotRetention());
+  const backupDir = join(home, 'db-backups');
+  const measuredPath = existsSync(backupDir) ? backupDir : home;
+  const configured = hourlySnapshotRetention();
+  let retention = configured;
+  try {
+    const usedPercent = (opts.readDiskUsedPercent ?? readDiskUsedPercent)(measuredPath);
+    if (!Number.isFinite(usedPercent)) throw new Error(`disk used percent is not a number: ${usedPercent}`);
+    if (usedPercent >= resolveDiskHeadroomThresholds().criticalPercent) {
+      retention = Math.min(configured, CRITICAL_PRESSURE_SNAPSHOT_RETENTION);
+    }
+  } catch (err) {
+    const warn = opts.logger?.warn?.bind(opts.logger) ?? console.warn;
+    warn(`[reaper] disk usage unreadable for ${measuredPath}, keeping ${configured} hourly snapshots: ${errorDetail(err)}`, {
+      module: 'reaper',
+    });
+  }
+  return pruneHourlySnapshots(backupDir, retention);
 }

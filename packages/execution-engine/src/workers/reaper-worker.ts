@@ -120,6 +120,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         invokerHome: options.invokerHome,
         logger: options.logger,
       });
+      if (ctx.signal?.aborted) return;
 
       const orphanFailed = orphanResults.filter((result) => !result.ok);
       const failed = [...orphanResults, ...worktreeResults].filter((result) => !result.ok);
