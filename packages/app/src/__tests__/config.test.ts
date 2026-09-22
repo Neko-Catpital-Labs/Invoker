@@ -42,6 +42,31 @@ afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawnSync: vi.fn((command: string, args: readonly string[] = [], options?: unknown) =>
+      args[0] === 'debug' && args[1] === 'models'
+        ? {
+            status: 0,
+            stdout: JSON.stringify({
+              models: [
+                { slug: 'gpt-5.6-luna', display_name: 'GPT-5.6-Luna' },
+                { slug: 'gpt-5.5', display_name: 'GPT-5.5' },
+              ],
+            }),
+            stderr: '',
+            output: [],
+            pid: 1,
+            signal: null,
+          }
+        : (actual.spawnSync as (...callArgs: never[]) => unknown)(
+            ...([command, args, options] as unknown as never[]),
+          )),
+  };
+});
+
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof NodeOs>();
   return {

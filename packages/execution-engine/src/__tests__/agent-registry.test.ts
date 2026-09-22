@@ -30,6 +30,17 @@ beforeEach(() => {
   } as any);
 });
 
+function stubCodexCatalog(models: ReadonlyArray<{ slug: string; display_name: string }>): void {
+  vi.mocked(spawnSync).mockReturnValue({
+    status: 0,
+    stdout: JSON.stringify({ models }),
+    stderr: '',
+    output: [],
+    pid: 1,
+    signal: null,
+  } as never);
+}
+
 function makeExecutionAgent(name: string, opts?: {
   bundledSkillRoot?: string;
   bundledSkills?: readonly string[];
@@ -65,10 +76,7 @@ describe('registerBuiltinAgents', () => {
       }),
       expect.objectContaining({
         name: 'codex',
-        supportedModels: expect.arrayContaining([
-          { id: 'gpt-5', label: 'GPT-5' },
-          { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
-        ]),
+        supportedModels: [],
       }),
       expect.objectContaining({
         name: 'omp',
@@ -95,6 +103,13 @@ describe('registerBuiltinAgents', () => {
       }),
     ]));
   });
+  it('exposes no invented Codex catalog when both discovery probes fail', () => {
+    const codexAgent = registerBuiltinAgents().getOrThrow('codex');
+
+    expect(codexAgent.supportedModels).toEqual([]);
+    expect(() => assertExecutionModelSupported(codexAgent, 'gpt-5.5')).toThrow(/discovery is unavailable/i);
+  });
+
   it('prefers Codex models discovered from the CLI', () => {
     vi.mocked(spawnSync).mockReturnValueOnce({
       status: 0,
@@ -185,11 +200,13 @@ describe('AgentRegistry', () => {
     );
   });
   it('accepts versioned OpenAI-style models for codex', () => {
+    stubCodexCatalog([{ slug: 'gpt-5.1-codex-max', display_name: 'GPT-5.1 Codex Max' }]);
     const codexAgent = registerBuiltinAgents().getOrThrow('codex');
     expect(() => assertExecutionModelSupported(codexAgent, 'gpt-5.1-codex-max')).not.toThrow();
   });
 
   it('rejects clearly foreign models for codex', () => {
+    stubCodexCatalog([{ slug: 'gpt-5.5', display_name: 'GPT-5.5' }]);
     const codexAgent = registerBuiltinAgents().getOrThrow('codex');
     expect(() => assertExecutionModelSupported(codexAgent, 'claude')).toThrow(
       'Execution model "claude" is not supported for execution agent "codex".',
