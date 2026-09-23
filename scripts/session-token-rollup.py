@@ -302,12 +302,30 @@ def claude_usage_tokens(usage):
     }
 
 
+def claude_usage_fields(row, message):
+    usage = row.get("usage")
+    if not isinstance(usage, dict):
+        usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None, None
+    model = row.get("model") or message.get("model") or UNKNOWN_MODEL
+    return usage, model
+
+
+def claude_usage_key(row, message, row_index):
+    message_id = message.get("id") or row.get("id")
+    request_id = row.get("requestId")
+    if message_id is None and request_id is None:
+        return ("row", row.get("uuid") or row_index)
+    return (message_id, request_id)
+
+
 def collect_claude_file(rollup, root, path):
     project, session_id, is_subagent = claude_session_of(root, path)
     stats = rollup.session(CLAUDE, session_id, project)
     forked_from = None
     fork_start_context = None
-    for row in rollup.rows(path):
+    for row_index, row in enumerate(rollup.rows(path)):
         row_session = row.get("sessionId")
         if not is_subagent and row_session and row_session != session_id:
             forked_from = row_session
@@ -328,16 +346,17 @@ def collect_claude_file(rollup, root, path):
             continue
         if row_type != "assistant":
             continue
-        message = row.get("message") or {}
+        message = row.get("message")
+        if not isinstance(message, dict):
+            message = {}
         if message.get("isCompactSummary") is True or row.get("isCompactSummary") is True:
             stats.compactions += 1
-        usage = message.get("usage")
-        if not isinstance(usage, dict):
+        usage, model = claude_usage_fields(row, message)
+        if usage is None:
             continue
-        model = message.get("model") or UNKNOWN_MODEL
         if model == SYNTHETIC_MODEL:
             continue
-        key = (message.get("id"), row.get("requestId"))
+        key = claude_usage_key(row, message, row_index)
         if key in stats.seen_usage_keys:
             continue
         stats.seen_usage_keys.add(key)
