@@ -30,6 +30,17 @@ beforeEach(() => {
   } as any);
 });
 
+function stubCodexCatalog(models: Array<{ slug: string; display_name: string }>): void {
+  vi.mocked(spawnSync).mockReturnValueOnce({
+    status: 0,
+    stdout: JSON.stringify({ models }),
+    stderr: '',
+    output: [],
+    pid: 1,
+    signal: null,
+  } as any);
+}
+
 function makeExecutionAgent(name: string, opts?: {
   bundledSkillRoot?: string;
   bundledSkills?: readonly string[];
@@ -64,13 +75,6 @@ describe('registerBuiltinAgents', () => {
         ]),
       }),
       expect.objectContaining({
-        name: 'codex',
-        supportedModels: expect.arrayContaining([
-          { id: 'gpt-5', label: 'GPT-5' },
-          { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
-        ]),
-      }),
-      expect.objectContaining({
         name: 'omp',
         supportedModels: expect.arrayContaining([
           { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
@@ -94,6 +98,16 @@ describe('registerBuiltinAgents', () => {
         ]),
       }),
     ]));
+  });
+
+  it('lists codex with no models when its catalog cannot be discovered', () => {
+    const harnesses = registerBuiltinAgents().listExecutionHarnesses();
+    expect(harnesses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'codex', supportedModels: [] }),
+    ]));
+    expect(harnesses.map((harness) => harness.name)).toEqual(
+      expect.arrayContaining(['claude', 'codex', 'omp', 'kimi', 'qwen']),
+    );
   });
   it('prefers Codex models discovered from the CLI', () => {
     vi.mocked(spawnSync).mockReturnValueOnce({
@@ -185,11 +199,13 @@ describe('AgentRegistry', () => {
     );
   });
   it('accepts versioned OpenAI-style models for codex', () => {
+    stubCodexCatalog([{ slug: 'gpt-5.1-codex-max', display_name: 'GPT-5.1 Codex Max' }]);
     const codexAgent = registerBuiltinAgents().getOrThrow('codex');
     expect(() => assertExecutionModelSupported(codexAgent, 'gpt-5.1-codex-max')).not.toThrow();
   });
 
   it('rejects clearly foreign models for codex', () => {
+    stubCodexCatalog([{ slug: 'gpt-5', display_name: 'GPT-5' }]);
     const codexAgent = registerBuiltinAgents().getOrThrow('codex');
     expect(() => assertExecutionModelSupported(codexAgent, 'claude')).toThrow(
       'Execution model "claude" is not supported for execution agent "codex".',
