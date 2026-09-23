@@ -1,0 +1,4 @@
+{"id":"u1","type":"message","timestamp":"2026-09-20T12:00:01.000Z","message":{"role":"user","content":"user ask containing SECRET-TEXT-9f3"}}
+{"id":"a1","type":"message","timestamp":"2026-09-20T12:00:02.000Z","message":{"role":"assistant","model":"gpt-5.4","content":[{"type":"text","text":"answer containing SECRET-TEXT-9f3"}],"usage":{"input":10,"output":20,"cacheRead":30,"cacheWrite":40,"totalTokens":100}}}
+{"id":"a2","type":"message","timestamp":"2026-09-20T12:05:00.000Z","message":{"role":"assistant","model":"gpt-5.4","content":[{"type":"text","text":"second answer, SECRET-TEXT-9f3 again"}],"usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"totalTokens":10}}}
+{"id":"a0","type":"message","timestamp":"2026-08-02T12:05:00.000Z","message":{"role":"assistant","model":"gpt-5.4","content":[{"type":"text","text":"SECRET-TEXT-9f3 before the cutoff"}],"usage":{"input":5000,"output":5000,"cacheRead":5000,"cacheWrite":5000,"totalTokens":20000}}}
