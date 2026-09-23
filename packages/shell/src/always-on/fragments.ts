@@ -43,7 +43,7 @@ After submit, arm \`invoker-cli wait <workflowId>\` with \`notify_on_output\` on
 
 export const CLAUDE_HOOK_SCRIPT = `#!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -51,6 +51,9 @@ const additionalContext = ${JSON.stringify(EXECUTION_ROUTING_FRAGMENT.trim())};
 const TASK_NOTIFICATION_PREFIX = '<task-notification>';
 const STATE_DIR_NAME = 'invoker-execution-hook';
 const COMPACTION_MARKERS = ['"compact_boundary"', '"isCompactSummary":true', '"isCompactSummary": true'];
+const STATE_DIR_MODE = 0o700;
+const STATE_FILE_MODE = 0o600;
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 function warn(what, error) {
   process.stderr.write(\`invoker-execution hook: \${what}: \${error && error.message ? error.message : String(error)}\\n\`);
@@ -77,14 +80,25 @@ function readEvent() {
 
 function stateFilePath(sessionId) {
   const dir = path.join(tmpdir(), STATE_DIR_NAME);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: STATE_DIR_MODE });
+  const stat = lstatSync(dir);
+  if (!stat.isDirectory()) throw new Error(\`hook state path is not a directory: \${dir}\`);
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+    throw new Error(\`hook state directory is not owned by this user: \${dir}\`);
+  }
+  if ((stat.mode & 0o077) !== 0) chmodSync(dir, STATE_DIR_MODE);
   return path.join(dir, \`\${createHash('sha256').update(sessionId).digest('hex').slice(0, 32)}.json\`);
 }
 
 function readLastInjectedCompactions(file) {
   let raw;
   try {
-    raw = readFileSync(file, 'utf8');
+    const fd = openSync(file, constants.O_RDONLY | NOFOLLOW);
+    try {
+      raw = readFileSync(fd, 'utf8');
+    } finally {
+      closeSync(fd);
+    }
   } catch (error) {
     if (error && error.code === 'ENOENT') return { known: true, value: null };
     warn(\`could not read hook state \${file}\`, error);
@@ -117,10 +131,19 @@ function countCompactions(transcriptPath) {
 }
 
 function rememberInjection(file, compactions) {
+  let fd;
   try {
-    writeFileSync(file, JSON.stringify({ compactions }));
+    fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | NOFOLLOW, STATE_FILE_MODE);
   } catch (error) {
     warn(\`could not write hook state \${file}\`, error);
+    return;
+  }
+  try {
+    writeFileSync(fd, JSON.stringify({ compactions }));
+  } catch (error) {
+    warn(\`could not write hook state \${file}\`, error);
+  } finally {
+    closeSync(fd);
   }
 }
 

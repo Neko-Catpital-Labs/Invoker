@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -98,5 +99,34 @@ describe('claude prompt submit hook', () => {
     const missing = path.join(root, 'nope.jsonl');
     expect(run({ session_id: 's', transcript_path: missing, prompt: 'hi' }).additionalContext).not.toBeNull();
     expect(run({ session_id: 's', transcript_path: missing, prompt: 'hi' }).additionalContext).not.toBeNull();
+  });
+
+  function stateDir(): string {
+    return path.join(statePath, 'invoker-execution-hook');
+  }
+
+  function stateFileFor(sessionId: string): string {
+    return path.join(stateDir(), `${createHash('sha256').update(sessionId).digest('hex').slice(0, 32)}.json`);
+  }
+
+  it('never writes through a symlink planted at the state file path', () => {
+    mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
+    const victim = path.join(root, 'victim.txt');
+    writeFileSync(victim, 'do not clobber me');
+    symlinkSync(victim, stateFileFor('session-symlink'));
+
+    expect(humanPrompt('session-symlink').additionalContext).not.toBeNull();
+    expect(humanPrompt('session-symlink').additionalContext).not.toBeNull();
+    expect(readFileSync(victim, 'utf8')).toBe('do not clobber me');
+  });
+
+  it('tightens a pre-created world-writable state directory and writes private state', () => {
+    mkdirSync(stateDir(), { recursive: true });
+    chmodSync(stateDir(), 0o777);
+
+    expect(humanPrompt('session-perms').additionalContext).not.toBeNull();
+
+    expect(statSync(stateDir()).mode & 0o777).toBe(0o700);
+    expect(statSync(stateFileFor('session-perms')).mode & 0o777).toBe(0o600);
   });
 });
