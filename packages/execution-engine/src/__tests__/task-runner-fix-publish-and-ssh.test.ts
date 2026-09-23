@@ -2779,6 +2779,7 @@ describe('TaskRunner', () => {
         return '';
       };
       (executor as any).execGitIn = async (args: string[], dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         gitCalls.push({ args: [...args], dir });
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'deadbeef';
         if (args[0] === 'rev-parse' && args[1] === '--verify') {
@@ -5688,7 +5689,7 @@ describe('TaskRunner', () => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
-      (executor as any).execGitIn = async () => '';
+      (executor as any).execGitIn = async (args: string[]) => (args[0] === 'diff' && args[1] === '--name-only' ? 'src/example.ts' : '');
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue(rawSummary);
@@ -5763,7 +5764,7 @@ describe('TaskRunner', () => {
       });
 
       (executor as any).execGitReadonly = async () => '';
-      (executor as any).execGitIn = async () => '';
+      (executor as any).execGitIn = async (args: string[]) => (args[0] === 'diff' && args[1] === '--name-only' ? 'src/example.ts' : '');
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nWorkflow summary');

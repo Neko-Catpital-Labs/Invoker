@@ -1003,48 +1003,46 @@ export async function runMergeGateActionImpl(
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
         const reviewBase = await resolveReviewBaseRef(host, gateWorkspacePath!, baseBranch);
 
-        if (isInvokerRepoUrl(workflow?.repoUrl)) {
-          const changedFiles = await listReviewableChangedFiles(
-            host,
-            gateWorkspacePath!,
-            reviewBase.gitRef,
+        const changedFiles = await listReviewableChangedFiles(
+          host,
+          gateWorkspacePath!,
+          reviewBase.gitRef,
+          featureBranch,
+        );
+        if (changedFiles.length === 0) {
+          logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty branch', {
+            baseBranch: reviewBase.branchName,
             featureBranch,
-          );
-          if (changedFiles.length === 0) {
-            logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
-              baseBranch: reviewBase.branchName,
-              featureBranch,
-            });
-            mergeTrace('GATE_WS_PATH_REVIEW_PUBLISH_NOOP', {
-              taskId: task.id,
-              gateWorkspacePath: gateWorkspacePath ?? null,
-              baseBranch: reviewBase.branchName,
-              featureBranch,
-              onFinish,
-              mergeMode,
-            });
-            response = {
-              requestId: `merge-${task.id}`,
-              actionId: task.id,
-              executionGeneration: task.execution.generation ?? 0,
-              status: 'completed',
-              outputs: { exitCode: 0, summary, branch: featureBranch },
-            };
-            return {
-              response,
-              taskChanges: {
-                config: { summary },
-                execution: {
-                  branch: featureBranch,
-                  workspacePath: gateWorkspacePath,
-                  reviewUrl: undefined,
-                  reviewId: undefined,
-                  reviewStatus: undefined,
-                  reviewGate: undefined,
-                },
+          });
+          mergeTrace('GATE_WS_PATH_REVIEW_PUBLISH_NOOP', {
+            taskId: task.id,
+            gateWorkspacePath: gateWorkspacePath ?? null,
+            baseBranch: reviewBase.branchName,
+            featureBranch,
+            onFinish,
+            mergeMode,
+          });
+          response = {
+            requestId: `merge-${task.id}`,
+            actionId: task.id,
+            executionGeneration: task.execution.generation ?? 0,
+            status: 'completed',
+            outputs: { exitCode: 0, summary, branch: featureBranch },
+          };
+          return {
+            response,
+            taskChanges: {
+              config: { summary },
+              execution: {
+                branch: featureBranch,
+                workspacePath: gateWorkspacePath,
+                reviewUrl: undefined,
+                reviewId: undefined,
+                reviewStatus: undefined,
+                reviewGate: undefined,
               },
-            };
-          }
+            },
+          };
         }
 
         const expectedGeneration = task.execution.generation ?? 0;
@@ -1569,10 +1567,10 @@ export async function publishAfterFixImpl(
       : { branchName: normalizeBranchForGithubCli(baseBranch), gitRef: baseBranch };
 
     let skipReviewForEmptyDiff = false;
-    if (shouldPublishReview && isInvokerRepoUrl(workflow?.repoUrl)) {
+    if (shouldPublishReview) {
       const changedFiles = await listReviewableChangedFiles(host, consolidateDir, reviewBase.gitRef, featureBranch);
       if (changedFiles.length === 0) {
-        logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
+        logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty branch', {
           baseBranch: reviewBase.branchName,
           featureBranch,
         });
