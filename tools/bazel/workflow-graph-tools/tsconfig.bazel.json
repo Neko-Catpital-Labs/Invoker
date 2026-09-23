@@ -19,14 +19,14 @@
     "composite": false,
     "sourceMap": true,
     "typeRoots": [
-      "../../tools/bazel/workflow-graph-tools/node_modules/@types"
+      "node_modules/@types"
     ]
   },
   "include": [
-    "src/**/*.ts"
+    "../../../packages/workflow-graph/src/**/*.ts"
   ],
   "exclude": [
-    "**/__tests__/**",
-    "**/*.test.ts"
+    "../../../packages/workflow-graph/**/__tests__/**",
+    "../../../packages/workflow-graph/**/*.test.ts"
   ]
 }

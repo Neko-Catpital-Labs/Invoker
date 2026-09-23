@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import YAML from 'yaml';
 
 function assert(cond, msg) {
@@ -93,6 +93,33 @@ for (const pkg of enabled.packages ?? []) {
     `${buildPath} must be generator-owned`,
   );
 }
+
+const toolsDir = 'tools/bazel/workflow-graph-tools';
+const bazelTsconfigPath = `${toolsDir}/tsconfig.bazel.json`;
+const bazelTsconfig = JSON.parse(readFileSync(bazelTsconfigPath, 'utf8'));
+const resolveFromTsconfig = (p) => relative('.', resolve(toolsDir, p)).split(sep).join('/');
+
+for (const [field, patterns, wantPrefix] of [
+  ['include', bazelTsconfig.include ?? [], 'packages/workflow-graph/src/'],
+  ['exclude', bazelTsconfig.exclude ?? [], 'packages/workflow-graph/'],
+  ['typeRoots', bazelTsconfig.compilerOptions?.typeRoots ?? [], `${toolsDir}/node_modules/@types`],
+]) {
+  assert(patterns.length > 0, `${bazelTsconfigPath} must declare ${field}`);
+  for (const pattern of patterns) {
+    const resolved = resolveFromTsconfig(pattern);
+    assert(
+      resolved.startsWith(wantPrefix),
+      `${bazelTsconfigPath} ${field} entry ${JSON.stringify(pattern)} resolves to ${resolved}; `
+      + `TypeScript resolves it from the tsconfig's own directory, not tsup's cwd, so it must land on ${wantPrefix}`,
+    );
+  }
+}
+
+const buildBazel = readFileSync('packages/workflow-graph/BUILD.bazel', 'utf8');
+assert(
+  buildBazel.includes(`../../${toolsDir}/tsconfig.bazel.json`),
+  `packages/workflow-graph/BUILD.bazel --tsconfig must stay relative to tsup's chdir (${bazelTsconfigPath})`,
+);
 
 assert(
   !/container-image=docker:\/\/ghcr\.io\/buildbuddy-io\/executor-docker-default/.test(bazelrc),
