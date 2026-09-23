@@ -297,12 +297,12 @@ def claude_usage_tokens(usage):
 def collect_claude_file(rollup, root, path):
     project, session_id, is_subagent = claude_session_of(root, path)
     stats = rollup.session(CLAUDE, session_id, project)
-    parents = set()
+    forked_from = None
     fork_start_context = None
     for row in rollup.rows(path):
         row_session = row.get("sessionId")
         if not is_subagent and row_session and row_session != session_id:
-            parents.add(row_session)
+            forked_from = row_session
             continue
         timestamp = row.get("timestamp")
         if not rollup.in_window(timestamp):
@@ -336,11 +336,11 @@ def collect_claude_file(rollup, root, path):
         stats.note_worker_origin(row.get("cwd"))
         tokens = claude_usage_tokens(usage)
         context = tokens["input"] + tokens["cache_read"] + tokens["cache_write"]
-        if parents and fork_start_context is None:
+        if forked_from and fork_start_context is None:
             fork_start_context = context
         rollup.bill(stats, model, tokens, context, timestamp)
-    for parent_id in parents:
-        rollup.fork_starts.setdefault(parent_id, {})[session_id] = fork_start_context or 0
+    if forked_from:
+        rollup.fork_starts.setdefault(forked_from, {})[session_id] = fork_start_context or 0
 
 
 def collect_claude(rollup, roots):

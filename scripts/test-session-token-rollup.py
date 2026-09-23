@@ -172,6 +172,90 @@ class TestClaudeCollection(unittest.TestCase):
         self.assertEqual(row["peak_context"], 6)
 
 
+class TestForkOfAFork(unittest.TestCase):
+    """Root R is forked into C, and C is forked again into G. G's log copies
+    both R's and C's rows, so a fork must attach to the session it was actually
+    forked from: R sees only C (start context 1002) and C sees only G (start
+    context 5004). G's own copied rows are never billed to R or C."""
+
+    ROOT = "11110000-0000-0000-0000-000000000001"
+    CHILD = "22220000-0000-0000-0000-000000000002"
+    GRANDCHILD = "33330000-0000-0000-0000-000000000003"
+
+    def row(self, session_id, message_id, input_tokens, cache_read, output_tokens):
+        return {
+            "type": "assistant",
+            "sessionId": session_id,
+            "timestamp": "2026-09-20T10:00:00.000Z",
+            "requestId": "req_" + message_id,
+            "cwd": "/home/user/forks",
+            "message": {
+                "id": message_id,
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": MARKER}],
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": cache_read,
+                    "output_tokens": output_tokens,
+                },
+            },
+        }
+
+    def collect(self):
+        tmp = tempfile.mkdtemp()
+        project = os.path.join(tmp, "claude", "projects", "-home-user-forks")
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(project)
+        os.makedirs(empty)
+        root_row = self.row(self.ROOT, "msg_r", 10, 0, 1)
+        child_row = self.row(self.CHILD, "msg_c", 2, 1000, 3)
+        logs = {
+            self.ROOT: [root_row],
+            self.CHILD: [root_row, child_row],
+            self.GRANDCHILD: [root_row, child_row, self.row(self.GRANDCHILD, "msg_g", 4, 5000, 5)],
+        }
+        for session_id, rows in logs.items():
+            with open(os.path.join(project, session_id + ".jsonl"), "w") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+        proc = run_script([
+            "collect", "--since", SINCE, "--host", "mac", "--now", "2026-09-23T00:00:00Z",
+            "--claude-root", os.path.join(tmp, "claude", "projects"),
+            "--codex-root", empty, "--omp-root", empty,
+        ])
+        return proc, json.loads(proc.stdout)
+
+    def setUp(self):
+        self.proc, self.report = self.collect()
+        self.sessions = sessions_by_id(self.report)
+
+    def test_root_counts_only_its_direct_fork(self):
+        row = self.sessions[self.ROOT]
+        self.assertEqual(row["fork_count"], 1)
+        self.assertEqual(row["median_fork_start_context"], 1002)
+
+    def test_intermediate_fork_owns_the_fork_of_a_fork(self):
+        row = self.sessions[self.CHILD]
+        self.assertEqual(row["fork_count"], 1)
+        self.assertEqual(row["median_fork_start_context"], 5004)
+
+    def test_deepest_fork_has_no_forks_of_its_own(self):
+        row = self.sessions[self.GRANDCHILD]
+        self.assertEqual(row["fork_count"], 0)
+        self.assertIsNone(row["median_fork_start_context"])
+
+    def test_copied_rows_are_billed_once_to_their_own_session(self):
+        self.assertEqual(self.sessions[self.ROOT]["total"], 11)
+        self.assertEqual(self.sessions[self.CHILD]["total"], 1005)
+        self.assertEqual(self.sessions[self.GRANDCHILD]["total"], 5009)
+        self.assertEqual(self.report["errors"]["forks_without_parent"], 0)
+
+    def test_no_message_text_leaks(self):
+        self.assertNotIn(MARKER, self.proc.stdout)
+
+
 class TestCodexCollection(unittest.TestCase):
     """total_token_usage runs 1000/400/100 -> 3000/1400/250 -> 500/100/20.
     Uncached input deltas are 600 + 1000 + 400 = 2000, cached 400 + 1000 + 100
