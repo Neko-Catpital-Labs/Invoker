@@ -124,6 +124,10 @@ export class CodexExecutionAgent implements ExecutionAgent {
     models: readonly ExecutionModelOption[];
     provenance: SupportedModelsProvenance;
   };
+  private discoveryFailureCache?: {
+    expiresAt: number;
+    failures: readonly CodexModelProbeFailure[];
+  };
 
   constructor(config: CodexExecutionAgentConfig = {}) {
     this.command = config.command ?? 'codex';
@@ -178,10 +182,19 @@ export class CodexExecutionAgent implements ExecutionAgent {
     if (cached && cached.expiresAt > now) {
       return cached.models;
     }
+    const cachedFailure = this.discoveryFailureCache;
+    if (cachedFailure && cachedFailure.expiresAt > now) {
+      throw new CodexModelDiscoveryUnavailableError(this.command, cachedFailure.failures);
+    }
     const discovered = this.discoverSupportedModels();
     if (discovered.kind === 'failed') {
+      this.discoveryFailureCache = {
+        expiresAt: now + CODEX_MODEL_CACHE_MS,
+        failures: discovered.failures,
+      };
       throw new CodexModelDiscoveryUnavailableError(this.command, discovered.failures);
     }
+    this.discoveryFailureCache = undefined;
     this.supportedModelCache = {
       expiresAt: now + CODEX_MODEL_CACHE_MS,
       models: discovered.models,
