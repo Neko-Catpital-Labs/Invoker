@@ -28,6 +28,7 @@ import { REQUEUE_WORKER_KIND } from '../workers/requeue-worker.js';
 import { WORKFLOW_RESUME_WORKER_KIND } from '../workers/workflow-resume-worker.js';
 import { E2E_AUTOFIX_WORKER_KIND } from '../workers/e2e-autofix-worker.js';
 import { WORKER_SESSION_MINE_WORKER_KIND } from '../workers/worker-session-mine-worker.js';
+import { SESSION_TOKEN_PUSH_WORKER_KIND } from '../workers/session-token-push-worker.js';
 import { SLACK_BUG_SCAN_WORKER_KIND } from '../workers/slack-bug-scan-worker.js';
 import { IDLE_TASK_CLEANUP_WORKER_KIND } from '../workers/idle-task-cleanup-worker.js';
 import { CROSS_REPO_RESEARCH_WORKER_KIND } from '../workers/cross-repo-research-worker.js';
@@ -101,6 +102,7 @@ describe('worker registry', () => {
       PR_AUTO_LABEL_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
       WORKER_SESSION_MINE_WORKER_KIND,
+      SESSION_TOKEN_PUSH_WORKER_KIND,
       SLACK_BUG_SCAN_WORKER_KIND,
       IDLE_TASK_CLEANUP_WORKER_KIND,
       CROSS_REPO_RESEARCH_WORKER_KIND,
@@ -128,6 +130,7 @@ describe('worker registry', () => {
     expect(registry.get(PR_AUTO_LABEL_WORKER_KIND)).toBeDefined();
     expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(WORKER_SESSION_MINE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(SESSION_TOKEN_PUSH_WORKER_KIND)).toBeDefined();
     expect(registry.get(SLACK_BUG_SCAN_WORKER_KIND)).toBeDefined();
     expect(registry.get(IDLE_TASK_CLEANUP_WORKER_KIND)).toBeDefined();
     expect(registry.get(CROSS_REPO_RESEARCH_WORKER_KIND)).toBeDefined();
