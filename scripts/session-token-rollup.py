@@ -49,6 +49,14 @@ def utc_now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def iso_day(value):
+    try:
+        day = datetime.strptime((value or "").strip(), "%Y-%m-%d")
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected YYYY-MM-DD, got {!r}".format(value))
+    return "{:04d}-{:02d}-{:02d}".format(day.year, day.month, day.day)
+
+
 def parse_iso(value):
     text = (value or "").strip()
     if not text:
@@ -592,7 +600,7 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
 
     collect = sub.add_parser("collect", help="Scan local agent logs and print one JSON report.")
-    collect.add_argument("--since", required=True, help="Only count turns on or after this YYYY-MM-DD.")
+    collect.add_argument("--since", required=True, type=iso_day, help="Only count turns on or after this YYYY-MM-DD.")
     collect.add_argument("--host", default="", help="Host label for the report (default: hostname).")
     collect.add_argument("--now", default="", help="Override generatedAt (ISO8601).")
     collect.add_argument("--claude-root", action="append", default=[], help="Claude projects dir; repeatable.")

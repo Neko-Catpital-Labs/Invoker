@@ -51,10 +51,10 @@ def run_script(args, check=True):
     return proc
 
 
-def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=(), session_limit=None):
+def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=(), session_limit=None, since=SINCE, check=True):
     args = [
         "collect",
-        "--since", SINCE,
+        "--since", since,
         "--host", host,
         "--now", now,
         "--claude-root", CLAUDE_ROOT,
@@ -65,7 +65,9 @@ def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=(), s
         args += ["--claude-root", root]
     if session_limit is not None:
         args += ["--sessions", str(session_limit)]
-    proc = run_script(args)
+    proc = run_script(args, check=check)
+    if not check and proc.returncode != 0:
+        return proc, None
     return proc, json.loads(proc.stdout)
 
 
@@ -551,6 +553,41 @@ class TestMachineSessionCount(unittest.TestCase):
         _proc, report = run_collect()
         del report["session_count"]
         self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
+
+
+class TestSinceIsValidatedAndNormalized(unittest.TestCase):
+    """--since is parsed as a date, so an unpadded day still selects the window.
+
+    in_window compares timestamp[:10] >= since as strings, so an unpadded
+    "2026-9-1" would sort above every "2026-09-.." timestamp and silently
+    drop every dated turn, leaving a near-zero report that still exits 0.
+    """
+
+    def test_unpadded_since_selects_the_same_window_as_the_padded_form(self):
+        _proc, padded = run_collect()
+        _proc, unpadded = run_collect(since="2026-9-1")
+        self.assertEqual(unpadded["session_count"], padded["session_count"])
+        self.assertEqual(unpadded["sessions"], padded["sessions"])
+        self.assertEqual(
+            unpadded["totals_by_tool_origin_model_day"],
+            padded["totals_by_tool_origin_model_day"],
+        )
+
+    def test_unpadded_since_is_normalized_in_the_report(self):
+        _proc, report = run_collect(since="2026-9-1")
+        self.assertEqual(report["since"], SINCE)
+
+    def test_invalid_since_exits_nonzero_instead_of_an_empty_report(self):
+        proc, report = run_collect(since="banana", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIsNone(report)
+        self.assertIn("YYYY-MM-DD", proc.stderr)
+        self.assertNotIn("session_count", proc.stdout)
+
+    def test_impossible_calendar_day_is_rejected(self):
+        proc, _report = run_collect(since="2026-02-30", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("YYYY-MM-DD", proc.stderr)
 
 
 class TestMerge(unittest.TestCase):
