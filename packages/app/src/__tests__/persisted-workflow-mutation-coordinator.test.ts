@@ -1917,6 +1917,66 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(event.message).not.toContain('createSshRemoteScriptError');
   });
 
+  it('keeps the preemption failure when a lingering dispatch rejects with a different error', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    let rejectHeldDispatch: (error: unknown) => void = () => {};
+    const heldDispatch = new Promise<void>((_, reject) => { rejectHeldDispatch = reject; });
+    void heldDispatch.catch(() => {});
+    const failureEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? String(args[0]);
+        if (command.includes('hold-work')) {
+          await heldDispatch;
+        }
+      },
+      {
+        onIntentFailed: (event) => {
+          failureEvents.push(event);
+        },
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/task-0', 'hold-work'] }],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    const recreate = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-1'] }],
+    );
+    await recreate;
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent #2/i);
+    expect(failureEvents.filter((event) => event.intentId === 1)).toHaveLength(1);
+
+    rejectHeldDispatch(new Error('StaleLineageError: workflow lineage advanced past this mutation'));
+    await waitFor(() => failureEvents.filter((event) => event.intentId === 1).length > 1, 10);
+
+    const preempted = adapter.loadWorkflowMutationIntent(1);
+    expect(preempted?.status).toBe('failed');
+    expect(preempted?.error).toContain('Superseded by recreate intent #2');
+    expect(preempted?.error).not.toContain('StaleLineageError');
+    expect(failureEvents.filter((event) => event.intentId === 1)).toHaveLength(1);
+  });
+
   it('leaves onIntentFailed out of the successful-completion path', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
