@@ -123,6 +123,16 @@ export function shouldPruneActivityLog(writesSincePrune: number, interval: numbe
 
 const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
 
+export const MAINTENANCE_BATCH_SCAN_LIMIT = 1000;
+
+export interface MaintenanceBatchResult {
+  deleted: number;
+  scanned: number;
+  passDrained: boolean;
+}
+
+const DRAINED_MAINTENANCE_BATCH: MaintenanceBatchResult = { deleted: 0, scanned: 0, passDrained: true };
+
 export interface OutputChunk {
   offset: number;
   data: string;
@@ -1818,11 +1828,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.taskAttemptRepo.loadAllHistoryTasks();
   }
 
-  pruneOldEvents(retentionDays: number): number {
-    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
-    const rows = this.queryAll('SELECT id FROM events WHERE id > ? ORDER BY id LIMIT 1000',
+  pruneOldEvents(retentionDays: number): MaintenanceBatchResult {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return DRAINED_MAINTENANCE_BATCH;
+    const rows = this.queryAll(
+      `SELECT id FROM events WHERE id > ? ORDER BY id LIMIT ${MAINTENANCE_BATCH_SCAN_LIMIT}`,
       [this.eventsPruneCursor]) as Array<{ id: number }>;
-    if (!rows.length) { this.eventsPruneCursor = 0; return 0; }
+    if (!rows.length) { this.eventsPruneCursor = 0; return DRAINED_MAINTENANCE_BATCH; }
     const end = rows[rows.length - 1]!.id;
     this.db.run(
       `DELETE FROM events WHERE id > ? AND id <= ?
@@ -1832,14 +1843,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [this.eventsPruneCursor, end, `-${Math.floor(retentionDays)} days`],
     );
     this.eventsPruneCursor = end;
-    return this.db.getRowsModified();
+    return { deleted: this.db.getRowsModified(), scanned: rows.length, passDrained: false };
   }
 
-  pruneOldSyncJournal(retentionDays: number): number {
-    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
-    const rows = this.queryAll('SELECT seq FROM sync_journal WHERE seq > ? ORDER BY seq LIMIT 1000',
+  pruneOldSyncJournal(retentionDays: number): MaintenanceBatchResult {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return DRAINED_MAINTENANCE_BATCH;
+    const rows = this.queryAll(
+      `SELECT seq FROM sync_journal WHERE seq > ? ORDER BY seq LIMIT ${MAINTENANCE_BATCH_SCAN_LIMIT}`,
       [this.syncJournalPruneCursor]) as Array<{ seq: number }>;
-    if (!rows.length) { this.syncJournalPruneCursor = 0; return 0; }
+    if (!rows.length) { this.syncJournalPruneCursor = 0; return DRAINED_MAINTENANCE_BATCH; }
     const end = rows[rows.length - 1]!.seq;
     this.db.run(
       `DELETE FROM sync_journal WHERE seq > ? AND seq <= ?
@@ -1849,7 +1861,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [this.syncJournalPruneCursor, end, `-${Math.floor(retentionDays)} days`],
     );
     this.syncJournalPruneCursor = end;
-    return this.db.getRowsModified();
+    return { deleted: this.db.getRowsModified(), scanned: rows.length, passDrained: false };
   }
 
   getFreelistPageCount(): number {
