@@ -123,6 +123,7 @@ export function classifyReviewUnitsForPath(filePath) {
     || basename === '.bazelversion'
     || basename === 'buildbuddy.yaml'
     || path.startsWith('scripts/bazel/')
+    || path.startsWith('tools/bazel/')
   ) {
     return ['tooling-policy'];
   }

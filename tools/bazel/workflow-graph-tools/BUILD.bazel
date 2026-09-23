@@ -1,0 +1,22 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+
+exports_files([
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+])
+
+js_library(
+    name = "tsconfig_bazel",
+    srcs = ["tsconfig.bazel.json"],
+    visibility = ["//packages/workflow-graph:__pkg__"],
+)
+
+js_library(
+    name = "vitest_config",
+    srcs = ["vitest.bazel.config.ts"],
+    visibility = ["//packages/workflow-graph:__pkg__"],
+)
+
+npm_link_all_packages(name = "node_modules")

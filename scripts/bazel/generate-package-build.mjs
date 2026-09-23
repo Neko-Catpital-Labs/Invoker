@@ -39,7 +39,13 @@ function renderPackageBuild(dirName, pkg) {
   }
   const tagLit = tags.map((t) => `"${t}"`).join(', ');
   const dataGlob = 'glob(["**"], exclude = ["node_modules/**", "dist/**", "coverage/**", "BUILD.bazel"])';
-  const lines = [HEADER, 'exports_files(["package.json"])', ''];
+  const lines = [
+    HEADER,
+    'exports_files(',
+    '    ["package.json"] + glob(["src/**/__tests__/fixtures/**"], allow_empty = True),',
+    ')',
+    '',
+  ];
   if (hasBuild) {
     lines.push(
       'sh_binary(',
@@ -91,7 +97,7 @@ function renderScriptsBazelBuild() {
 }
 
 function renderRootBuild(enabled) {
-  const lines = [HEADER, ''];
+  const lines = [HEADER, 'exports_files(["tsconfig.base.json"])', ''];
   if (enabled.quality) {
     for (const [name, ...cmd] of [
       ['check_types', 'pnpm', 'run', 'check:types'],
@@ -158,12 +164,14 @@ function writeBazelIgnore(packagesRoot) {
     if (!existsSync(join(packagesRoot, dirName, 'package.json'))) continue;
     lines.push(`packages/${dirName}/node_modules`);
   }
+  lines.push('tools/bazel/workflow-graph-tools/node_modules');
   lines.push('');
   writeFileSync(join(ROOT, '.bazelignore'), lines.join('\n'));
 }
 
 const enabled = loadJson(ENABLED_PATH);
 const packageDirs = new Set(enabled.packages ?? []);
+const nativePackages = new Set(enabled.nativePackages ?? []);
 mkdirSync(join(ROOT, 'scripts/bazel'), { recursive: true });
 writeFileSync(join(ROOT, 'scripts/bazel/BUILD.bazel'), renderScriptsBazelBuild());
 
@@ -172,6 +180,12 @@ for (const dirName of readdirSync(packagesRoot)) {
   const pkgPath = join(packagesRoot, dirName, 'package.json');
   if (!existsSync(pkgPath)) continue;
   const buildPath = join(packagesRoot, dirName, 'BUILD.bazel');
+  if (nativePackages.has(dirName)) {
+    if (!existsSync(buildPath)) {
+      throw new Error(`native package missing hand-authored BUILD.bazel: ${buildPath}`);
+    }
+    continue;
+  }
   if (!packageDirs.has(dirName)) {
     if (existsSync(buildPath)) {
       const existing = readFileSync(buildPath, 'utf8');

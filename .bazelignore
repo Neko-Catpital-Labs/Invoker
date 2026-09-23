@@ -36,3 +36,4 @@ packages/watcher/node_modules
 packages/web-app/node_modules
 packages/workflow-core/node_modules
 packages/workflow-graph/node_modules
+tools/bazel/workflow-graph-tools/node_modules
