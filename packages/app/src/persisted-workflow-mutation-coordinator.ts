@@ -381,7 +381,9 @@ export class PersistedWorkflowMutationCoordinator {
         undefined,
         () => this.dispatch(intent.channel, intent.args, mutationContext),
       );
-      void dispatchPromise.catch(() => {});
+      void dispatchPromise.catch((error: unknown) => {
+        this.handleDispatchRejection(workflowId, intent, error);
+      });
       const result = await Promise.race([
         dispatchPromise,
         invalidation.promise,
@@ -417,6 +419,40 @@ export class PersistedWorkflowMutationCoordinator {
       this.inFlightPromises.delete(intent.id);
       this.enqueueStartedAtMs.delete(intent.id);
     }
+  }
+
+  private handleDispatchRejection(
+    workflowId: string,
+    intent: WorkflowMutationIntent,
+    error: unknown,
+  ): void {
+    const message = summarizeMutationFailureMessage(error);
+    const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
+    if (latestIntent?.status === 'running') {
+      return;
+    }
+    const logMessage = `[workflow-mutation-coordinator] dispatch rejected for intent ${intent.id} workflow ${workflowId}: ${message}`;
+    this.options?.logger?.error(logMessage, {
+      module: 'workflow-mutation-coordinator',
+      workflowId,
+      intentId: intent.id,
+      channel: intent.channel,
+      error: message,
+    });
+    if (!this.options?.logger) {
+      process.stderr.write(`${logMessage}\n`);
+    }
+    if (latestIntent?.status !== 'failed') {
+      return;
+    }
+    const recordedMessage = latestIntent.error && !latestIntent.error.includes(message)
+      ? `${latestIntent.error}; dispatch rejected: ${message}`
+      : message;
+    if (latestIntent.error === recordedMessage) {
+      return;
+    }
+    this.persistence.failWorkflowMutationIntent(intent.id, recordedMessage);
+    this.notifyIntentFailed(latestIntent, recordedMessage);
   }
 
   private intentQueueWaitMs(intentId: number): number {
