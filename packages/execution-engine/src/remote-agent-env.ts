@@ -21,6 +21,11 @@ export const LINEAR_ENV_KEYS = new Set([
   'INVOKER_LINEAR_API_KEY',
 ]);
 
+export const ALWAYS_EXPORTED_ENV_KEYS = new Set([
+  ...LINEAR_ENV_KEYS,
+  'CLAUDE_CODE_OAUTH_TOKEN',
+]);
+
 function shellQuote(value: string): string {
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }
@@ -48,8 +53,17 @@ export function loadLinearEnv(secretsFile: string | undefined): Record<string, s
   return env;
 }
 
+export function loadAlwaysExportedEnv(secretsFile: string | undefined): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of entriesFromSecretsFile(secretsFile)) {
+    if (!ALWAYS_EXPORTED_ENV_KEYS.has(key)) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
 export function loadRemoteAgentEnv(secretsFile: string | undefined, useApiKey: boolean): Record<string, string> {
-  const env: Record<string, string> = { ...loadLinearEnv(secretsFile) };
+  const env: Record<string, string> = { ...loadAlwaysExportedEnv(secretsFile) };
   if (!useApiKey) return env;
 
   for (const [key, value] of entriesFromSecretsFile(secretsFile)) {

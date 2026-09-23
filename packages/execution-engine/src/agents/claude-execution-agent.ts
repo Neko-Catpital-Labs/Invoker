@@ -147,6 +147,7 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   } {
     ensureClaudeWorkerConfigDir(this.configDir);
     const containerClaudeDir = join(this.containerHomePath, '.claude');
+    const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
     return {
       mounts: [
         { hostPath: this.configDir, containerPath: containerClaudeDir },
@@ -154,6 +155,7 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
       env: {
         ANTHROPIC_API_KEY: this.apiKey,
         CLAUDE_CONFIG_DIR: this.configDir,
+        ...(oauthToken ? { CLAUDE_CODE_OAUTH_TOKEN: oauthToken } : {}),
       },
     };
   }
