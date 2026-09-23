@@ -607,3 +607,190 @@ describe('buildDistributeCredentialsScript', () => {
     expect(script).toMatch(/printf '%s' '[A-Za-z0-9+/=]+' \| invoker_base64_decode/);
   });
 });
+
+describe('runClaudeOauthRefreshCheck owner worker credential copy', () => {
+  const ownerPath = '/home/invoker/.claude/.credentials.json';
+  const workerPath = '/home/invoker/.invoker/claude-worker/.credentials.json';
+  const blankWorkerCopy = JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: 0, scopes: [] } });
+
+  function tokenJson(accessToken: string, expiresAt: number): string {
+    return JSON.stringify({ claudeAiOauth: { accessToken, refreshToken: `refresh-${accessToken}`, expiresAt, scopes: [] } });
+  }
+
+  function fakeFiles(initial: Record<string, string>) {
+    const files = new Map(Object.entries(initial));
+    return {
+      files,
+      readCredentials: (path: string) => {
+        const contents = files.get(path);
+        if (contents === undefined) throw new Error(`ENOENT: ${path}`);
+        return contents;
+      },
+      writeCredentials: vi.fn((path: string, contents: string) => { files.set(path, contents); }),
+    };
+  }
+
+  it('reproduces the 2026-09-23 incident: copies a healthy owner token over a blank worker copy', async () => {
+    const now = 1_000_000_000_000;
+    const owner = tokenJson('owner', now + 4 * 60 * 60 * 1000);
+    const fs = fakeFiles({ [ownerPath]: owner, [workerPath]: blankWorkerCopy });
+    const { store, rows } = makeStore();
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: ownerPath,
+      workerCredentialsPath: workerPath,
+      remoteTargets: [],
+      store,
+      readCredentials: fs.readCredentials,
+      writeCredentials: fs.writeCredentials,
+      refreshFn: vi.fn(),
+      now: () => now,
+    });
+
+    expect(fs.files.get(workerPath)).toBe(owner);
+    expect(fs.files.get(ownerPath)).toBe(owner);
+    const statuses = (rows as { subjectId: string; status: string }[]).map((r) => `${r.subjectId}:${r.status}`);
+    expect(statuses).toContain('local-worker-copy:completed');
+  });
+
+  it('creates a missing worker copy from the owner token', async () => {
+    const now = 1_000_000_000_000;
+    const owner = tokenJson('owner', now + 4 * 60 * 60 * 1000);
+    const fs = fakeFiles({ [ownerPath]: owner });
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: ownerPath,
+      workerCredentialsPath: workerPath,
+      remoteTargets: [],
+      readCredentials: fs.readCredentials,
+      writeCredentials: fs.writeCredentials,
+      now: () => now,
+    });
+
+    expect(fs.files.get(workerPath)).toBe(owner);
+  });
+
+  it('copies a newer worker token back to the owner instead of refreshing with the owner token the CLI already rotated away', async () => {
+    const now = 1_000_000_000_000;
+    const staleOwner = tokenJson('owner', now);
+    const newerWorker = tokenJson('worker', now + 8 * 60 * 60 * 1000);
+    const fs = fakeFiles({ [ownerPath]: staleOwner, [workerPath]: newerWorker });
+    const refreshFn = vi.fn();
+    const distributeFn = vi.fn(async () => undefined);
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: ownerPath,
+      workerCredentialsPath: workerPath,
+      remoteTargets: [makeTarget('do3')],
+      readCredentials: fs.readCredentials,
+      readRemoteCredentials: async () => null,
+      writeCredentials: fs.writeCredentials,
+      refreshFn,
+      distributeFn,
+      now: () => now,
+    });
+
+    expect(refreshFn).not.toHaveBeenCalled();
+    expect(fs.files.get(ownerPath)).toBe(newerWorker);
+    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do3' }), newerWorker);
+  });
+
+  it('writes a freshly refreshed owner token to the worker copy too', async () => {
+    const now = 1_000_000_000_000;
+    const expiring = tokenJson('owner', now);
+    const refreshed = tokenJson('refreshed', now + 8 * 60 * 60 * 1000);
+    const fs = fakeFiles({ [ownerPath]: expiring, [workerPath]: expiring });
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: ownerPath,
+      workerCredentialsPath: workerPath,
+      remoteTargets: [],
+      readCredentials: fs.readCredentials,
+      writeCredentials: fs.writeCredentials,
+      refreshFn: async () => refreshed,
+      now: () => now,
+    });
+
+    expect(fs.files.get(ownerPath)).toBe(refreshed);
+    expect(fs.files.get(workerPath)).toBe(refreshed);
+  });
+
+  it('refreshes ahead of expiry by refreshLeadMs so no CLI process has to rotate the token itself', async () => {
+    const now = 1_000_000_000_000;
+    const owner = tokenJson('owner', now + 30 * 60 * 1000);
+    const refreshed = tokenJson('refreshed', now + 8 * 60 * 60 * 1000);
+    const fs = fakeFiles({ [ownerPath]: owner, [workerPath]: owner });
+    const refreshFn = vi.fn(async () => refreshed);
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: ownerPath,
+      workerCredentialsPath: workerPath,
+      refreshLeadMs: 60 * 60 * 1000,
+      remoteTargets: [],
+      readCredentials: fs.readCredentials,
+      writeCredentials: fs.writeCredentials,
+      refreshFn,
+      now: () => now,
+    });
+
+    expect(refreshFn).toHaveBeenCalledTimes(1);
+    expect(fs.files.get(workerPath)).toBe(refreshed);
+  });
+
+  it('never writes when the worker copy path is the owner path', async () => {
+    const now = 1_000_000_000_000;
+    const owner = tokenJson('owner', now + 4 * 60 * 60 * 1000);
+    const fs = fakeFiles({ [ownerPath]: owner });
+
+    await runClaudeOauthRefreshCheck({
+      logger: makeLogger(),
+      credentialsPath: ownerPath,
+      workerCredentialsPath: ownerPath,
+      remoteTargets: [],
+      readCredentials: fs.readCredentials,
+      writeCredentials: fs.writeCredentials,
+      now: () => now,
+    });
+
+    expect(fs.writeCredentials).not.toHaveBeenCalled();
+  });
+
+  it('one on-disk worker tick refreshes early and leaves the owner and worker files holding the same token', async () => {
+    const now = 1_000_000_000_000;
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-oauth-worker-copy-'));
+    const ownerFile = join(dir, 'claude', '.credentials.json');
+    const workerFile = join(dir, 'claude-worker', '.credentials.json');
+    mkdirSync(join(dir, 'claude'), { recursive: true });
+    writeFileSync(ownerFile, tokenJson('owner', now + 30 * 60 * 1000), { mode: 0o600 });
+    const refreshed = tokenJson('refreshed', now + 8 * 60 * 60 * 1000);
+
+    const worker = createClaudeOauthRefreshWorker({
+      logger: makeLogger(),
+      credentialsPath: ownerFile,
+      workerCredentialsPath: workerFile,
+      codexAuthPath: join(dir, 'missing-codex-auth.json'),
+      remoteTargets: [],
+      intervalMs: 60 * 60 * 1000,
+      tickOnStart: true,
+      now: () => now,
+      refreshFn: async () => refreshed,
+    });
+
+    try {
+      worker.start();
+      await vi.waitFor(() => {
+        expect(existsSync(workerFile)).toBe(true);
+        expect(readFileSync(ownerFile, 'utf8')).toBe(refreshed);
+        expect(readFileSync(workerFile, 'utf8')).toBe(refreshed);
+      });
+    } finally {
+      await worker.stop({ settleTimeoutMs: 2_000 });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
