@@ -30,6 +30,7 @@ import type {
   InfraRepairWorkerStore,
   InfraRepairWorkerSubmitter,
 } from './workers/infra-repair-worker.js';
+import type { AgentLoginWatchWorkerConfig } from './workers/agent-login-watch-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
 import type {
@@ -117,6 +118,7 @@ export interface WorkerRuntimeDependencies {
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
   dbReaper?: DbReaperWorkerConfig;
   spendCircuitBreaker?: SpendCircuitBreakerWorkerConfig;
+  agentLoginWatch?: AgentLoginWatchWorkerConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitWorkerConfig;
   workerLifecycleStarter?: WorkerLifecycleReader & WorkerLifecycleStarter;
   repairFilingStore?: RepairFilingStore;
