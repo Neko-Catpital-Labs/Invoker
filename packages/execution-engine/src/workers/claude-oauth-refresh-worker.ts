@@ -1,8 +1,10 @@
-import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import type { Logger } from '@invoker/contracts';
+
+import { resolveClaudeWorkerConfigDir } from '../agents/claude-execution-agent.js';
 
 import {
   isOauthTokenExpiring,
@@ -38,6 +40,8 @@ export interface ClaudeOauthRefreshTarget {
 export interface ClaudeOauthRefreshWorkerConfig {
   /** Local credentials file path. Defaults to ~/.claude/.credentials.json. */
   credentialsPath?: string;
+  workerCredentialsPath?: string;
+  refreshLeadMs?: number;
   remoteTargets?: ClaudeOauthRefreshTarget[];
   intervalMs?: number;
   tickOnStart?: boolean;
@@ -65,6 +69,8 @@ export interface ClaudeOauthRefreshWorkerConfig {
 export interface ClaudeOauthRefreshWorkerOptions {
   logger: Logger;
   credentialsPath: string;
+  workerCredentialsPath?: string;
+  refreshLeadMs?: number;
   remoteTargets: ClaudeOauthRefreshTarget[];
   intervalMs?: number;
   tickOnStart?: boolean;
@@ -103,6 +109,7 @@ function defaultWriteCredentials(path: string, contents: string): void {
   // Atomic write: a crash or concurrent read mid-write must never observe a
   // truncated credentials file -- write to a sibling temp path, then rename,
   // which is atomic on the same filesystem.
+  mkdirSync(dirname(path), { recursive: true });
   const tmpPath = `${path}.tmp-${process.pid}`;
   writeFileSync(tmpPath, contents, { mode: 0o600 });
   renameSync(tmpPath, path);
@@ -258,6 +265,60 @@ function describeRemoteClaudeCredentials(remoteJson: string | null, now: number)
   return null;
 }
 
+export function resolveClaudeWorkerCredentialsPath(): string {
+  return join(resolveClaudeWorkerConfigDir(), '.credentials.json');
+}
+
+function usableClaudeExpiry(credentialsJson: string | null): number {
+  if (credentialsJson === null || !hasClaudeAccessToken(credentialsJson)) return Number.NEGATIVE_INFINITY;
+  const expiresAt = parseClaudeOauthBlob(credentialsJson)?.expiresAt;
+  return typeof expiresAt === 'number' && Number.isFinite(expiresAt) ? expiresAt : Number.NEGATIVE_INFINITY;
+}
+
+function reconcileWorkerCredentialsCopy(
+  options: ClaudeOauthRefreshWorkerOptions,
+  readCredentials: (path: string) => string,
+  writeCredentials: (path: string, contents: string) => void,
+  ownerJson: string,
+): string {
+  const workerPath = options.workerCredentialsPath;
+  if (!workerPath || workerPath === options.credentialsPath) return ownerJson;
+
+  let workerJson: string | null;
+  try {
+    workerJson = readCredentials(workerPath);
+  } catch (error) {
+    options.logger.warn(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] could not read worker credentials ${workerPath}; treating it as missing: ${error instanceof Error ? error.message : String(error)}`, {
+      module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+    });
+    workerJson = null;
+  }
+  if (workerJson === ownerJson) return ownerJson;
+
+  const ownerExpiry = usableClaudeExpiry(ownerJson);
+  const workerExpiry = usableClaudeExpiry(workerJson);
+  if (ownerExpiry === Number.NEGATIVE_INFINITY && workerExpiry === Number.NEGATIVE_INFINITY) return ownerJson;
+
+  const [fromPath, toPath, winner] = workerExpiry > ownerExpiry
+    ? [workerPath, options.credentialsPath, workerJson as string]
+    : [options.credentialsPath, workerPath, ownerJson];
+  try {
+    writeCredentials(toPath, winner);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    options.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] failed to copy credentials from ${fromPath} to ${toPath}: ${detail}`, {
+      module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+    });
+    recordDecision(options.store, 'local-worker-copy', 'failed', `Failed to copy credentials from ${fromPath} to ${toPath}: ${detail}`);
+    return ownerJson;
+  }
+  options.logger.info(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] copied newer credentials from ${fromPath} to ${toPath}`, {
+    module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
+  });
+  recordDecision(options.store, 'local-worker-copy', 'completed', `Copied newer credentials from ${fromPath} to ${toPath}`);
+  return winner;
+}
+
 export async function runClaudeOauthRefreshCheck(options: ClaudeOauthRefreshWorkerOptions): Promise<void> {
   const readCredentials = options.readCredentials ?? defaultReadCredentials;
   const readRemoteCredentials = options.readRemoteCredentials ?? defaultReadRemoteCredentials;
@@ -275,7 +336,9 @@ export async function runClaudeOauthRefreshCheck(options: ClaudeOauthRefreshWork
     return;
   }
 
-  if (!isOauthTokenExpiring(credentialsJson, now())) {
+  credentialsJson = reconcileWorkerCredentialsCopy(options, readCredentials, writeCredentials, credentialsJson);
+
+  if (!isOauthTokenExpiring(credentialsJson, now() + (options.refreshLeadMs ?? 0))) {
     if (!hasClaudeAccessToken(credentialsJson)) {
       options.logger.error(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] ${options.credentialsPath} holds no access token; not distributing it to any remote target`, {
         module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
@@ -325,6 +388,7 @@ export async function runClaudeOauthRefreshCheck(options: ClaudeOauthRefreshWork
 
   writeCredentials(options.credentialsPath, refreshed);
   recordDecision(options.store, 'local', 'completed', 'Refreshed local Claude OAuth credentials');
+  reconcileWorkerCredentialsCopy(options, readCredentials, writeCredentials, refreshed);
   options.logger.info(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] refreshed local credentials`, {
     module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
   });
@@ -429,6 +493,8 @@ export function createClaudeOauthRefreshWorker(config: ClaudeOauthRefreshWorkerC
   const options: ClaudeOauthRefreshWorkerOptions = {
     logger: config.logger,
     credentialsPath: config.credentialsPath ?? resolveClaudeCredentialsPath(),
+    workerCredentialsPath: config.workerCredentialsPath,
+    refreshLeadMs: config.refreshLeadMs ?? config.intervalMs ?? DEFAULT_CLAUDE_OAUTH_REFRESH_INTERVAL_MS,
     remoteTargets: config.remoteTargets ?? [],
     store: config.store,
     readCredentials: config.readCredentials,
@@ -476,6 +542,7 @@ export function registerClaudeOauthRefreshWorker(
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createClaudeOauthRefreshWorker({
         logger: deps.logger,
+        workerCredentialsPath: resolveClaudeWorkerCredentialsPath(),
         ...deps.claudeOauthRefresh,
       }),
   });
