@@ -382,7 +382,13 @@ export class PersistedWorkflowMutationCoordinator {
         () => this.dispatch(intent.channel, intent.args, mutationContext),
       );
       void dispatchPromise.catch((error: unknown) => {
-        this.handleDispatchRejection(workflowId, intent, error);
+        try {
+          this.handleDispatchRejection(workflowId, intent, error);
+        } catch (handlerError) {
+          process.stderr.write(
+            `[workflow-mutation-coordinator] dispatch rejection handler failed for intent ${intent.id}: ${summarizeMutationFailureMessage(handlerError)}\n`,
+          );
+        }
       });
       const result = await Promise.race([
         dispatchPromise,
@@ -452,12 +458,12 @@ export class PersistedWorkflowMutationCoordinator {
     failedIntent: WorkflowMutationIntent,
     message: string,
   ): void {
-    const recordedMessage = failedIntent.error && !failedIntent.error.includes(message)
-      ? `${failedIntent.error}; dispatch rejected: ${message}`
-      : message;
-    if (failedIntent.error === recordedMessage) {
+    if (failedIntent.error?.includes(message)) {
       return;
     }
+    const recordedMessage = failedIntent.error
+      ? `${failedIntent.error}; dispatch rejected: ${message}`
+      : message;
     this.persistence.failWorkflowMutationIntent(failedIntent.id, recordedMessage);
   }
 
