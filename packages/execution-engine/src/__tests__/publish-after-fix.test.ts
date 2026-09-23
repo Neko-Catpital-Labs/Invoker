@@ -498,7 +498,10 @@ describe('publishAfterFixImpl integration (real git)', () => {
     expect(Array.isArray(parsedError.conflictFiles)).toBe(true);
   }, REAL_GIT_TIMEOUT_MS);
 
-  it('skips make-pr review publication when the repaired branch has zero net diff vs base (Invoker repo)', async () => {
+  it.each([
+    ['Invoker', 'https://github.com/Neko-Catpital-Labs/Invoker.git'],
+    ['non-Invoker', 'https://github.com/EdbertChan/catstack'],
+  ])('skips make-pr review publication when the repaired branch has zero net diff vs base (%s repo)', async (_label, repoUrl) => {
     const root = mkdtempSync(join(tmpdir(), 'pub-fix-zero-diff-'));
     const originDir = join(root, 'origin.git');
     const hostDir = join(root, 'host');
@@ -558,7 +561,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
         baseBranch: 'master',
         featureBranch: 'plan/feature',
         name: 'Integration Test',
-        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+        repoUrl,
       });
       host.publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
         artifacts: [{ url: 'https://github.com/example/pr/1', providerId: '1' }],
