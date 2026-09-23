@@ -17,16 +17,28 @@ function percentile(values: number[], percent: number): number {
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * percent / 100) - 1)] ?? 0;
 }
 
-function makeLogger() {
-  const calls: string[] = [];
+function serializeFields(fields: Record<string, unknown> | undefined): string {
+  if (!fields) return '';
+  try {
+    return JSON.stringify(fields) ?? '';
+  } catch {
+    return Object.entries(fields).map(([key, value]) => `${key}=${String(value)}`).join(' ');
+  }
+}
+
+function makeLogger(bindings: Record<string, unknown> = {}, calls: string[] = []) {
+  const record = (level: string, message: string, fields?: Record<string, unknown>) => {
+    calls.push(`${level}:${message} ${serializeFields({ ...bindings, ...fields })}`);
+  };
   return {
     calls,
     logger: {
-      debug: (message: string) => calls.push(`debug:${message}`),
-      info: (message: string) => calls.push(`info:${message}`),
-      warn: (message: string) => calls.push(`warn:${message}`),
-      error: (message: string) => calls.push(`error:${message}`),
-      child: () => makeLogger().logger,
+      debug: (message: string, fields?: Record<string, unknown>) => record('debug', message, fields),
+      info: (message: string, fields?: Record<string, unknown>) => record('info', message, fields),
+      warn: (message: string, fields?: Record<string, unknown>) => record('warn', message, fields),
+      error: (message: string, fields?: Record<string, unknown>) => record('error', message, fields),
+      child: (childBindings: Record<string, unknown>) =>
+        makeLogger({ ...bindings, ...childBindings }, calls).logger,
     },
   };
 }
@@ -38,8 +50,9 @@ async function waitForDrain(adapter: SQLiteAdapter, intentIds: number[]): Promis
       adapter.listWorkflowMutationIntents(undefined, ['completed', 'failed'])
         .map((intent) => intent.id),
     );
-    if (intentIds.every((id) => terminalIds.has(id))) return true;
+    const allTerminal = intentIds.every((id) => terminalIds.has(id));
     if (Date.now() >= deadline) return false;
+    if (allTerminal) return true;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -127,14 +140,16 @@ describe('submit latency under a workflow mutation queue storm (repro)', () => {
       const status = intentsById.get(id)?.status;
       return status !== 'completed' && status !== 'failed';
     });
-    const failedDispatchRecorded = intentsById.get(firstFailureId)?.status === 'failed'
-      && intentsById.get(firstFailureId)?.error?.includes(KNOWN_DISPATCH_ERROR);
+    const failedIntent = intentsById.get(firstFailureId);
+    const persistedDispatchError = failedIntent?.status === 'failed'
+      && (failedIntent.error?.includes(KNOWN_DISPATCH_ERROR) ?? false);
     const dispatchErrorLogged = calls.some((call) => call.includes(KNOWN_DISPATCH_ERROR));
-    const missingErrorIds = failedDispatchRecorded || dispatchErrorLogged ? [] : [firstFailureId];
+    const missingErrorIds = persistedDispatchError ? [] : [firstFailureId];
     const hasDefect = p95 > ADD_P95_BUDGET_MS
+      || !drained
       || undrainedIds.length > 0
       || missingErrorIds.length > 0;
-    const measured = `p95=${p95.toFixed(1)}ms budget=${ADD_P95_BUDGET_MS}ms drain=${drainElapsedMs.toFixed(1)}ms drainBudget=${DRAIN_BUDGET_MS}ms drained=${drained} undrainedIds=${undrainedIds.join(',') || 'none'} missingDispatchErrorIds=${missingErrorIds.join(',') || 'none'}`;
+    const measured = `p95=${p95.toFixed(1)}ms budget=${ADD_P95_BUDGET_MS}ms drain=${drainElapsedMs.toFixed(1)}ms drainBudget=${DRAIN_BUDGET_MS}ms drained=${drained} undrainedIds=${undrainedIds.join(',') || 'none'} missingDispatchErrorIds=${missingErrorIds.join(',') || 'none'} dispatchErrorLogged=${dispatchErrorLogged} persistedDispatchError=${failedIntent?.error ?? 'none'}`;
 
     if (process.env.INVOKER_REPRO_EXPECT === 'bug') {
       expect(hasDefect, measured).toBe(true);
