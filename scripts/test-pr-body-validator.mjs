@@ -921,6 +921,26 @@ assert(
   + 'refuses to split a proof-lane PR whose only tooling-policy file lives under .github/',
 );
 
+const ciRepairFiles = ['.github/workflows/ci.yml'];
+const ciRepairBehaviorErrors = await validatePrBody(validMinimal, { changedFiles: ciRepairFiles });
+assert(
+  ciRepairBehaviorErrors.includes('Review lane behavior cannot ship with policy files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.'),
+  'behavior lane should reject a CI-repair PR whose only changed file is a .github/ workflow',
+);
+assert(
+  ciRepairBehaviorErrors.includes('PR body Review Unit "routing" cannot ship with tooling-policy files in the same PR. Split this into one Review Unit per PR.'),
+  'routing review unit should reject a CI-repair PR whose only changed file is a .github/ workflow',
+);
+
+const ciRepairPolicyErrors = await validatePrBody(
+  validMinimal.replace('- behavior', '- policy').replace('- routing', '- tooling-policy'),
+  { changedFiles: ciRepairFiles },
+);
+assert(
+  ciRepairPolicyErrors.length === 0,
+  `policy lane with the tooling-policy review unit must accept a .github/-only CI repair, got: ${ciRepairPolicyErrors.join('; ')}`,
+);
+
 const refactorBody = `## Summary
 
 Route code first.
