@@ -37,6 +37,7 @@ import { ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND } from '../workers/admin-bypass-e2
 import { MERGIFY_QUEUE_RESEARCH_WORKER_KIND } from '../workers/mergify-queue-research-worker.js';
 import { SPEND_CIRCUIT_BREAKER_WORKER_KIND } from '../workers/spend-circuit-breaker-worker.js';
 import { WORKFLOW_CLEANUP_WORKER_KIND } from '../workers/workflow-cleanup-worker.js';
+import { AGENT_LOGIN_WATCH_WORKER_KIND } from '../workers/agent-login-watch-worker.js';
 
 const silentLogger = {
   debug: () => {},
@@ -109,6 +110,7 @@ describe('worker registry', () => {
       MERGIFY_QUEUE_RESEARCH_WORKER_KIND,
       SPEND_CIRCUIT_BREAKER_WORKER_KIND,
       WORKFLOW_CLEANUP_WORKER_KIND,
+      AGENT_LOGIN_WATCH_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(REQUEUE_WORKER_KIND)).toBeDefined();
