@@ -406,13 +406,13 @@ for (const [jobName, job] of Object.entries(jobs)) {
 }
 
 assert(jobs['bazel-cache-pilot'], 'Missing bazel-cache-pilot job');
-assert(jobs['bazel-cache-pilot'].if === FULL_CI_GATE, 'bazel-cache-pilot must run only for full CI events');
+assert(jobs['bazel-cache-pilot'].if === NON_PR_GATE, 'bazel-cache-pilot must skip pull_request and merge-queue refs');
 assert(
   jobs['bazel-cache-pilot']['runs-on'] === 'ubuntu-latest',
   'bazel-cache-pilot must use GitHub-hosted ubuntu-latest',
 );
 assert(jobs['bazel-rbe-pilot'], 'Missing bazel-rbe-pilot job');
-assert(jobs['bazel-rbe-pilot'].if === FULL_CI_GATE, 'bazel-rbe-pilot must run only for full CI events');
+assert(jobs['bazel-rbe-pilot'].if === NON_PR_GATE, 'bazel-rbe-pilot must skip pull_request and merge-queue refs');
 assert(
   jobs['bazel-rbe-pilot']['runs-on'] === 'ubuntu-latest',
   'bazel-rbe-pilot must use GitHub-hosted ubuntu-latest',
