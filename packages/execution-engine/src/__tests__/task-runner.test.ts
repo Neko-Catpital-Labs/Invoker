@@ -3711,6 +3711,7 @@ describe('TaskRunner', () => {
         return '';
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
@@ -3840,6 +3841,7 @@ describe('TaskRunner', () => {
       const gitCalls: Array<{ args: string[]; dir: string }> = [];
       (executor as any).execGitReadonly = async () => '';
       (executor as any).execGitIn = async (args: string[], dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         gitCalls.push({ args: [...args], dir });
         if (args[0] === 'checkout' && args[1] === 'plan/example') {
           currentBranchByDir.set(dir, 'plan/example');
@@ -3990,6 +3992,7 @@ console.log(JSON.stringify(out));
 
       const gitCalls: string[][] = [];
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         gitCalls.push([...args]);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123';
@@ -4156,6 +4159,7 @@ console.log(JSON.stringify(out));
         return '';
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
@@ -4216,7 +4220,10 @@ console.log(JSON.stringify(out));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it('completes an empty Invoker external_review branch without publishing a make-pr stack', async () => {
+    it.each([
+      ['Invoker', 'https://github.com/Neko-Catpital-Labs/Invoker.git'],
+      ['non-Invoker', 'https://github.com/EdbertChan/catstack'],
+    ])('completes an empty %s external_review branch without publishing a make-pr stack', async (_label, repoUrl) => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
@@ -4242,8 +4249,8 @@ console.log(JSON.stringify(out));
           mergeMode: 'external_review',
           baseBranch: 'master',
           featureBranch: 'plan/empty',
-          name: 'Empty Invoker Workflow',
-          repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+          name: 'Empty Workflow',
+          repoUrl,
         }),
         updateTask: vi.fn(),
       };
@@ -4548,6 +4555,7 @@ console.log(JSON.stringify(out));
         return '';
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
@@ -4768,6 +4776,7 @@ console.log(JSON.stringify(out));
         return '';
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
@@ -4922,6 +4931,7 @@ console.log(JSON.stringify(out));
         return '';
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
@@ -5025,6 +5035,7 @@ console.log(JSON.stringify(out));
         return '';
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
@@ -5111,6 +5122,7 @@ console.log(JSON.stringify(out));
         return '';
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/example.ts';
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
