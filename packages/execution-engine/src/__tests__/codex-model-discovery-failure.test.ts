@@ -285,4 +285,37 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     expect(agent.supportedModelsProvenance).toBe('agent');
     expect(probeArgs()).toEqual([LIVE_ARGS]);
   });
+
+  it('caches a total discovery failure instead of respawning both probes on every read', () => {
+    stubProbes(spawnFailure('ENOENT'), spawnFailure('ENOENT'));
+    const agent = new CodexExecutionAgent();
+
+    const first = rejection(() => agent.supportedModels);
+    const second = rejection(() => agent.supportsModel('gpt-5.6-luna'));
+    const third = rejection(() => agent.supportedModelsProvenance);
+
+    expect(probeArgs()).toEqual([LIVE_ARGS, BUNDLED_ARGS]);
+    for (const error of [first, second, third]) {
+      expect(error.name).toBe('CodexModelDiscoveryUnavailableError');
+      expect(error.message).toContain('live probe failed to run (ENOENT)');
+      expect(error.message).toContain('bundled probe failed to run (ENOENT)');
+    }
+  });
+
+  it('probes again once a cached failure expires and adopts the recovered catalog', () => {
+    stubProbes(spawnFailure('ENOENT'), spawnFailure('ENOENT'), ok(LIVE_CATALOG));
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(0);
+    try {
+      const agent = new CodexExecutionAgent();
+
+      rejection(() => agent.supportedModels);
+      expect(probeArgs()).toEqual([LIVE_ARGS, BUNDLED_ARGS]);
+
+      nowSpy.mockReturnValue(5 * 60_000 + 1);
+      expect(agent.supportedModels).toEqual(LIVE_MODELS);
+      expect(probeArgs()).toEqual([LIVE_ARGS, BUNDLED_ARGS, LIVE_ARGS]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });
