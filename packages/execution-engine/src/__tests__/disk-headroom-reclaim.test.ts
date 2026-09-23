@@ -78,11 +78,15 @@ function makeTmpSweepScratch(): TmpSweepScratch {
 function makeTmpEntry(
   scratch: TmpSweepScratch,
   name: string,
-  opts: { stale: boolean; fileName?: string },
+  opts: { stale: boolean; fileName?: string; asFile?: boolean },
 ): string {
   const entry = join(scratch.tmpDir, name);
-  mkdirSync(entry, { recursive: true });
-  writeFileSync(join(entry, opts.fileName ?? 'payload.txt'), 'x');
+  if (opts.asFile) {
+    writeFileSync(entry, 'x');
+  } else {
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, opts.fileName ?? 'payload.txt'), 'x');
+  }
   if (opts.stale) utimesSync(entry, STALE_TMP_MTIME_SECONDS, STALE_TMP_MTIME_SECONDS);
   return entry;
 }
@@ -319,6 +323,11 @@ describe('disk-headroom cleanup guards', () => {
     const fresh = makeTmpEntry(scratch, 'another-unmatched-scratch', { stale: false });
     const protectedByName = makeTmpEntry(scratch, 'systemd-private-abc123', { stale: true });
     const protectedUnixSocketDir = makeTmpEntry(scratch, '.X11-unix', { stale: true });
+    const protectedXDisplayLock = makeTmpEntry(scratch, '.X0-lock', { stale: true, asFile: true });
+    const protectedHighXDisplayLock = makeTmpEntry(scratch, '.X99-lock', {
+      stale: true,
+      asFile: true,
+    });
     const protectedSshDir = makeTmpEntry(scratch, 'ssh-AbCdEf', { stale: true });
     const withTranscript = makeTmpEntry(scratch, 'agent-scratch-dir', {
       stale: true,
@@ -336,6 +345,8 @@ describe('disk-headroom cleanup guards', () => {
     expect(existsSync(fresh)).toBe(true);
     expect(existsSync(protectedByName)).toBe(true);
     expect(existsSync(protectedUnixSocketDir)).toBe(true);
+    expect(existsSync(protectedXDisplayLock)).toBe(true);
+    expect(existsSync(protectedHighXDisplayLock)).toBe(true);
     expect(existsSync(protectedSshDir)).toBe(true);
     expect(existsSync(withTranscript)).toBe(true);
     // Known transient test dirs are reaped even when they carry a transcript.

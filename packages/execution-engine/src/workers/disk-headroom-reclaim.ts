@@ -45,6 +45,7 @@ export const TMP_SCRATCH_PROTECT_GLOBS = [
   'systemd-private-*',
   'snap-*',
   '.X11-unix',
+  '.X[0-9]*-lock',
   '.font-unix',
   '.ICE-unix',
   '.*-unix',
