@@ -10,6 +10,7 @@ import {
   type MergifyQueueResearchConfig,
   type MergifyQueueResearchSource,
   type SelfDeployConfig,
+  type ThrashDetectorConfig,
   DEFAULT_CROSS_REPO_RESEARCH_LOOKBACK_DAYS,
   DEFAULT_MERGIFY_QUEUE_RESEARCH_LOOKBACK_DAYS,
 } from './config.js';
@@ -296,6 +297,45 @@ function validateSelfDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateThrashDetectorConfig(config: InvokerConfig): void {
+  const thrashDetector = config.thrashDetector;
+  if (thrashDetector === undefined) return;
+  if (typeof thrashDetector !== 'object' || thrashDetector === null || Array.isArray(thrashDetector)) {
+    throw new Error('thrashDetector must be an object');
+  }
+  const typed = thrashDetector as ThrashDetectorConfig;
+  if (typed.enabled !== undefined && typeof typed.enabled !== 'boolean') {
+    throw new Error('thrashDetector.enabled must be a boolean when set');
+  }
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('thrashDetector.intervalMinutes must be an integer > 0');
+    }
+  }
+  if (typed.thresholdCount !== undefined) {
+    if (
+      typeof typed.thresholdCount !== 'number'
+      || !Number.isInteger(typed.thresholdCount)
+      || typed.thresholdCount <= 0
+    ) {
+      throw new Error('thrashDetector.thresholdCount must be an integer > 0');
+    }
+  }
+  if (typed.windowHours !== undefined) {
+    if (
+      typeof typed.windowHours !== 'number'
+      || !Number.isInteger(typed.windowHours)
+      || typed.windowHours <= 0
+    ) {
+      throw new Error('thrashDetector.windowHours must be an integer > 0');
+    }
+  }
+}
+
 function validateDbReaperConfig(config: InvokerConfig): void {
   const dbReaper = config.dbReaper;
   if (dbReaper === undefined) return;
@@ -404,6 +444,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateThrashDetectorConfig(config);
   validateSelfDeployConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);

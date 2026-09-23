@@ -1,11 +1,12 @@
 import type { TaskEvent } from '@invoker/data-store';
+import type { RecoveryWorkerAuditAction } from '@invoker/execution-engine';
 
 import { RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 
 export const RECOVERY_WORKER_ID = 'auto-fix-recovery';
 export const RECOVERY_WORKER_OWNER = 'auto-fix';
 
-export type RecoveryWorkerAuditAction = 'wakeup' | 'scan' | 'submit' | 'skip';
+export { classifyAutoFixRecoveryPhase, type RecoveryWorkerAuditAction } from '@invoker/execution-engine';
 export type RecoveryWorkerAuditEventType = `recovery.worker.${RecoveryWorkerAuditAction}`;
 
 export interface RecoveryWorkerAuditPayload {
@@ -75,18 +76,6 @@ const ALL_RECOVERY_EVENT_TYPES = Object.values(RECOVERY_EVENT_TYPES);
 
 export function recoveryWorkerEventType(action: RecoveryWorkerAuditAction): RecoveryWorkerAuditEventType {
   return RECOVERY_EVENT_TYPES[action];
-}
-
-export function classifyAutoFixRecoveryPhase(
-  phase: string,
-  details: Record<string, unknown> = {},
-): RecoveryWorkerAuditAction | undefined {
-  if (phase === 'delta-failed') return 'wakeup';
-  if (phase === 'poll-failed' || phase === 'schedule-enter') return 'scan';
-  if (phase === 'schedule-enqueued' || phase === 'worker-autofix-submitted') return 'submit';
-  if (phase === 'schedule-skip' || phase.endsWith('-skip')) return 'skip';
-  if (details.reason && (phase.includes('skip') || phase.includes('error'))) return 'skip';
-  return undefined;
 }
 
 export function buildRecoveryWorkerAuditPayload(

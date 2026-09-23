@@ -130,6 +130,7 @@ import {
   resolveConfigFileState,
   resolveE2eAutoFixWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
+  resolveThrashDetectorWorkerConfig,
   resolveSpendCircuitBreakerWorkerConfig,
   type InvokerConfig,
 } from './config.js';
@@ -137,6 +138,7 @@ import {
   resolveAutoApproveAIFixes,
   resolveAutoFixRetries,
 } from './autofix-defaults.js';
+import { classifyAutoFixRecoveryPhase } from './recovery-worker-observability.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
@@ -517,6 +519,10 @@ function buildRegisteredOwnerWorkerDeps(
         name: target.name,
         connection: target.connection,
       })),
+    },
+    thrashDetector: {
+      ...resolveThrashDetectorWorkerConfig(invokerConfig),
+      classifyAutoFixRecoveryPhase,
     },
     selfDeploy: {
       intervalMs: (invokerConfig.selfDeploy?.intervalMinutes ?? 30) * 60_000,

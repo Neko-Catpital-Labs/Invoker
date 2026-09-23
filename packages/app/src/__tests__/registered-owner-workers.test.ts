@@ -4,6 +4,7 @@ import {
   PR_ORPHAN_REPAIR_WORKER_KIND,
   WORKER_SESSION_MINE_WORKER_KIND,
   SELF_DEPLOY_WORKER_KIND,
+  THRASH_DETECTOR_WORKER_KIND,
   createWorkerRegistry,
   registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
@@ -153,5 +154,28 @@ describe('registered self-deploy worker', () => {
     expect(runtime.isRunning()).toBe(false);
     expect([...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS]).not.toContain(SELF_DEPLOY_WORKER_KIND);
     expect(BUILT_IN_WORKER_KINDS.has(SELF_DEPLOY_WORKER_KIND)).toBe(true);
+  });
+});
+
+describe('registered thrash-detector worker', () => {
+  it('registers the off-by-default thrash detector worker and builds a stopped runtime', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+    const entry = registry.get(THRASH_DETECTOR_WORKER_KIND);
+    expect(entry).toBeDefined();
+
+    const runtime = entry!.factory({
+      store: {
+        ...emptyStore,
+        listTaskEvents: () => [],
+        getTaskOutput: () => '',
+      },
+      submitter: noopSubmitter,
+      logger: silentLogger,
+      thrashDetector: { enabled: false, intervalMs: 60_000, tickOnStart: false },
+    });
+    expect(runtime.identity.kind).toBe(THRASH_DETECTOR_WORKER_KIND);
+    expect(runtime.isRunning()).toBe(false);
+    expect([...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS]).not.toContain(THRASH_DETECTOR_WORKER_KIND);
+    expect(BUILT_IN_WORKER_KINDS.has(THRASH_DETECTOR_WORKER_KIND)).toBe(true);
   });
 });
