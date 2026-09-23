@@ -4101,10 +4101,34 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const leaseExpiresAt = new Date(now.getTime() + (options.leaseMs ?? EXECUTION_RESOURCE_LEASE_MS)).toISOString();
     const maxHolders = Math.max(1, Math.floor(options.maxHolders ?? 1));
     return this.runTransaction(() => {
+      const expiredRows = this.queryAll(
+        `SELECT resource_key, resource_type, holder_id, task_id
+           FROM execution_resource_leases
+          WHERE resource_key = ?
+            AND lease_expires_at <= ?
+          ORDER BY holder_id ASC`,
+        [options.resourceKey, nowIso],
+      );
       this.execRun(
         'DELETE FROM execution_resource_leases WHERE resource_key = ? AND lease_expires_at <= ?',
         [options.resourceKey, nowIso],
       );
+      for (const row of expiredRows) {
+        this.appendQueueHistory({
+          eventType: 'executor_settlement',
+          taskId: row.task_id ? String(row.task_id) : null,
+          resourceKey: String(row.resource_key),
+          resourceType: row.resource_type ? String(row.resource_type) : null,
+          holderId: String(row.holder_id),
+          fromState: 'leased',
+          toState: 'expired',
+          payload: { source: 'claimExecutionResourceLease' },
+          unknownFields: [
+            ...(row.task_id ? [] : ['task_id']),
+            ...(row.resource_type ? [] : ['resource_type']),
+          ],
+        });
+      }
       const existingForHolder = this.queryOne(
         `SELECT holder_id FROM execution_resource_leases
          WHERE resource_key = ?

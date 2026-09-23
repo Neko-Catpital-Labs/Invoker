@@ -247,4 +247,47 @@ describe('queue history persistence', () => {
       reloaded.close();
     }
   });
+
+  it('records an expired settlement when claim-time reclaim evicts a stale holder', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-queue-history-reclaim-'));
+    cleanup = () => rmSync(dir, { recursive: true, force: true });
+
+    const adapter = await SQLiteAdapter.create(join(dir, 'invoker.db'), { ownerCapability: true });
+    try {
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'pool:ssh:1',
+        resourceType: 'ssh',
+        holderId: 'attempt-stale',
+        taskId: 'task-stale',
+        leaseMs: -1000,
+      })).toBe(true);
+
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'pool:ssh:1',
+        resourceType: 'ssh',
+        holderId: 'attempt-next',
+        taskId: 'task-next',
+      })).toBe(true);
+
+      const rows = historyRows(adapter);
+      const expired = rows.filter((row) => row.to_state === 'expired');
+      expect(expired).toHaveLength(1);
+      expect(expired[0]).toMatchObject({
+        event_type: 'executor_settlement',
+        resource_key: 'pool:ssh:1',
+        task_id: 'task-stale',
+        from_state: 'leased',
+      });
+      expect(payload(expired[0])).toMatchObject({ source: 'claimExecutionResourceLease' });
+      expect(unknownFields(expired[0])).toEqual([]);
+
+      const admissionNext = rows.find(
+        (row) => row.event_type === 'executor_admission' && row.task_id === 'task-next',
+      );
+      expect(admissionNext).toBeDefined();
+      expect(expired[0].id).toBeLessThan(admissionNext!.id);
+    } finally {
+      adapter.close();
+    }
+  });
 });
