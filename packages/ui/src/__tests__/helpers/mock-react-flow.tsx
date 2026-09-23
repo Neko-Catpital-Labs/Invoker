@@ -29,6 +29,8 @@ export function createReactFlowMock() {
         type?: string;
         data?: Record<string, unknown>;
         position?: { x: number; y: number };
+        selectable?: boolean;
+        focusable?: boolean;
       }>;
       edges?: unknown[];
       nodeTypes?: Record<string, React.ComponentType<any>>;
@@ -68,13 +70,19 @@ export function createReactFlowMock() {
 
     const nodeElements = nodes.map((node) => {
       const NodeComponent = nodeTypes[node.type ?? ''];
+      // Mirrors React Flow's NodeWrapper: per-node selectable/focusable only
+      // gate selection and keyboard focus — the wrapper still forwards click,
+      // double-click, and context-menu events to the flow-level handlers.
+      const isSelectable = node.selectable !== false;
+      const isFocusable = node.focusable !== false;
       return (
         <div
           key={node.id}
           data-testid={`rf__node-${node.id}`}
           data-x={(node as { position?: { x?: number } }).position?.x}
           data-y={(node as { position?: { y?: number } }).position?.y}
-          className="react-flow__node"
+          className={`react-flow__node${isSelectable ? ' selectable' : ''}`}
+          tabIndex={isFocusable ? 0 : undefined}
           onClick={(e) => onNodeClick?.(e, node)}
           onContextMenu={(e) => onNodeContextMenu?.(e, node)}
           onDoubleClick={(e) => onNodeDoubleClick?.(e, node)}

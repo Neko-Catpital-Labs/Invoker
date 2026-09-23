@@ -32,6 +32,7 @@ const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
   review_ready: 2,
   blocked: 3,
   needs_input: 4,
+  skipped: 5,
 };
 
 const RUNNING_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
