@@ -141,15 +141,20 @@ describe('submit latency under a workflow mutation queue storm (repro)', () => {
       return status !== 'completed' && status !== 'failed';
     });
     const failedIntent = intentsById.get(firstFailureId);
+    const expectedFenceReason = `Superseded by recreate intent #${fenceId}`;
     const persistedDispatchError = failedIntent?.status === 'failed'
       && (failedIntent.error?.includes(KNOWN_DISPATCH_ERROR) ?? false);
+    const persistedFenceSupersede = failedIntent?.status === 'failed'
+      && (failedIntent.error?.includes(expectedFenceReason) ?? false);
     const dispatchErrorLogged = calls.some((call) => call.includes(KNOWN_DISPATCH_ERROR));
-    const missingErrorIds = persistedDispatchError ? [] : [firstFailureId];
+    const dispatchErrorAttributed = persistedDispatchError
+      || (persistedFenceSupersede && dispatchErrorLogged);
+    const missingErrorIds = dispatchErrorAttributed ? [] : [firstFailureId];
     const hasDefect = p95 > ADD_P95_BUDGET_MS
       || !drained
       || undrainedIds.length > 0
       || missingErrorIds.length > 0;
-    const measured = `p95=${p95.toFixed(1)}ms budget=${ADD_P95_BUDGET_MS}ms drain=${drainElapsedMs.toFixed(1)}ms drainBudget=${DRAIN_BUDGET_MS}ms drained=${drained} undrainedIds=${undrainedIds.join(',') || 'none'} missingDispatchErrorIds=${missingErrorIds.join(',') || 'none'} dispatchErrorLogged=${dispatchErrorLogged} persistedDispatchError=${failedIntent?.error ?? 'none'}`;
+    const measured = `p95=${p95.toFixed(1)}ms budget=${ADD_P95_BUDGET_MS}ms drain=${drainElapsedMs.toFixed(1)}ms drainBudget=${DRAIN_BUDGET_MS}ms drained=${drained} undrainedIds=${undrainedIds.join(',') || 'none'} missingDispatchErrorIds=${missingErrorIds.join(',') || 'none'} dispatchErrorLogged=${dispatchErrorLogged} persistedIntentError=${failedIntent?.error ?? 'none'} expectedFenceReason=${expectedFenceReason}`;
 
     if (process.env.INVOKER_REPRO_EXPECT === 'bug') {
       expect(hasDefect, measured).toBe(true);
