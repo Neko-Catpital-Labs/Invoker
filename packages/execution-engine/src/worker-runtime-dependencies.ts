@@ -25,6 +25,7 @@ import type { CrossRepoResearchWorkerConfig } from './workers/cross-repo-researc
 import type { CatstackDeployWorkerConfig } from './workers/catstack-deploy-worker.js';
 import type { SelfDeployWorkerConfig } from './workers/self-deploy-worker.js';
 import type { MergifyQueueResearchWorkerConfig } from './workers/mergify-queue-research-worker.js';
+import type { AgentLoginWatchWorkerConfig } from './workers/agent-login-watch-worker.js';
 import type {
   InfraRepairWorkerConfig,
   InfraRepairWorkerStore,
@@ -117,6 +118,7 @@ export interface WorkerRuntimeDependencies {
   idleTaskCleanup?: IdleTaskCleanupWorkerConfig;
   dbReaper?: DbReaperWorkerConfig;
   spendCircuitBreaker?: SpendCircuitBreakerWorkerConfig;
+  agentLoginWatch?: AgentLoginWatchWorkerConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitWorkerConfig;
   workerLifecycleStarter?: WorkerLifecycleReader & WorkerLifecycleStarter;
   repairFilingStore?: RepairFilingStore;
