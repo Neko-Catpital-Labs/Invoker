@@ -381,7 +381,15 @@ export class PersistedWorkflowMutationCoordinator {
         undefined,
         () => this.dispatch(intent.channel, intent.args, mutationContext),
       );
-      void dispatchPromise.catch(() => {});
+      void dispatchPromise.catch((error: unknown) => {
+        try {
+          this.handleDispatchRejection(workflowId, intent, error);
+        } catch (handlerError) {
+          process.stderr.write(
+            `[workflow-mutation-coordinator] dispatch rejection handler failed for intent ${intent.id}: ${summarizeMutationFailureMessage(handlerError)}\n`,
+          );
+        }
+      });
       const result = await Promise.race([
         dispatchPromise,
         invalidation.promise,
@@ -417,6 +425,46 @@ export class PersistedWorkflowMutationCoordinator {
       this.inFlightPromises.delete(intent.id);
       this.enqueueStartedAtMs.delete(intent.id);
     }
+  }
+
+  private handleDispatchRejection(
+    workflowId: string,
+    intent: WorkflowMutationIntent,
+    error: unknown,
+  ): void {
+    const message = summarizeMutationFailureMessage(error);
+    const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
+    if (latestIntent?.status === 'running') {
+      return;
+    }
+    const logMessage = `[workflow-mutation-coordinator] dispatch rejected for intent ${intent.id} workflow ${workflowId}: ${message}`;
+    this.options?.logger?.error(logMessage, {
+      module: 'workflow-mutation-coordinator',
+      workflowId,
+      intentId: intent.id,
+      channel: intent.channel,
+      error: message,
+    });
+    if (!this.options?.logger) {
+      process.stderr.write(`${logMessage}\n`);
+    }
+    if (latestIntent?.status !== 'failed') {
+      return;
+    }
+    this.recordLateDispatchFailureWithoutRenotifying(latestIntent, message);
+  }
+
+  private recordLateDispatchFailureWithoutRenotifying(
+    failedIntent: WorkflowMutationIntent,
+    message: string,
+  ): void {
+    if (failedIntent.error?.includes(message)) {
+      return;
+    }
+    const recordedMessage = failedIntent.error
+      ? `${failedIntent.error}; dispatch rejected: ${message}`
+      : message;
+    this.persistence.failWorkflowMutationIntent(failedIntent.id, recordedMessage);
   }
 
   private intentQueueWaitMs(intentId: number): number {

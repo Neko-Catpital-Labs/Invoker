@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { Logger, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { createWorkflowResumeCooldownLedger, createWorkflowResumeTick } from '@invoker/execution-engine';
 import type { TaskState } from '@invoker/workflow-core';
@@ -21,6 +21,17 @@ async function waitFor(condition: () => boolean, attempts: number = 20): Promise
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
+}
+
+function makeCapturingLogger(errorLogs: string[]): Logger {
+  const logger: Logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: (msg: string) => { errorLogs.push(msg); },
+    child: () => logger,
+  };
+  return logger;
 }
 
 function makeTask(id: string, workflowId: string = 'wf-1'): TaskState {
@@ -1824,6 +1835,180 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(iterationsBeforeAbort).toBeGreaterThan(0);
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+  });
+
+  it('records a late dispatch rejection on a preempted intent without a second failure notification', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-0'));
+
+    const gate = deferred();
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? String(args[0]);
+        if (command.includes('hold-work')) {
+          await gate.promise;
+          throw new Error('late dispatch failure');
+        }
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/task-0', 'hold-work'] }],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    const recreate = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-1'] }],
+    );
+    await recreate;
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+    expect(failedEvents.filter((event) => event.intentId === 1)).toHaveLength(1);
+
+    gate.resolve();
+    await waitFor(() => (
+      adapter.loadWorkflowMutationIntent(1)?.error?.includes('late dispatch failure') === true
+    ));
+
+    const preemptedIntent = adapter.loadWorkflowMutationIntent(1);
+    expect(preemptedIntent?.status).toBe('failed');
+    expect(preemptedIntent?.error).toContain('Superseded by recreate intent #2');
+    expect(preemptedIntent?.error).toContain('dispatch rejected: late dispatch failure');
+
+    expect(failedEvents.filter((event) => event.intentId === 1)).toHaveLength(1);
+    expect(adapter.getEvents('wf-1/task-0')
+      .filter((event) => event.eventType === 'workflow.mutation.failed')).toHaveLength(1);
+  });
+
+  it('keeps the preemption reason when the late dispatch error is already recorded', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-0'));
+
+    const gate = deferred();
+    const errorLogs: string[] = [];
+    const logger = makeCapturingLogger(errorLogs);
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? String(args[0]);
+        if (command.includes('hold-work')) {
+          await gate.promise;
+          throw new Error('recreate intent #2');
+        }
+      },
+      { logger },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/task-0', 'hold-work'] }],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    await coordinator.enqueue<void>('wf-1', 'high', 'headless.exec', [{ args: ['recreate', 'wf-1'] }]);
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+    expect(adapter.loadWorkflowMutationIntent(1)?.error).toBe('Superseded by recreate intent #2');
+
+    gate.resolve();
+    await waitFor(() => errorLogs.some((entry) => entry.includes('dispatch rejected for intent 1')));
+
+    expect(adapter.loadWorkflowMutationIntent(1)?.error).toBe('Superseded by recreate intent #2');
+  });
+
+  it('does not raise an unhandled rejection when recording a late dispatch failure throws', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-0'));
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    const stderrWrites: string[] = [];
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const gate = deferred();
+      const failSpy = vi.spyOn(adapter, 'failWorkflowMutationIntent');
+      const coordinator = new PersistedWorkflowMutationCoordinator(
+        adapter,
+        'owner-1',
+        async (_channel, args) => {
+          const payload = args[0] as { args?: string[] } | undefined;
+          const command = payload?.args?.join(' ') ?? String(args[0]);
+          if (command.includes('hold-work')) {
+            await gate.promise;
+            throw new Error('late dispatch failure');
+          }
+        },
+      );
+
+      const olderRunning = coordinator.enqueue<void>(
+        'wf-1',
+        'normal',
+        'headless.exec',
+        [{ args: ['set', 'command', 'wf-1/task-0', 'hold-work'] }],
+      );
+      void olderRunning.catch(() => {});
+      await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+      await coordinator.enqueue<void>('wf-1', 'high', 'headless.exec', [{ args: ['recreate', 'wf-1'] }]);
+      await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+
+      failSpy.mockImplementation(() => { throw new Error('adapter closed'); });
+      gate.resolve();
+      await waitFor(() => stderrWrites.some((entry) => entry.includes('dispatch rejection handler failed for intent 1')));
+
+      expect(stderrWrites.some((entry) => (
+        entry.includes('dispatch rejection handler failed for intent 1')
+        && entry.includes('adapter closed')
+      ))).toBe(true);
+      expect(unhandled).toEqual([]);
+    } finally {
+      stderrSpy.mockRestore();
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('invokes onIntentFailed with intent metadata when the async handler throws', async () => {
