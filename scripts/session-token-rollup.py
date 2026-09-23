@@ -339,8 +339,8 @@ def collect_claude_file(rollup, root, path):
         if forked_from and fork_start_context is None:
             fork_start_context = context
         rollup.bill(stats, model, tokens, context, timestamp)
-    if forked_from:
-        rollup.fork_starts.setdefault(forked_from, {})[session_id] = fork_start_context or 0
+    if forked_from is not None and fork_start_context is not None:
+        rollup.fork_starts.setdefault(forked_from, {})[session_id] = fork_start_context
 
 
 def collect_claude(rollup, roots):
