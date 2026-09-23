@@ -42,17 +42,119 @@ After submit, arm \`invoker-cli wait <workflowId>\` with \`notify_on_output\` on
 `;
 
 export const CLAUDE_HOOK_SCRIPT = `#!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const additionalContext = ${JSON.stringify(EXECUTION_ROUTING_FRAGMENT.trim())};
+const TASK_NOTIFICATION_PREFIX = '<task-notification>';
+const STATE_DIR_NAME = 'invoker-execution-hook';
+const COMPACTION_MARKERS = ['"compact_boundary"', '"isCompactSummary":true', '"isCompactSummary": true'];
+
+function warn(what, error) {
+  process.stderr.write(\`invoker-execution hook: \${what}: \${error && error.message ? error.message : String(error)}\\n\`);
+}
+
+function readEvent() {
+  let raw;
+  try {
+    raw = readFileSync(0, 'utf8');
+  } catch (error) {
+    warn('could not read hook stdin', error);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed;
+    warn('hook stdin was not a JSON object', \`got \${typeof parsed}\`);
+    return null;
+  } catch (error) {
+    warn('could not parse hook stdin as JSON', error);
+    return null;
+  }
+}
+
+function stateFilePath(sessionId) {
+  const dir = path.join(tmpdir(), STATE_DIR_NAME);
+  mkdirSync(dir, { recursive: true });
+  return path.join(dir, \`\${createHash('sha256').update(sessionId).digest('hex').slice(0, 32)}.json\`);
+}
+
+function readLastInjectedCompactions(file) {
+  let raw;
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { known: true, value: null };
+    warn(\`could not read hook state \${file}\`, error);
+    return { known: false, value: null };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.compactions === 'number') return { known: true, value: parsed.compactions };
+    return { known: false, value: null };
+  } catch (error) {
+    warn(\`could not parse hook state \${file}\`, error);
+    return { known: false, value: null };
+  }
+}
+
+function countCompactions(transcriptPath) {
+  if (typeof transcriptPath !== 'string' || !transcriptPath) return { known: false, value: 0 };
+  let raw;
+  try {
+    raw = readFileSync(transcriptPath, 'utf8');
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') warn(\`could not read transcript \${transcriptPath}\`, error);
+    return { known: false, value: 0 };
+  }
+  let count = 0;
+  for (const line of raw.split('\\n')) {
+    if (line && COMPACTION_MARKERS.some((marker) => line.includes(marker))) count += 1;
+  }
+  return { known: true, value: count };
+}
+
+function rememberInjection(file, compactions) {
+  try {
+    writeFileSync(file, JSON.stringify({ compactions }));
+  } catch (error) {
+    warn(\`could not write hook state \${file}\`, error);
+  }
+}
+
+function shouldInject(event) {
+  const prompt = typeof event.prompt === 'string' ? event.prompt : '';
+  if (prompt.trimStart().startsWith(TASK_NOTIFICATION_PREFIX)) return false;
+  const sessionId = typeof event.session_id === 'string' ? event.session_id.trim() : '';
+  if (!sessionId) return true;
+
+  let file;
+  try {
+    file = stateFilePath(sessionId);
+  } catch (error) {
+    warn('could not open hook state directory', error);
+    return true;
+  }
+
+  const lastInjected = readLastInjectedCompactions(file);
+  const compactions = countCompactions(event.transcript_path);
+  if (lastInjected.known && lastInjected.value !== null && compactions.known && compactions.value <= lastInjected.value) {
+    return false;
+  }
+  rememberInjection(file, compactions.known ? compactions.value : (lastInjected.value ?? 0));
+  return true;
+}
 
 function main() {
-  try {
-    JSON.parse(readFileSync(0, 'utf8'));
-  } catch {
+  if (!additionalContext) {
+    warn('no delegation reminder to inject', 'the execution routing fragment is empty');
     return;
   }
-  if (!additionalContext) return;
+  const event = readEvent();
+  if (!event) return;
+  if (!shouldInject(event)) return;
   process.stdout.write(\`\${JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'UserPromptSubmit',
