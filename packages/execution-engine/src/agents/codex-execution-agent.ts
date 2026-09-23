@@ -20,54 +20,92 @@ export interface CodexExecutionAgentConfig {
 
 const CODEX_MODEL_DISCOVERY_TIMEOUT_MS = 3_000;
 const CODEX_MODEL_CACHE_MS = 5 * 60_000;
+const CODEX_DISCOVERY_DETAIL_MAX_CHARS = 120;
+
+const CODEX_DISCOVERY_ATTEMPTS = [
+  { attempt: 'live' as const, args: ['debug', 'models'] },
+  { attempt: 'bundled' as const, args: ['debug', 'models', '--bundled'] },
+];
+
+type CodexDiscoveryAttempt = (typeof CODEX_DISCOVERY_ATTEMPTS)[number]['attempt'];
+
+interface CodexModelProbeFailure {
+  attempt: CodexDiscoveryAttempt;
+  detail: string;
+}
 
 type CodexModelDiscoveryResult =
   | { kind: 'success'; models: readonly ExecutionModelOption[] }
-  | { kind: 'failed' };
+  | { kind: 'failed'; failures: readonly CodexModelProbeFailure[] };
 
-const CODEX_FALLBACK_MODELS: readonly ExecutionModelOption[] = [
-  { id: 'gpt-5.5', label: 'GPT-5.5' },
-  { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
-  { id: 'gpt-5.4', label: 'GPT-5.4' },
-  { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
-  { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano' },
-  { id: 'gpt-5.3', label: 'GPT-5.3' },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
-  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark' },
-  { id: 'gpt-5.2', label: 'GPT-5.2' },
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex' },
-  { id: 'gpt-5.1', label: 'GPT-5.1' },
-  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
-  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max' },
-  { id: 'gpt-5', label: 'GPT-5' },
-  { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
-];
+type CodexCatalogParse =
+  | { kind: 'ok'; models: ExecutionModelOption[] }
+  | { kind: 'invalid'; reason: string };
+
+export class CodexModelDiscoveryUnavailableError extends Error {
+  readonly failures: readonly CodexModelProbeFailure[];
+
+  constructor(command: string, failures: readonly CodexModelProbeFailure[]) {
+    const diagnostics = failures.map((failure) => `${failure.attempt} probe ${failure.detail}`).join('; ');
+    super(`Codex model discovery via "${boundDetail(command)}" is unavailable: ${diagnostics}.`);
+    this.name = 'CodexModelDiscoveryUnavailableError';
+    this.failures = failures;
+  }
+}
+
+function boundDetail(text: string): string {
+  const collapsed = text.trim().replace(/\s+/g, ' ');
+  return collapsed.length > CODEX_DISCOVERY_DETAIL_MAX_CHARS
+    ? `${collapsed.slice(0, CODEX_DISCOVERY_DETAIL_MAX_CHARS)}...`
+    : collapsed;
+}
+
+function describeProbeFailure(result: ReturnType<typeof spawnSync>): string {
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    return boundDetail(`failed to run (${code ?? result.error.message})`);
+  }
+  if (result.signal) return boundDetail(`was terminated by ${result.signal}`);
+  return boundDetail(`exited with status ${result.status}`);
+}
 
 function normalizeCodexModelId(model: string): string {
   return model.trim().toLowerCase();
 }
 
-function parseDiscoveredCodexModels(stdout: string): ExecutionModelOption[] {
+function parseCodexCatalog(stdout: string): CodexCatalogParse {
+  let payload: unknown;
   try {
-    const parsed = JSON.parse(stdout) as {
-      models?: Array<{ slug?: string; display_name?: string }>;
-    };
-    const models: ExecutionModelOption[] = [];
-    const seen = new Set<string>();
-    for (const entry of parsed.models ?? []) {
-      const id = entry.slug?.trim();
-      const label = entry.display_name?.trim();
-      if (!id || !label) continue;
-      const key = normalizeCodexModelId(id);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      models.push({ id, label });
-    }
-    return models;
+    payload = JSON.parse(stdout);
   } catch {
-    return [];
+    return { kind: 'invalid', reason: 'output was not valid JSON' };
   }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return { kind: 'invalid', reason: 'output was not a JSON object' };
+  }
+  const rawModels = (payload as { models?: unknown }).models;
+  if (rawModels === undefined) return { kind: 'invalid', reason: 'output had no models field' };
+  if (!Array.isArray(rawModels)) return { kind: 'invalid', reason: 'models was not an array' };
+
+  const models: ExecutionModelOption[] = [];
+  const seen = new Set<string>();
+  for (const entry of rawModels) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      return { kind: 'invalid', reason: 'a models entry was not an object' };
+    }
+    const { slug, display_name: displayName } = entry as { slug?: unknown; display_name?: unknown };
+    if (typeof slug !== 'string' || typeof displayName !== 'string') {
+      return { kind: 'invalid', reason: 'a models entry lacked a string slug and display_name' };
+    }
+    const id = slug.trim();
+    const label = displayName.trim();
+    if (!id || !label) return { kind: 'invalid', reason: 'a models entry had a blank slug or display_name' };
+    const key = normalizeCodexModelId(id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    models.push({ id, label });
+  }
+  return { kind: 'ok', models };
 }
 
 export class CodexExecutionAgent implements ExecutionAgent {
@@ -85,6 +123,10 @@ export class CodexExecutionAgent implements ExecutionAgent {
     expiresAt: number;
     models: readonly ExecutionModelOption[];
     provenance: SupportedModelsProvenance;
+  };
+  private discoveryFailureCache?: {
+    expiresAt: number;
+    failures: readonly CodexModelProbeFailure[];
   };
 
   constructor(config: CodexExecutionAgentConfig = {}) {
@@ -140,26 +182,47 @@ export class CodexExecutionAgent implements ExecutionAgent {
     if (cached && cached.expiresAt > now) {
       return cached.models;
     }
+    const cachedFailure = this.discoveryFailureCache;
+    if (cachedFailure && cachedFailure.expiresAt > now) {
+      throw new CodexModelDiscoveryUnavailableError(this.command, cachedFailure.failures);
+    }
     const discovered = this.discoverSupportedModels();
-    const models = discovered.kind === 'success' ? discovered.models : CODEX_FALLBACK_MODELS;
+    if (discovered.kind === 'failed') {
+      this.discoveryFailureCache = {
+        expiresAt: now + CODEX_MODEL_CACHE_MS,
+        failures: discovered.failures,
+      };
+      throw new CodexModelDiscoveryUnavailableError(this.command, discovered.failures);
+    }
+    this.discoveryFailureCache = undefined;
     this.supportedModelCache = {
       expiresAt: now + CODEX_MODEL_CACHE_MS,
-      models,
-      provenance: discovered.kind === 'success' ? 'agent' : 'built-in',
+      models: discovered.models,
+      provenance: 'agent',
     };
-    return models;
+    return discovered.models;
   }
 
   private discoverSupportedModels(): CodexModelDiscoveryResult {
-    const result = spawnSync(this.command, ['debug', 'models'], {
-      encoding: 'utf8',
-      timeout: CODEX_MODEL_DISCOVERY_TIMEOUT_MS,
-      killSignal: 'SIGKILL',
-    });
-    if (result.error || result.status !== 0) {
-      return { kind: 'failed' };
+    const failures: CodexModelProbeFailure[] = [];
+    for (const { attempt, args } of CODEX_DISCOVERY_ATTEMPTS) {
+      const result = spawnSync(this.command, args, {
+        encoding: 'utf8',
+        timeout: CODEX_MODEL_DISCOVERY_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      });
+      if (result.error || result.status !== 0) {
+        failures.push({ attempt, detail: describeProbeFailure(result) });
+        continue;
+      }
+      const parsed = parseCodexCatalog(result.stdout ?? '');
+      if (parsed.kind === 'invalid') {
+        failures.push({ attempt, detail: boundDetail(`returned unusable catalog output (${parsed.reason})`) });
+        continue;
+      }
+      return { kind: 'success', models: parsed.models };
     }
-    return { kind: 'success', models: parseDiscoveredCodexModels(result.stdout) };
+    return { kind: 'failed', failures };
   }
 
   private buildModelArgs(executionModel?: string): string[] {
