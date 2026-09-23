@@ -445,14 +445,20 @@ export class PersistedWorkflowMutationCoordinator {
     if (latestIntent?.status !== 'failed') {
       return;
     }
-    const recordedMessage = latestIntent.error && !latestIntent.error.includes(message)
-      ? `${latestIntent.error}; dispatch rejected: ${message}`
+    this.recordLateDispatchFailureWithoutRenotifying(latestIntent, message);
+  }
+
+  private recordLateDispatchFailureWithoutRenotifying(
+    failedIntent: WorkflowMutationIntent,
+    message: string,
+  ): void {
+    const recordedMessage = failedIntent.error && !failedIntent.error.includes(message)
+      ? `${failedIntent.error}; dispatch rejected: ${message}`
       : message;
-    if (latestIntent.error === recordedMessage) {
+    if (failedIntent.error === recordedMessage) {
       return;
     }
-    this.persistence.failWorkflowMutationIntent(intent.id, recordedMessage);
-    this.notifyIntentFailed(latestIntent, recordedMessage);
+    this.persistence.failWorkflowMutationIntent(failedIntent.id, recordedMessage);
   }
 
   private intentQueueWaitMs(intentId: number): number {

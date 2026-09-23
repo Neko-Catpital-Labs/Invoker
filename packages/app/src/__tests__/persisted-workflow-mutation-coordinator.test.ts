@@ -1826,6 +1826,68 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
   });
 
+  it('records a late dispatch rejection on a preempted intent without a second failure notification', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-0'));
+
+    const gate = deferred();
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? String(args[0]);
+        if (command.includes('hold-work')) {
+          await gate.promise;
+          throw new Error('late dispatch failure');
+        }
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/task-0', 'hold-work'] }],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    const recreate = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-1'] }],
+    );
+    await recreate;
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+    expect(failedEvents.filter((event) => event.intentId === 1)).toHaveLength(1);
+
+    gate.resolve();
+    await waitFor(() => (
+      adapter.loadWorkflowMutationIntent(1)?.error?.includes('late dispatch failure') === true
+    ));
+
+    const preemptedIntent = adapter.loadWorkflowMutationIntent(1);
+    expect(preemptedIntent?.status).toBe('failed');
+    expect(preemptedIntent?.error).toContain('Superseded by recreate intent #2');
+    expect(preemptedIntent?.error).toContain('dispatch rejected: late dispatch failure');
+
+    expect(failedEvents.filter((event) => event.intentId === 1)).toHaveLength(1);
+    expect(adapter.getEvents('wf-1/task-0')
+      .filter((event) => event.eventType === 'workflow.mutation.failed')).toHaveLength(1);
+  });
+
   it('invokes onIntentFailed with intent metadata when the async handler throws', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
