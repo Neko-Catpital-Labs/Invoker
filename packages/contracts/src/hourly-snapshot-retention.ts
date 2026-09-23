@@ -4,6 +4,7 @@ import * as path from 'node:path';
 const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
 const DEFAULT_HOURLY_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const HOURLY_SNAPSHOT_PREFIX = 'invoker.db.hourly-auto-';
+const SNAPSHOT_FILE_SUFFIXES = ['', '-wal', '-shm'] as const;
 
 export function hourlySnapshotRetention(): number {
   const raw = process.env.INVOKER_HOURLY_BACKUP_RETENTION;
@@ -32,6 +33,13 @@ function snapshotByteSize(filePath: string): number {
   } catch {
     return 0;
   }
+}
+
+function snapshotGroupByteSize(backupDir: string, name: string): number {
+  return SNAPSHOT_FILE_SUFFIXES.reduce(
+    (total, suffix) => total + snapshotByteSize(path.join(backupDir, `${name}${suffix}`)),
+    0,
+  );
 }
 
 /**
@@ -69,7 +77,7 @@ export function pruneHourlySnapshots(
   for (const name of newestFirst) {
     if (keep.size >= retain) break;
     const isNewest = keep.size === 0;
-    const size = snapshotByteSize(path.join(backupDir, name));
+    const size = snapshotGroupByteSize(backupDir, name);
     if (!isNewest && keptBytes + size > maxBytes) continue;
     keep.add(name);
     keptBytes += size;
@@ -78,7 +86,7 @@ export function pruneHourlySnapshots(
   if (toRemove.length === 0) return 0;
   let removed = 0;
   for (const name of toRemove) {
-    for (const suffix of ['', '-wal', '-shm']) {
+    for (const suffix of SNAPSHOT_FILE_SUFFIXES) {
       try {
         rmSync(path.join(backupDir, `${name}${suffix}`), { force: true });
       } catch (err) {

@@ -28,6 +28,12 @@ function writeSnapshot(dir: string, index: number, bytes: number): string {
   return name;
 }
 
+function writeSidecar(dir: string, index: number, suffix: '-wal' | '-shm', bytes: number): string {
+  const name = `${snapshotName(index)}${suffix}`;
+  writeFileSync(join(dir, name), Buffer.alloc(bytes));
+  return name;
+}
+
 describe('pruneHourlySnapshots', () => {
   it('prunes to fewer than retain when total size exceeds the byte budget', () => {
     const dir = makeDir();
@@ -47,6 +53,29 @@ describe('pruneHourlySnapshots', () => {
 
     expect(removed).toBe(2);
     expect(readdirSync(dir).sort()).toEqual([snapshotName(2), snapshotName(3), snapshotName(4)]);
+  });
+
+  it('counts legacy -wal/-shm sidecars against the byte budget', () => {
+    const dir = makeDir();
+    for (let i = 0; i < 3; i += 1) writeSnapshot(dir, i, 100);
+    writeSidecar(dir, 0, '-wal', 400);
+    writeSidecar(dir, 0, '-shm', 100);
+
+    const removed = pruneHourlySnapshots(dir, 3, 350);
+
+    expect(removed).toBe(1);
+    expect(readdirSync(dir).sort()).toEqual([snapshotName(1), snapshotName(2)]);
+  });
+
+  it('charges the newest snapshot sidecars to the budget the older ones share', () => {
+    const dir = makeDir();
+    for (let i = 0; i < 3; i += 1) writeSnapshot(dir, i, 100);
+    writeSidecar(dir, 2, '-wal', 100);
+
+    const removed = pruneHourlySnapshots(dir, 3, 250);
+
+    expect(removed).toBe(2);
+    expect(readdirSync(dir).sort()).toEqual([snapshotName(2), `${snapshotName(2)}-wal`].sort());
   });
 
   it('always keeps the newest snapshot even when its own size exceeds the budget', () => {
