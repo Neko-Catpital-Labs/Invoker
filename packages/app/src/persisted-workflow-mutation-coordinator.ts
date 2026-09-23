@@ -381,7 +381,9 @@ export class PersistedWorkflowMutationCoordinator {
         undefined,
         () => this.dispatch(intent.channel, intent.args, mutationContext),
       );
-      void dispatchPromise.catch(() => {});
+      void dispatchPromise.catch((error) => {
+        this.recordDispatchRejection(workflowId, intent, error);
+      });
       const result = await Promise.race([
         dispatchPromise,
         invalidation.promise,
@@ -416,6 +418,48 @@ export class PersistedWorkflowMutationCoordinator {
       });
       this.inFlightPromises.delete(intent.id);
       this.enqueueStartedAtMs.delete(intent.id);
+    }
+  }
+
+  private recordDispatchRejection(workflowId: string, intent: WorkflowMutationIntent, error: unknown): void {
+    const message = summarizeMutationFailureMessage(error);
+    this.logDispatchRejection(workflowId, intent, message);
+    try {
+      const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
+      if (latestIntent?.status !== 'running') {
+        return;
+      }
+      this.persistence.failWorkflowMutationIntent(intent.id, message);
+      this.notifyIntentFailed(intent, message);
+    } catch (recordError) {
+      const recordMessage = recordError instanceof Error ? recordError.message : String(recordError);
+      this.options?.logger?.warn('[workflow-mutation-coordinator] failed to record dispatch rejection', {
+        module: 'workflow-mutation-coordinator',
+        workflowId,
+        intentId: intent.id,
+        channel: intent.channel,
+        error: recordMessage,
+      });
+      if (!this.options?.logger) {
+        process.stderr.write(
+          `[workflow-mutation-coordinator] failed to record dispatch rejection for workflow=${workflowId} intent=${intent.id}: ${recordMessage}\n`,
+        );
+      }
+    }
+  }
+
+  private logDispatchRejection(workflowId: string, intent: WorkflowMutationIntent, message: string): void {
+    const logMessage =
+      `[workflow-mutation-coordinator] dispatch rejected for workflow=${workflowId} intent=${intent.id}: ${message}`;
+    this.options?.logger?.warn(logMessage, {
+      module: 'workflow-mutation-coordinator',
+      workflowId,
+      intentId: intent.id,
+      channel: intent.channel,
+      error: message,
+    });
+    if (!this.options?.logger) {
+      process.stderr.write(`${logMessage}\n`);
     }
   }
 
