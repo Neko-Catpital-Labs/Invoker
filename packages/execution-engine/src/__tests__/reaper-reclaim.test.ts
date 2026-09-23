@@ -21,8 +21,8 @@ import {
   AUTOMATION_CHECKOUT_DIRS,
   buildDeletingOrphanReapScript,
   buildStaleWorktreeReapScript,
-  DELETING_ORPHAN_MIN_AGE_MINUTES,
   CRITICAL_PRESSURE_SNAPSHOT_RETENTION,
+  DELETING_ORPHAN_MIN_AGE_MINUTES,
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
   reapStaleInvokerCliTempDirs,
@@ -779,6 +779,18 @@ describe('enforceHourlySnapshotRetention', () => {
     expect(readdirSync(backupDir)).toHaveLength(10);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(String(logger.warn.mock.calls[0]?.[0])).toContain('statfs EACCES');
+  });
+
+  it('never raises retention above the configured value under critical pressure', () => {
+    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '2');
+    const { root, home, backupDir } = seedHourlySnapshots(10);
+
+    const removed = enforceHourlySnapshotRetention(home, root, {
+      readDiskUsedPercent: () => DEFAULT_DISK_CRITICAL_PERCENT,
+    });
+
+    expect(removed).toBe(8);
+    expect(readdirSync(backupDir)).toHaveLength(2);
   });
 });
 

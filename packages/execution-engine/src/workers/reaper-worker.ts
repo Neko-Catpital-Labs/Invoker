@@ -93,7 +93,9 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         logger: options.logger,
       });
       if (ctx.signal?.aborted) return;
-      const snapshotsPruned = enforceRetention(options.invokerHome);
+      const snapshotsPruned = enforceRetention(options.invokerHome, undefined, {
+        logger: options.logger,
+      });
       const logShardsPurged = purgeOldLogShards(expandTildeHome(options.invokerHome));
       const worktreeResults = await reapWorktrees({
         invokerHome: options.invokerHome,
