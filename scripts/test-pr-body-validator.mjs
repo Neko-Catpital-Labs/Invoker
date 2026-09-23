@@ -920,6 +920,15 @@ assert(
   + 'otherwise the repair-normalize auto-split gate (which requires "policy" in scopeKinds) silently '
   + 'refuses to split a proof-lane PR whose only tooling-policy file lives under .github/',
 );
+assert(
+  JSON.stringify(scopeKindsForChangedFiles([
+    'tools/bazel/workflow-graph-tools/package.json',
+    'packages/workflow-graph/tsconfig.bazel.json',
+    'packages/workflow-graph/vitest.bazel.config.ts',
+  ])) === JSON.stringify(['policy']),
+  'Bazel tools lock and package-local bazel configs classify as policy',
+);
+
 
 const ciRepairFiles = ['.github/workflows/ci.yml'];
 const ciRepairBehaviorErrors = await validatePrBody(validMinimal, { changedFiles: ciRepairFiles });

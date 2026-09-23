@@ -23,6 +23,9 @@
     "web-app",
     "app"
   ],
+  "nativePackages": [
+    "workflow-graph"
+  ],
   "quality": true,
   "playwright": true,
   "packaging": true
