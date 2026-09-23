@@ -194,6 +194,81 @@ class TestCodexCollection(unittest.TestCase):
         self.assertEqual(row["peak_context"], 2000)
 
 
+class TestCodexMidSessionModelSwitch(unittest.TestCase):
+    """A rollout whose first token_count precedes any turn_context, then switches
+    model mid-session. Cumulative totals are 100/0/10 -> 300/100/30 -> 600/300/60,
+    so the deltas are 100/0/10, 100/100/20 and 100/200/30. The first two turns
+    belong to gpt-5.6-sol and the third to gpt-5.7-alto; the pre-turn_context
+    turn falls back to the first model seen, not the last."""
+
+    SESSION = "019f1111-2222-3333-4444-555566667777"
+
+    def collect(self):
+        tmp = tempfile.mkdtemp()
+        codex_root = os.path.join(tmp, "codex", "sessions", "2026", "09", "20")
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(codex_root)
+        os.makedirs(empty)
+        rows = [
+            {"type": "session_meta", "timestamp": "2026-09-20T09:00:00.000Z",
+             "payload": {"cwd": "/Users/dev/code", "instructions": MARKER}},
+            {"type": "event_msg", "timestamp": "2026-09-20T09:01:00.000Z",
+             "payload": {"type": "token_count", "info": {
+                 "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 0,
+                                       "output_tokens": 10, "total_tokens": 110},
+                 "last_token_usage": {"input_tokens": 100}}}},
+            {"type": "turn_context", "timestamp": "2026-09-20T09:01:30.000Z",
+             "payload": {"cwd": "/Users/dev/code", "model": "gpt-5.6-sol"}},
+            {"type": "event_msg", "timestamp": "2026-09-20T09:02:00.000Z",
+             "payload": {"type": "token_count", "info": {
+                 "total_token_usage": {"input_tokens": 300, "cached_input_tokens": 100,
+                                       "output_tokens": 30, "total_tokens": 430},
+                 "last_token_usage": {"input_tokens": 200}}}},
+            {"type": "turn_context", "timestamp": "2026-09-20T09:02:30.000Z",
+             "payload": {"cwd": "/Users/dev/code", "model": "gpt-5.7-alto"}},
+            {"type": "response_item", "timestamp": "2026-09-20T09:02:45.000Z",
+             "payload": {"type": "message", "content": [{"type": "text", "text": MARKER}]}},
+            {"type": "event_msg", "timestamp": "2026-09-20T09:03:00.000Z",
+             "payload": {"type": "token_count", "info": {
+                 "total_token_usage": {"input_tokens": 600, "cached_input_tokens": 300,
+                                       "output_tokens": 60, "total_tokens": 960},
+                 "last_token_usage": {"input_tokens": 300}}}},
+        ]
+        name = "rollout-2026-09-20T09-00-00-{}.jsonl".format(self.SESSION)
+        with open(os.path.join(codex_root, name), "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        proc = run_script([
+            "collect", "--since", SINCE, "--host", "mac", "--now", "2026-09-23T00:00:00Z",
+            "--claude-root", empty, "--codex-root", os.path.join(tmp, "codex", "sessions"),
+            "--omp-root", empty,
+        ])
+        return proc, json.loads(proc.stdout)
+
+    def test_each_turn_bills_the_model_in_effect(self):
+        _proc, report = self.collect()
+        totals = report["totals_by_tool_origin_model_day"]
+        self.assertEqual(
+            totals["codex|interactive|gpt-5.6-sol|2026-09-20"],
+            {"input": 200, "cache_read": 100, "cache_write": 0, "output": 30, "total": 330, "turns": 2},
+        )
+        self.assertEqual(
+            totals["codex|interactive|gpt-5.7-alto|2026-09-20"],
+            {"input": 100, "cache_read": 200, "cache_write": 0, "output": 30, "total": 330, "turns": 1},
+        )
+
+    def test_session_row_still_sums_every_turn(self):
+        _proc, report = self.collect()
+        row = sessions_by_id(report)[self.SESSION]
+        self.assertEqual(row["total"], 660)
+        self.assertEqual(row["turns"], 3)
+        self.assertEqual(row["model"], "gpt-5.6-sol")
+
+    def test_no_message_text_leaks(self):
+        proc, _report = self.collect()
+        self.assertNotIn(MARKER, proc.stdout)
+
+
 class TestOmpCollection(unittest.TestCase):
     """Two in-window usage rows: 10/20/30/40 and 1/2/3/4. The 2026-08-02 row is
     before --since and is excluded."""

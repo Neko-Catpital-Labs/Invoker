@@ -374,6 +374,7 @@ def collect_codex_file(rollup, path):
     session_id = codex_session_id(path)
     stats = rollup.session(CODEX, session_id)
     model = None
+    first_model = None
     previous = None
     pending = []
     for row in rollup.rows(path):
@@ -384,6 +385,8 @@ def collect_codex_file(rollup, path):
             continue
         if row_type == "turn_context":
             model = payload.get("model") or model
+            if first_model is None:
+                first_model = model
             stats.note_worker_origin(payload.get("cwd"))
             continue
         if row_type != "event_msg" or payload.get("type") != "token_count":
@@ -410,9 +413,9 @@ def collect_codex_file(rollup, path):
             continue
         if restarted:
             stats.compactions += 1
-        pending.append((delta, context, timestamp))
-    for delta, context, timestamp in pending:
-        rollup.bill(stats, model or UNKNOWN_MODEL, delta, context, timestamp)
+        pending.append((delta, context, timestamp, model))
+    for delta, context, timestamp, turn_model in pending:
+        rollup.bill(stats, turn_model or first_model or UNKNOWN_MODEL, delta, context, timestamp)
 
 
 def collect_codex(rollup, root):
