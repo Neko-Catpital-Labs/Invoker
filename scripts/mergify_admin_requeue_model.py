@@ -9,7 +9,7 @@ from typing import Collection, Mapping
 
 
 SELF_CHECK_NAMES = {"Mergify Merge Queue", "Summary"}
-BOT_OR_SELF_AUTHORS = {"coderabbitai", "coderabbitai[bot]", "EdbertChan"}
+BOT_OR_SELF_AUTHORS = {"coderabbitai", "coderabbitai[bot]", "cursor", "cursor[bot]", "EdbertChan"}
 STACK_MARKER_RE = re.compile(r"<!--\s*mergify-stack-data:\s*(\{.*?\})\s*-->", re.DOTALL)
 SHA_RE = re.compile(r"`([0-9a-fA-F]{40})`")
 GH_ACTIONS_JOB_RE = re.compile(r"/actions/runs/\d+/job/(\d+)")
