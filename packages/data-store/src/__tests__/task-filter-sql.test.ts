@@ -82,6 +82,8 @@ describe('task filter SQL read path', () => {
     expect(adapter.queryTasksByFilter({ op: 'eq', key: 'execution_agent', value: 'codex' }).map((row) => row.id)).toEqual(['first']);
     expect(adapter.queryTasksByFilter({ op: 'in', key: 'status', values: ['completed', 'running'] }).map((row) => row.id)).toEqual(['first', 'second']);
     expect(adapter.queryTasksByFilter({ op: 'contains', key: 'description', value: '%' }).map((row) => row.id)).toEqual([]);
+    const escaped = compileTaskFilter({ op: 'contains', key: 'description', value: '100%_done\\' });
+    expect(escaped.params).toEqual(['%100\\%\\_done\\\\%']);
     expect(adapter.queryTasksByFilter({ op: 'time_range', key: 'created_at', start: '2026-01-01T00:00:03.000Z' }).map((row) => row.id)).toEqual(['second']);
   });
 
