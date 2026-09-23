@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { formatStatusLabel } from '../lib/colors.js';
 import { STATUS_VISUALS } from '../lib/status-colors.js';
+import { isTaskNodeActionable } from '../components/TaskNode.js';
 
 describe('skipped status UI coverage', () => {
   it('has a status visual entry', () => {
@@ -32,5 +33,9 @@ describe('skipped status UI coverage', () => {
         config: {},
       } as never),
     ).toBe(false);
+  });
+
+  it('gates skipped task-node actions like a terminal state', () => {
+    expect(isTaskNodeActionable('skipped')).toBe(false);
   });
 });
