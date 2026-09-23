@@ -129,6 +129,12 @@ class ClassifyPr(unittest.TestCase):
         self.assertIn("bot_review_thread", self._kinds(bot))
         self.assertIn("outdated_bot_review_thread", self._kinds(outdated))
 
+    def test_cursor_bugbot_threads_are_bot_threads(self):
+        for login in ("cursor", "cursor[bot]"):
+            bugbot = pr(review_threads=(m.ReviewThread("t", False, (login,)),))
+            self.assertIn("bot_review_thread", self._kinds(bugbot), login)
+            self.assertNotIn("human_review_thread", self._kinds(bugbot), login)
+
     def test_merge_hold_label(self):
         self.assertIn("merge_hold", self._kinds(pr(labels=frozenset({"merge-hold"}))))
 
