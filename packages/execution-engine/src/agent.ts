@@ -18,6 +18,21 @@ export type SupportedModelsProvenance = 'agent' | 'built-in';
 
 export const DEFAULT_EXECUTION_AGENT = 'codex';
 
+export class ExecutionModelDiscoveryUnavailableError extends Error {
+  readonly executionModelDiscoveryUnavailable = true;
+}
+
+export function isExecutionModelDiscoveryUnavailableError(
+  error: unknown,
+): error is ExecutionModelDiscoveryUnavailableError {
+  if (error instanceof ExecutionModelDiscoveryUnavailableError) return true;
+  return (
+    typeof error === 'object'
+    && error !== null
+    && (error as { executionModelDiscoveryUnavailable?: unknown }).executionModelDiscoveryUnavailable === true
+  );
+}
+
 export interface ExecutionAgent {
   readonly name: string;
   readonly stdinMode: 'ignore' | 'pipe';
