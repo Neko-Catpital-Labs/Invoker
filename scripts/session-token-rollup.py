@@ -253,6 +253,7 @@ class Rollup:
                 "forks_without_parent": self.forks_without_parent,
             },
             "totals_by_tool_origin_model_day": dict(sorted(self.day_totals.items())),
+            "session_count": len(records),
             "sessions": records[:session_limit],
         }
 
@@ -506,7 +507,8 @@ def machine_totals(report):
             totals[field] += as_int(bucket.get(field))
             totals["total"] += as_int(bucket.get(field))
         totals["turns"] += as_int(bucket.get("turns"))
-    totals["sessions"] = len(report.get("sessions") or [])
+    counted = report.get("session_count")
+    totals["sessions"] = counted if isinstance(counted, int) else len(report.get("sessions") or [])
     return totals
 
 

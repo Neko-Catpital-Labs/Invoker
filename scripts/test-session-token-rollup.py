@@ -52,7 +52,7 @@ def run_script(args, check=True):
     return proc
 
 
-def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
+def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=(), session_limit=None):
     args = [
         "collect",
         "--since", SINCE,
@@ -64,6 +64,8 @@ def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
     ]
     for root in extra_claude_roots:
         args += ["--claude-root", root]
+    if session_limit is not None:
+        args += ["--sessions", str(session_limit)]
     proc = run_script(args)
     return proc, json.loads(proc.stdout)
 
@@ -274,6 +276,39 @@ class TestDayTotalsAndErrors(unittest.TestCase):
         self.assertEqual(report["since"], SINCE)
         self.assertEqual(report["generatedAt"], "2026-09-23T00:00:00Z")
         self.assertEqual(len(report["sessions"]), 6)
+
+
+class TestTruncatedSessionListStillCountsEverySession(unittest.TestCase):
+    """The fixtures hold 6 sessions totalling 505722 tokens. --sessions caps the
+    emitted records, but token totals come from the complete day buckets, so a
+    capped report must still carry the real session count for merge to use."""
+
+    def test_report_carries_real_count_when_records_are_truncated(self):
+        _proc, report = run_collect(session_limit=2)
+        self.assertEqual(len(report["sessions"]), 2)
+        self.assertEqual(report["session_count"], 6)
+
+    def test_merge_reports_full_count_beside_full_spend(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "mac.json")
+        _proc, report = run_collect(session_limit=2)
+        with open(path, "w") as handle:
+            json.dump(report, handle)
+        merged = json.loads(run_script(
+            ["merge", path, "--now", "2026-09-23T12:00:00Z", "--json"]).stdout)
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+        self.assertEqual(merged["machines"]["mac"]["sessions"], 6)
+
+    def test_report_without_session_count_falls_back_to_list_length(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "legacy.json")
+        _proc, report = run_collect(session_limit=2)
+        report.pop("session_count", None)
+        with open(path, "w") as handle:
+            json.dump(report, handle)
+        merged = json.loads(run_script(
+            ["merge", path, "--now", "2026-09-23T12:00:00Z", "--json"]).stdout)
+        self.assertEqual(merged["machines"]["mac"]["sessions"], 2)
 
 
 class TestMerge(unittest.TestCase):
