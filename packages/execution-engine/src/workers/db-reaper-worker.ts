@@ -109,6 +109,7 @@ export function createDbReaperWorker(options: DbReaperWorkerOptions): WorkerRunt
       const freelistPages = await runBatch('freelist_count',
         () => options.store.getFreelistPageCount(), (pages) => pages);
       let pagesVacuumed = 0;
+      let vacuumDrained = false;
       if (freelistPages > vacuumThreshold) {
         let remaining = Math.min(vacuumMaxPages, DEFAULT_VACUUM_MAX_PAGES_PER_TICK);
         while (remaining > 0 && performance.now() - passStarted < DB_REAPER_PASS_BUDGET_MS) {
@@ -117,10 +118,10 @@ export function createDbReaperWorker(options: DbReaperWorkerOptions): WorkerRunt
             () => options.store.runIncrementalVacuum(pages), (count) => count);
           pagesVacuumed += reclaimed;
           remaining -= pages;
-          if (reclaimed === 0) break;
+          if (reclaimed === 0) { vacuumDrained = true; break; }
         }
       }
-      const vacuumPending = pagesVacuumed > 0 && freelistPages - pagesVacuumed > vacuumThreshold;
+      const vacuumPending = !vacuumDrained && freelistPages - pagesVacuumed > vacuumThreshold;
 
       const pendingOperations = [
         ...(events.passDrained ? [] : ['events.retention']),
