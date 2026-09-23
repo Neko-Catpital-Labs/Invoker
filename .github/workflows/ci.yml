@@ -1241,7 +1241,7 @@ jobs:
 
 
   bazel-cache-pilot:
-    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    if: ${{ github.event_name != 'pull_request' }}
     needs: build-artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -1338,7 +1338,7 @@ jobs:
           bazelisk "${ARGS[@]}" $TARGETS
 
   bazel-rbe-pilot:
-    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     name: bazel-rbe-pilot
