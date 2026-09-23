@@ -41,21 +41,17 @@ export const DISK_RECLAIMABLE_DIRS = [
 
 export type DiskReclaimableDir = (typeof DISK_RECLAIMABLE_DIRS)[number];
 
-/**
- * Invoker/test scratch name globs reclaimed from the shared temp dir. The
- * disk-headroom cleaner never wipes `/tmp` wholesale — only entries matching
- * these globs, plus stale mktemp leftovers older than the age threshold below.
- */
-export const TMP_SCRATCH_GLOBS = [
-  'invoker-*',
-  'scoped_dir*',
-  'electron-download-*',
-  'playwright-artifacts-*',
-  'playwright-transform-cache-*',
-  'esbuild-*.map',
-  'node-compile-cache',
-  'runner-test-*',
-  'omp-*',
+export const TMP_SCRATCH_PROTECT_GLOBS = [
+  'systemd-private-*',
+  'snap-*',
+  '.X11-unix',
+  '.X[0-9]*-lock',
+  '.font-unix',
+  '.ICE-unix',
+  '.*-unix',
+  'ssh-*',
+  'claude-*',
+  '*.lock',
 ] as const;
 
 export const TMP_TRANSIENT_TEST_GLOBS = [
@@ -182,7 +178,9 @@ remove_path "$INVOKER_HOME/pr-cron-work"`;
     .map((name) => `"$INVOKER_HOME/${name}"`)
     .join(' ');
   const inUseMarkMaxAgeMinutes = Math.ceil(IN_USE_MARK_MAX_AGE_SECONDS / 60);
-  const tmpGlobList = TMP_SCRATCH_GLOBS.join(' ');
+  const tmpProtectArrayLiteral = TMP_SCRATCH_PROTECT_GLOBS
+    .map((glob) => shellPosixSingleQuote(glob))
+    .join(' ');
   const transientTestGlobList = TMP_TRANSIENT_TEST_GLOBS.join(' ');
   // stale-only (warn-paced) never kills provision grinders, wipes Invoker's own
   // managed dirs, or recreates them -- it only age-gate-sweeps shared /tmp CI
@@ -266,46 +264,65 @@ sweep_children_preserving() {
     remove_path "$child"
   done
 }
-${destructiveSection}# Shared temp dir: reclaim only Invoker/test scratch, never a blanket /tmp wipe.
+${destructiveSection}# Shared temp dir: sweep stale entries this user owns, never a blanket /tmp wipe.
 # Age guard leaves entries newer than ${TMP_SCRATCH_MIN_AGE_MINUTES}m alone (an active run may hold them).
 TMP_CLEAN="\${TMPDIR:-/tmp}"
 TMP_CLEAN="\${TMP_CLEAN%/}"
 case "$TMP_CLEAN" in
   ""|"/"|"$HOME") TMP_CLEAN=/tmp ;;
 esac
+SWEEP_USER="$(id -un 2>/dev/null)"
+[ -n "$SWEEP_USER" ] || SWEEP_USER="$(id -u 2>/dev/null)"
+# Names that survive the sweep even when stale and user-owned.
+TMP_PROTECT=(${tmpProtectArrayLiteral})
+is_protected_tmp_name() {
+  local base="$1"
+  local pattern
+  for pattern in "\${TMP_PROTECT[@]}"; do
+    case "$base" in
+      $pattern) return 0 ;;
+    esac
+  done
+  return 1
+}
 # Never reap a temp entry that holds mineable .jsonl session data (agent transcripts).
 reap_tmp() {
   [ -e "$1" ] || return 0
   if find "$1" -type f -name '*.jsonl' -print -quit 2>/dev/null | grep -q .; then
+    echo "[disk-headroom-cleanup] preserve $1 (transcripts)"
     return 0
   fi
   rm -rf "$1" >/dev/null 2>&1
+  echo "[disk-headroom-cleanup] remove $1"
 }
 reap_transient_test_tmp() {
   [ -e "$1" ] || return 0
   rm -rf "$1" >/dev/null 2>&1
+  echo "[disk-headroom-cleanup] remove $1"
 }
+if [ -z "$SWEEP_USER" ]; then
+  echo "[disk-headroom-cleanup] skip tmp sweep: cannot resolve the running user" >&2
+else
 set -f
 for pat in ${transientTestGlobList}; do
   find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+    -user "$SWEEP_USER" \\
     ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
     reap_transient_test_tmp "$entry"
   done
 done
-for pat in ${tmpGlobList}; do
-  find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
-    ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
-    reap_tmp "$entry"
-  done
-done
 set +f
 find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+  -user "$SWEEP_USER" \\
   ! -path "$INVOKER_HOME" \\
-  ! -name 'systemd-private-*' ! -name 'snap-*' ! -name '.*-unix' \\
-  ! -name 'ssh-*' ! -name 'claude-*' ! -name '*.lock' \\
   -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+  if is_protected_tmp_name "$(basename "$entry")"; then
+    echo "[disk-headroom-cleanup] preserve $entry (protected name)"
+    continue
+  fi
   reap_tmp "$entry"
 done
+fi
 echo "[disk-headroom-cleanup] ${mode === 'stale-only' ? 'stale-only ' : ''}done"
 df -h / | tail -1
 exit 0

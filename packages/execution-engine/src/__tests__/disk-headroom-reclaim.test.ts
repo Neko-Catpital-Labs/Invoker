@@ -20,7 +20,7 @@ import {
   isSafeRemoteInvokerHomePath,
   resolveDiskCleanupCooldownMs,
   resolveDiskCleanupEnabled,
-  TMP_SCRATCH_GLOBS,
+  TMP_SCRATCH_PROTECT_GLOBS,
   TMP_SCRATCH_MIN_AGE_MINUTES,
   TMP_TRANSIENT_TEST_GLOBS,
 } from '../workers/disk-headroom-reclaim.js';
@@ -53,6 +53,74 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     taskStateVersion: 1,
     ...rest,
   } as TaskState;
+}
+
+const STALE_TMP_MTIME_SECONDS = Math.floor(
+  (Date.now() - (TMP_SCRATCH_MIN_AGE_MINUTES + 60) * 60 * 1000) / 1000,
+);
+
+interface TmpSweepScratch {
+  root: string;
+  invokerHome: string;
+  tmpDir: string;
+}
+
+function makeTmpSweepScratch(): TmpSweepScratch {
+  const root = mkdtempSync(join(tmpdir(), 'invoker-tmp-sweep-'));
+  tempDirs.push(root);
+  const invokerHome = join(root, 'home');
+  const tmpDir = join(root, 'scratch-tmp');
+  mkdirSync(invokerHome, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  return { root, invokerHome, tmpDir };
+}
+
+function makeTmpEntry(
+  scratch: TmpSweepScratch,
+  name: string,
+  opts: { stale: boolean; fileName?: string; asFile?: boolean },
+): string {
+  const entry = join(scratch.tmpDir, name);
+  if (opts.asFile) {
+    writeFileSync(entry, 'x');
+  } else {
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, opts.fileName ?? 'payload.txt'), 'x');
+  }
+  if (opts.stale) utimesSync(entry, STALE_TMP_MTIME_SECONDS, STALE_TMP_MTIME_SECONDS);
+  return entry;
+}
+
+function canCreateForeignOwnedEntries(): boolean {
+  if (process.platform !== 'linux' || process.getuid?.() === 0) return false;
+  return spawnSync('sudo', ['-n', 'true'], { stdio: 'ignore' }).status === 0;
+}
+
+function makeForeignOwnedTmpEntry(
+  scratch: TmpSweepScratch,
+  name: string,
+  opts: { asFile?: boolean } = {},
+): string {
+  const entry = join(scratch.tmpDir, name);
+  if (opts.asFile) {
+    writeFileSync(entry, 'x');
+  } else {
+    mkdirSync(entry, { recursive: true });
+  }
+  const chown = spawnSync('sudo', ['-n', 'chown', '-R', 'root:root', entry]);
+  if (chown.status !== 0) throw new Error(`could not chown ${entry} to root`);
+  const touch = spawnSync('sudo', ['-n', 'touch', '-d', `@${STALE_TMP_MTIME_SECONDS}`, entry]);
+  if (touch.status !== 0) throw new Error(`could not age ${entry}`);
+  return entry;
+}
+
+function runCleanupScript(scratch: TmpSweepScratch) {
+  const scriptPath = join(scratch.root, 'cleanup.sh');
+  writeFileSync(scriptPath, buildInvokerHomeCleanupScript(scratch.invokerHome, [], 'stale-only'));
+  return spawnSync('bash', [scriptPath], {
+    encoding: 'utf8',
+    env: { ...process.env, TMPDIR: scratch.tmpDir },
+  });
 }
 
 function makeStore(workflows: Array<{ id: string; tasks: TaskState[] }>): DiskHeadroomWorkerStore {
@@ -172,36 +240,48 @@ describe('disk-headroom cleanup guards', () => {
     expect(staleOnlyScript).not.toContain('sweep_children_preserving "$INVOKER_HOME/repos" "repos"');
     expect(staleOnlyScript).not.toContain('mkdir -p');
 
-    // stale-only still runs the age-gated /tmp CI-scratch sweep, unconditionally.
-    for (const glob of TMP_SCRATCH_GLOBS) {
+    // stale-only still runs the age-gated /tmp scratch sweep, unconditionally.
+    for (const glob of TMP_SCRATCH_PROTECT_GLOBS) {
       expect(staleOnlyScript).toContain(glob);
     }
+    expect(staleOnlyScript).toContain('-user "$SWEEP_USER"');
     expect(staleOnlyScript).toContain('reap_tmp');
     expect(staleOnlyScript).toContain(`-mmin +${TMP_SCRATCH_MIN_AGE_MINUTES}`);
     expect(staleOnlyScript).toContain('stale-only begin');
     expect(staleOnlyScript).toContain('stale-only done');
   });
 
-  it('sweeps only Invoker/test scratch from the shared temp dir, never a blanket /tmp wipe', () => {
+  it('sweeps stale user-owned entries from the shared temp dir, never a blanket /tmp wipe', () => {
     const script = buildInvokerHomeCleanupScript('~/.invoker');
     // Resolves the temp dir with a safe fallback, and re-anchors unsafe values to /tmp.
     expect(script).toContain('TMP_CLEAN="${TMPDIR:-/tmp}"');
     expect(script).toContain('TMP_CLEAN=/tmp');
-    for (const glob of TMP_SCRATCH_GLOBS) {
+    // The name list is a protect list, not an allow list: a stale entry matching
+    // nothing on it is still swept, so the sweep has no per-name blind spot.
+    expect(script).toContain('is_protected_tmp_name');
+    for (const glob of TMP_SCRATCH_PROTECT_GLOBS) {
       expect(script).toContain(glob);
     }
     for (const glob of TMP_TRANSIENT_TEST_GLOBS) {
       expect(script).toContain(glob);
     }
-    // Age guard protects in-flight runs; system + lock entries are excluded.
+    // Age guard protects in-flight runs; system + lock entries are protected.
     expect(script).toContain(`-mmin +${TMP_SCRATCH_MIN_AGE_MINUTES}`);
-    expect(script).toContain("! -name 'systemd-private-*'");
-    expect(script).toContain("! -name 'ssh-*'");
-    expect(script).toContain("! -name '*.lock'");
+    expect(TMP_SCRATCH_PROTECT_GLOBS).toContain('systemd-private-*');
+    expect(TMP_SCRATCH_PROTECT_GLOBS).toContain('ssh-*');
+    expect(TMP_SCRATCH_PROTECT_GLOBS).toContain('*.lock');
     // Must never wipe the whole temp dir.
     expect(script).not.toMatch(/rm -rf ["']?\/tmp["']?\s/);
     expect(script).not.toMatch(/rm -rf ["']?\$TMP_CLEAN["']?\s*$/m);
     expect(script).not.toContain('rm -rf "$TMP_CLEAN"/*');
+  });
+
+  it('limits the temp sweep to entries the running user owns', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    expect(script).toContain('-user "$SWEEP_USER"');
+    expect(script).toContain('SWEEP_USER="$(id -un 2>/dev/null)"');
+    // An unresolvable user is an unchecked sweep, not a clean one -- it must say so.
+    expect(script).toContain('skip tmp sweep: cannot resolve the running user');
   });
 
   it('never reaps a temp entry that holds mineable .jsonl session data', () => {
@@ -236,6 +316,62 @@ describe('disk-headroom cleanup guards', () => {
     // Both /tmp sweeps refuse to touch the live invoker home.
     expect(script.match(/! -path "\$INVOKER_HOME"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
+
+  it('reclaims a stale unmatched temp entry while leaving fresh, protected, and transcript entries', () => {
+    const scratch = makeTmpSweepScratch();
+    const unmatched = makeTmpEntry(scratch, 'rustc-incremental-build-cache', { stale: true });
+    const fresh = makeTmpEntry(scratch, 'another-unmatched-scratch', { stale: false });
+    const protectedByName = makeTmpEntry(scratch, 'systemd-private-abc123', { stale: true });
+    const protectedUnixSocketDir = makeTmpEntry(scratch, '.X11-unix', { stale: true });
+    const protectedXDisplayLock = makeTmpEntry(scratch, '.X0-lock', { stale: true, asFile: true });
+    const protectedHighXDisplayLock = makeTmpEntry(scratch, '.X99-lock', {
+      stale: true,
+      asFile: true,
+    });
+    const protectedSshDir = makeTmpEntry(scratch, 'ssh-AbCdEf', { stale: true });
+    const withTranscript = makeTmpEntry(scratch, 'agent-scratch-dir', {
+      stale: true,
+      fileName: 'session.jsonl',
+    });
+    const transientTestWithTranscript = makeTmpEntry(scratch, 'invoker-e2e-db.xyz', {
+      stale: true,
+      fileName: 'session.jsonl',
+    });
+
+    const result = runCleanupScript(scratch);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(unmatched)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(protectedByName)).toBe(true);
+    expect(existsSync(protectedUnixSocketDir)).toBe(true);
+    expect(existsSync(protectedXDisplayLock)).toBe(true);
+    expect(existsSync(protectedHighXDisplayLock)).toBe(true);
+    expect(existsSync(protectedSshDir)).toBe(true);
+    expect(existsSync(withTranscript)).toBe(true);
+    // Known transient test dirs are reaped even when they carry a transcript.
+    expect(existsSync(transientTestWithTranscript)).toBe(false);
+    expect(result.stdout).toContain(`[disk-headroom-cleanup] remove ${unmatched}`);
+    expect(result.stdout).toContain(`[disk-headroom-cleanup] preserve ${protectedByName} (protected name)`);
+    expect(result.stdout).toContain(`[disk-headroom-cleanup] preserve ${withTranscript} (transcripts)`);
+  });
+
+  it.runIf(canCreateForeignOwnedEntries())(
+    'leaves a stale temp entry owned by another user in place',
+    () => {
+      const scratch = makeTmpSweepScratch();
+      const ownEntry = makeTmpEntry(scratch, 'my-own-unmatched-scratch', { stale: true });
+      const foreignDir = makeForeignOwnedTmpEntry(scratch, 'other-user-scratch');
+      const foreignFile = makeForeignOwnedTmpEntry(scratch, 'other-user-file.bin', { asFile: true });
+
+      const result = runCleanupScript(scratch);
+
+      expect(result.status).toBe(0);
+      expect(existsSync(ownEntry)).toBe(false);
+      expect(existsSync(foreignDir)).toBe(true);
+      expect(existsSync(foreignFile)).toBe(true);
+    },
+  );
 });
 
 describe('disk-headroom cleanup env', () => {
