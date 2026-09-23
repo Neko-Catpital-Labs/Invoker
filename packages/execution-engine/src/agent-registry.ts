@@ -8,6 +8,14 @@
 import { DEFAULT_EXECUTION_AGENT, type ExecutionAgent, type ExecutionModelOption, type PlanningAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 
+function listableSupportedModels(agent: ExecutionAgent): ExecutionModelOption[] {
+  try {
+    return [...(agent.supportedModels ?? [])];
+  } catch {
+    return [];
+  }
+}
+
 function normalizeExecutionAgentName(name: string | null | undefined): string | undefined {
   const trimmed = name?.trim();
   if (!trimmed) return undefined;
@@ -80,7 +88,7 @@ export class AgentRegistry {
   listExecutionHarnesses(): Array<{ name: string; supportedModels: ExecutionModelOption[] }> {
     return this.listExecution().map((agent) => ({
       name: agent.name,
-      supportedModels: [...(agent.supportedModels ?? [])],
+      supportedModels: listableSupportedModels(agent),
     }));
   }
 
