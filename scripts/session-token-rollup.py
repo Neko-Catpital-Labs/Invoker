@@ -130,6 +130,9 @@ class SessionStats:
         self.model_tokens[model] = self.model_tokens.get(model, 0) + billed
         self.note_timestamp(timestamp)
 
+    def has_window_activity(self):
+        return self.turns > 0 or self.compactions > 0 or self.notification_turns > 0
+
     def model(self):
         if not self.model_tokens:
             return UNKNOWN_MODEL
@@ -239,7 +242,7 @@ class Rollup:
     def report(self, generated_at, session_limit):
         self.attach_forks()
         records = sorted(
-            (stats.record() for stats in self.sessions.values()),
+            (stats.record() for stats in self.sessions.values() if stats.has_window_activity()),
             key=lambda row: (-row["total"], row["tool"], row["session_id"]),
         )
         return {
@@ -253,6 +256,7 @@ class Rollup:
                 "forks_without_parent": self.forks_without_parent,
             },
             "totals_by_tool_origin_model_day": dict(sorted(self.day_totals.items())),
+            "session_count": len(records),
             "sessions": records[:session_limit],
         }
 
@@ -487,7 +491,8 @@ def machine_totals(report):
             totals[field] += as_int(bucket.get(field))
             totals["total"] += as_int(bucket.get(field))
         totals["turns"] += as_int(bucket.get("turns"))
-    totals["sessions"] = len(report.get("sessions") or [])
+    counted = report.get("session_count")
+    totals["sessions"] = counted if isinstance(counted, int) else len(report.get("sessions") or [])
     return totals
 
 

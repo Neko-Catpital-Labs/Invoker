@@ -33,6 +33,7 @@ SESSION_WORKER = "dddd4444-4444-4444-4444-444444444444"
 SESSION_BAD_LINE = "eeee5555-5555-5555-5555-555555555555"
 SESSION_CODEX = "019f0000-1111-2222-3333-444455556666"
 SESSION_OMP = "019f9999-aaaa-bbbb-cccc-ddddeeeeffff"
+SESSION_PRE_WINDOW = "9999aaaa-0000-0000-0000-000000000000"
 
 
 def run_script(args, check=True):
@@ -50,7 +51,7 @@ def run_script(args, check=True):
     return proc
 
 
-def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
+def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=(), session_limit=None):
     args = [
         "collect",
         "--since", SINCE,
@@ -62,8 +63,31 @@ def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
     ]
     for root in extra_claude_roots:
         args += ["--claude-root", root]
+    if session_limit is not None:
+        args += ["--sessions", str(session_limit)]
     proc = run_script(args)
     return proc, json.loads(proc.stdout)
+
+
+def claude_root_with_pre_window_session():
+    """A root whose only log is a 50900-token turn from before --since."""
+    tmp = tempfile.mkdtemp()
+    project = os.path.join(tmp, "-home-user-ancient")
+    os.makedirs(project)
+    row = {
+        "type": "assistant",
+        "sessionId": SESSION_PRE_WINDOW,
+        "timestamp": "2026-01-02T10:00:00.000Z",
+        "requestId": "req_old",
+        "message": {
+            "id": "msg_old",
+            "model": "claude-opus-5",
+            "usage": {"input_tokens": 50000, "output_tokens": 900},
+        },
+    }
+    with open(os.path.join(project, SESSION_PRE_WINDOW + ".jsonl"), "w") as handle:
+        handle.write(json.dumps(row) + "\n")
+    return tmp
 
 
 def sessions_by_id(report):
@@ -235,6 +259,61 @@ class TestDayTotalsAndErrors(unittest.TestCase):
         self.assertEqual(report["since"], SINCE)
         self.assertEqual(report["generatedAt"], "2026-09-23T00:00:00Z")
         self.assertEqual(len(report["sessions"]), 6)
+        self.assertEqual(report["session_count"], 6)
+
+
+class TestSessionsOutsideTheWindow(unittest.TestCase):
+    """A log whose only turn predates --since must not become a zero-token
+    session record, and must not be counted as a session on that machine."""
+
+    def setUp(self):
+        self.extra = claude_root_with_pre_window_session()
+        _proc, self.report = run_collect(extra_claude_roots=[self.extra])
+
+    def test_file_is_still_read_but_emits_no_session_record(self):
+        self.assertEqual(self.report["files"], 8)
+        self.assertNotIn(SESSION_PRE_WINDOW, sessions_by_id(self.report))
+        self.assertEqual(len(self.report["sessions"]), 6)
+        self.assertEqual(self.report["session_count"], 6)
+
+    def test_pre_window_tokens_are_not_billed(self):
+        self.assertEqual(
+            sum(v["total"] for v in self.report["totals_by_tool_origin_model_day"].values()),
+            505722,
+        )
+
+    def test_machine_session_count_excludes_it(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "mac.json")
+        with open(path, "w") as handle:
+            json.dump(self.report, handle)
+        merged = json.loads(
+            run_script(["merge", path, "--now", "2026-09-23T12:00:00Z", "--json"]).stdout
+        )
+        self.assertEqual(merged["machines"]["mac"]["sessions"], 6)
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+
+
+class TestMachineSessionCount(unittest.TestCase):
+    def merged_for(self, report):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "mac.json")
+        with open(path, "w") as handle:
+            json.dump(report, handle)
+        return json.loads(
+            run_script(["merge", path, "--now", "2026-09-23T12:00:00Z", "--json"]).stdout
+        )
+
+    def test_count_survives_the_emitted_session_limit(self):
+        _proc, report = run_collect(session_limit=2)
+        self.assertEqual(len(report["sessions"]), 2)
+        self.assertEqual(report["session_count"], 6)
+        self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
+
+    def test_report_without_session_count_falls_back_to_the_list(self):
+        _proc, report = run_collect()
+        del report["session_count"]
+        self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
 
 
 class TestMerge(unittest.TestCase):
