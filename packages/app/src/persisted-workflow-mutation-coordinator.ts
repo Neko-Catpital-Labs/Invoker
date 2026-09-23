@@ -426,13 +426,11 @@ export class PersistedWorkflowMutationCoordinator {
     this.logDispatchRejection(workflowId, intent, message);
     try {
       const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
-      if (!latestIntent || latestIntent.status === 'completed') {
+      if (latestIntent?.status !== 'running') {
         return;
       }
-      if (latestIntent.status !== 'failed' || latestIntent.error !== message) {
-        this.persistence.failWorkflowMutationIntent(intent.id, message);
-        this.notifyIntentFailed(intent, message);
-      }
+      this.persistence.failWorkflowMutationIntent(intent.id, message);
+      this.notifyIntentFailed(intent, message);
     } catch (recordError) {
       const recordMessage = recordError instanceof Error ? recordError.message : String(recordError);
       this.options?.logger?.warn('[workflow-mutation-coordinator] failed to record dispatch rejection', {
