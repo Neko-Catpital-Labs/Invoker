@@ -1,8 +1,4 @@
-import {
-  assertExecutionModelSupported,
-  isExecutionModelDiscoveryUnavailableError,
-  registerBuiltinAgents,
-} from '@invoker/execution-engine';
+import { assertExecutionModelSupported, registerBuiltinAgents } from '@invoker/execution-engine';
 import {
   normalizeGithubOwnerRepo,
   type AdminBypassE2eBabysitConfig,
@@ -26,11 +22,7 @@ function validateConfiguredModel(agentName: string | undefined, executionModel: 
   if (!normalizedAgent || !normalizedModel) return;
   const agent = builtinAgents.get(normalizedAgent);
   if (!agent) return;
-  try {
-    assertExecutionModelSupported(agent, normalizedModel);
-  } catch (error) {
-    if (!isExecutionModelDiscoveryUnavailableError(error)) throw error;
-  }
+  assertExecutionModelSupported(agent, normalizedModel);
 }
 
 function validatePrMaintenanceTargetRepos(config: InvokerConfig): void {

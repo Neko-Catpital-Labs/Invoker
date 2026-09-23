@@ -57,9 +57,16 @@ export function assertExecutionModelSupported(
 ): void {
   const normalizedModel = executionModel?.trim();
   if (!normalizedModel) return;
-  if (agent.supportedModels?.some((candidate) => candidate.id === normalizedModel)) return;
-  if (agent.supportsModel?.(normalizedModel)) return;
-  const supported = agent.supportedModels?.map((candidate) => candidate.id) ?? [];
+  let discovered: readonly ExecutionModelOption[] | undefined;
+  try {
+    discovered = agent.supportedModels;
+    if (discovered?.some((candidate) => candidate.id === normalizedModel)) return;
+    if (agent.supportsModel?.(normalizedModel)) return;
+  } catch (error) {
+    if (isExecutionModelDiscoveryUnavailableError(error)) return;
+    throw error;
+  }
+  const supported = discovered?.map((candidate) => candidate.id) ?? [];
   const hint = supported.length > 0
     ? agent.supportedModelsProvenance === 'built-in'
       ? ` Known models: [${supported.join(', ')}] (built-in fallback; live discovery was unavailable).`

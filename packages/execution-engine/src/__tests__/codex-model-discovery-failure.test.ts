@@ -139,7 +139,7 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     stubProbes(ok(LIVE_CATALOG));
     const agent = new CodexExecutionAgent();
 
-    expect(agent.supportedModels).toEqual(LIVE_MODELS);
+    expect(agent.supportedModels).toStrictEqual(LIVE_MODELS);
     expect(agent.supportedModelsProvenance).toBe('agent');
     expect(probeArgs()).toEqual([LIVE_ARGS]);
   });
@@ -240,7 +240,7 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     stubProbes(spawnFailure('ENOENT'), spawnFailure('ENOENT'));
     const agent = new CodexExecutionAgent();
 
-    const error = rejection(() => assertExecutionModelSupported(agent, 'gpt-5.6-luna'));
+    const error = rejection(() => agent.supportedModels);
     expect(error.message).toContain('unavailable');
     expect(error.message).toContain('ENOENT');
     expect(error.message).not.toContain('is not supported for execution agent');
@@ -251,9 +251,22 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     const agent = new CodexExecutionAgent();
 
     expect(isExecutionModelDiscoveryUnavailableError(rejection(() => agent.supportedModels))).toBe(true);
-    expect(isExecutionModelDiscoveryUnavailableError(
-      rejection(() => assertExecutionModelSupported(agent, 'gpt-5.6-luna')),
-    )).toBe(true);
+  });
+
+  it('skips model validation instead of rejecting when every discovery probe fails', () => {
+    stubProbes(spawnFailure('ENOENT'), spawnFailure('ENOENT'));
+    const agent = new CodexExecutionAgent();
+
+    expect(() => assertExecutionModelSupported(agent, 'gpt-5.6-luna')).not.toThrow();
+    expect(() => assertExecutionModelSupported(agent, 'gpt-5.9-invented')).not.toThrow();
+  });
+
+  it('still rejects an invented model once discovery recovers through the bundled catalog', () => {
+    stubProbes(exitedWith(1), ok(BUNDLED_CATALOG));
+    const agent = new CodexExecutionAgent();
+
+    expect(rejection(() => assertExecutionModelSupported(agent, 'gpt-5.9-invented')).message)
+      .toContain('is not supported for execution agent "codex"');
   });
 
   it('leaves a genuine unsupported-model rejection unclassified as a discovery failure', () => {
