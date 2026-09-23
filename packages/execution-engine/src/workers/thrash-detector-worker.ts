@@ -48,6 +48,7 @@ export interface ThrashDetectorWorkerConfig {
 
 export interface ThrashDetectorWorkerOptions {
   logger: Logger;
+  enabled?: boolean;
   intervalMs?: number;
   thresholdCount: number;
   windowHours: number;
@@ -109,6 +110,12 @@ export function extractAutoFixThrashSignature(
 }
 
 export function runThrashDetectorTick(options: ThrashDetectorWorkerOptions): void {
+  if (options.enabled === false) {
+    options.logger.debug?.(`[${THRASH_DETECTOR_WORKER_KIND}] skipped: disabled`, {
+      module: THRASH_DETECTOR_WORKER_KIND,
+    });
+    return;
+  }
   if (options.store.listTaskEvents === undefined || options.store.logEvent === undefined) {
     options.logger.debug?.(`[${THRASH_DETECTOR_WORKER_KIND}] skipped: event store unavailable`, {
       module: THRASH_DETECTOR_WORKER_KIND,
@@ -183,6 +190,7 @@ export function createThrashDetectorWorker(config: ThrashDetectorWorkerConfig & 
   const classifyAutoFixRecoveryPhase = config.classifyAutoFixRecoveryPhase ?? defaultClassifyAutoFixRecoveryPhase;
   const options: ThrashDetectorWorkerOptions = {
     logger: config.logger,
+    enabled: config.enabled,
     intervalMs: config.intervalMs,
     thresholdCount: config.thresholdCount ?? DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
     windowHours: config.windowHours ?? DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
