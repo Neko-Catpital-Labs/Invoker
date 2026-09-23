@@ -1,0 +1,2 @@
+this line is not json at all
+{"type":"assistant","sessionId":"eeee5555-5555-5555-5555-555555555555","requestId":"req_e1","timestamp":"2026-09-20T13:00:00.000Z","cwd":"/home/user/proj","message":{"id":"msg_e1","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"SECRET-TEXT-9f3 after a bad line"}],"usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}
