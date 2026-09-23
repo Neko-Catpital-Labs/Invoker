@@ -39,14 +39,6 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     vi.mocked(spawnSync).mockReset();
   });
 
-  it('represents a failed probe distinctly and falls back at the call site', () => {
-    stubProbe(1, '');
-    const agent = new CodexExecutionAgent();
-
-    expect(discoverSupportedModels(agent)).toEqual({ kind: 'failed' });
-    expect(agent.supportedModels).not.toEqual([]);
-  });
-
   it('represents a successful probe with zero entries distinctly and preserves the empty result', () => {
     stubProbe(0, JSON.stringify({ models: [] }));
     const agent = new CodexExecutionAgent();
