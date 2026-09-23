@@ -2,7 +2,7 @@ import { readdirSync, rmSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 
 const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
-const DEFAULT_HOURLY_SNAPSHOT_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+const DEFAULT_HOURLY_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const HOURLY_SNAPSHOT_PREFIX = 'invoker.db.hourly-auto-';
 
 export function hourlySnapshotRetention(): number {
