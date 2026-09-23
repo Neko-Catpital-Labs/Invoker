@@ -523,19 +523,30 @@ def load_reports(paths, now, max_age_days):
     return loaded, skipped, unreadable
 
 
+def newest_per_host(loaded):
+    newest = {}
+    for index, (_path, report) in enumerate(loaded):
+        host = report.get("host") or "unknown"
+        parsed = parse_iso(report.get("generatedAt"))
+        current = newest.get(host)
+        if current is None or parsed > current[0]:
+            newest[host] = (parsed, index)
+    keep = {index for _parsed, index in newest.values()}
+    kept = [entry for index, entry in enumerate(loaded) if index in keep]
+    superseded = [entry for index, entry in enumerate(loaded) if index not in keep]
+    return kept, superseded
+
+
 def merge_reports(paths, now, max_age_days, top):
     loaded, skipped, unreadable = load_reports(paths, now, max_age_days)
+    loaded, superseded = newest_per_host(loaded)
+    for path, report in superseded:
+        skipped.append({"path": path, "host": report.get("host"), "generatedAt": report.get("generatedAt"), "reason": "superseded"})
     machines = {}
     ranked = []
     for _path, report in loaded:
         host = report.get("host") or "unknown"
-        totals = machine_totals(report)
-        existing = machines.get(host)
-        if existing is None:
-            machines[host] = totals
-        else:
-            for field in list(empty_totals()):
-                existing[field] += totals[field]
+        machines[host] = machine_totals(report)
         for row in report.get("sessions") or []:
             entry = dict(row)
             entry["host"] = host
@@ -556,9 +567,15 @@ def print_merge_text(merged):
     print("merged {} report(s), skipped {}, unreadable {}".format(
         len(merged["reports"]), len(merged["skipped"]), len(merged["unreadable"])))
     for entry in merged["skipped"]:
-        label = "too old" if entry["reason"] == "too-old" else entry["reason"]
-        print("  skipped {} generatedAt={} ({}, limit {} days)".format(
-            entry.get("host"), entry.get("generatedAt"), label, merged["maxAgeDays"]))
+        reason = entry["reason"]
+        if reason == "too-old":
+            detail = "too old, limit {} days".format(merged["maxAgeDays"])
+        elif reason == "superseded":
+            detail = "superseded by a newer report from the same host"
+        else:
+            detail = reason
+        print("  skipped {} generatedAt={} ({})".format(
+            entry.get("host"), entry.get("generatedAt"), detail))
     for entry in merged["unreadable"]:
         print("  unreadable report {} ({})".format(entry["path"], entry["error"]))
     print("")

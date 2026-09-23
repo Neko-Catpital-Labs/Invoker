@@ -611,5 +611,70 @@ class TestMerge(unittest.TestCase):
         self.assertIn(SESSION_FORK, text)
 
 
+class TestMergeSupersededReports(unittest.TestCase):
+    """Two in-window reports from the same host must not be added together:
+    the newest wins, the older is listed in skipped as superseded, and its
+    sessions must not appear a second time in the ranking."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _proc, yesterday = run_collect(host="do1", now="2026-09-22T00:00:00Z")
+        _proc, today = run_collect(host="do1", now="2026-09-23T00:00:00Z")
+        self.yesterday = os.path.join(self.tmp, "do1-yesterday.json")
+        self.today = os.path.join(self.tmp, "do1-today.json")
+        for path, payload in ((self.yesterday, yesterday), (self.today, today)):
+            with open(path, "w") as handle:
+                json.dump(payload, handle)
+
+    def merge(self, extra=()):
+        args = ["merge", self.yesterday, self.today, "--now", "2026-09-23T12:00:00Z"] + list(extra)
+        return run_script(args)
+
+    def test_totals_are_not_doubled(self):
+        merged = json.loads(self.merge(["--json"]).stdout)
+        self.assertEqual(merged["machines"]["do1"]["total"], 505722)
+        self.assertEqual(merged["machines"]["do1"]["sessions"], 6)
+
+    def test_only_the_newest_report_is_merged(self):
+        merged = json.loads(self.merge(["--json"]).stdout)
+        self.assertEqual(len(merged["reports"]), 1)
+        self.assertEqual(merged["reports"][0]["path"], self.today)
+        self.assertEqual(merged["reports"][0]["generatedAt"], "2026-09-23T00:00:00Z")
+
+    def test_older_report_is_skipped_as_superseded(self):
+        merged = json.loads(self.merge(["--json"]).stdout)
+        self.assertEqual(len(merged["skipped"]), 1)
+        skipped = merged["skipped"][0]
+        self.assertEqual(skipped["path"], self.yesterday)
+        self.assertEqual(skipped["host"], "do1")
+        self.assertEqual(skipped["generatedAt"], "2026-09-22T00:00:00Z")
+        self.assertEqual(skipped["reason"], "superseded")
+        self.assertIn("superseded", self.merge().stdout)
+
+    def test_sessions_are_ranked_once(self):
+        merged = json.loads(self.merge(["--json", "--top", "50"]).stdout)
+        keys = [(row["host"], row["session_id"]) for row in merged["top_sessions"]]
+        self.assertEqual(len(keys), 6)
+        self.assertEqual(len(set(keys)), len(keys))
+
+    def test_argument_order_does_not_change_the_winner(self):
+        reversed_args = ["merge", self.today, self.yesterday, "--now", "2026-09-23T12:00:00Z", "--json"]
+        merged = json.loads(run_script(reversed_args).stdout)
+        self.assertEqual(merged["reports"][0]["path"], self.today)
+        self.assertEqual(merged["skipped"][0]["path"], self.yesterday)
+        self.assertEqual(merged["machines"]["do1"]["total"], 505722)
+
+    def test_a_second_host_is_still_merged_alongside(self):
+        _proc, mac_report = run_collect(host="mac", now="2026-09-23T00:00:00Z")
+        mac = os.path.join(self.tmp, "mac.json")
+        with open(mac, "w") as handle:
+            json.dump(mac_report, handle)
+        args = ["merge", self.yesterday, self.today, mac, "--now", "2026-09-23T12:00:00Z", "--json"]
+        merged = json.loads(run_script(args).stdout)
+        self.assertEqual(sorted(merged["machines"]), ["do1", "mac"])
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+        self.assertEqual(merged["machines"]["do1"]["total"], 505722)
+
+
 if __name__ == "__main__":
     unittest.main()
