@@ -826,6 +826,41 @@ describe('infra-repair worker', () => {
     ]));
   });
 
+  it('does not record another local OAuth-session-expired alert after the cooldown expires when no task changed', async () => {
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', command: 'pnpm test' },
+        execution: { error: WORKTREE_OAUTH_SESSION_EXPIRED_ERROR },
+      }),
+      makeTask({
+        id: 'wf-1/task-2',
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', command: 'pnpm test' },
+        execution: { error: WORKTREE_OAUTH_SESSION_EXPIRED_ERROR },
+        taskStateVersion: 8,
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    const alertKey = `${INFRA_REPAIR_WORKER_KIND}:target:local-agent-cli:repair:ssh-oauth-session-expired`;
+    const skippedDecisionKey = `${INFRA_REPAIR_WORKER_KIND}:task:wf-1/task-2:g2:v8:ssh-oauth-session-expired`;
+    const firstAlert = h.actions.get(alertKey);
+    expect(firstAlert?.status).toBe('failed');
+    expect(firstAlert?.attemptCount).toBe(1);
+    const firstSkip = h.actions.get(skippedDecisionKey);
+    expect(firstSkip).toEqual(expect.objectContaining({
+      status: 'skipped',
+      payload: expect.objectContaining({ reason: 'alert-cooldown' }),
+    }));
+
+    h.setNow(Date.parse(firstAlert!.updatedAt) + 30 * 60 * 1000 + 1);
+    await h.tick({ ...POLL_CTX, tickNumber: 2 });
+
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(h.actions.get(alertKey)).toEqual(firstAlert);
+    expect(h.actions.get(skippedDecisionKey)).toEqual(firstSkip);
+  });
+
   it('records a failed action and submits nothing when remote repair fails', async () => {
     const h = makeHarness([
       makeTask({

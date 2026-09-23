@@ -166,6 +166,8 @@ type ValidatedLocalOauthInfraCandidate = InfraRepairScanCandidate & {
 
 const LOCAL_OAUTH_ALERT_TARGET_KEY = 'local-agent-cli';
 
+const ALERT_COOLDOWN_DECISION_REASON = 'alert-cooldown';
+
 type TargetRepairResult =
   | { kind: 'success'; output: string }
   | { kind: 'reused-success'; action: WorkerActionRecord }
@@ -245,6 +247,15 @@ function isRecentTargetActionWithinCooldown(action: WorkerActionRecord, nowMs: n
 
 function isOpenOrCompletedTaskDecisionStatus(status: string): boolean {
   return status === 'queued' || status === 'running' || status === 'completed';
+}
+
+function isAlertCooldownSkipDecision(decision: WorkerActionRecord): boolean {
+  return decision.status === 'skipped'
+    && (decision.payload as { reason?: string } | null | undefined)?.reason === ALERT_COOLDOWN_DECISION_REASON;
+}
+
+function isSettledTaskDecision(decision: WorkerActionRecord): boolean {
+  return isOpenOrCompletedTaskDecisionStatus(decision.status) || isAlertCooldownSkipDecision(decision);
 }
 
 function recordTaskDecision(
@@ -467,7 +478,7 @@ async function handleLocalOauthSessionExpiredRecovery(
     INFRA_REPAIR_WORKER_KIND,
     taskDecisionExternalKey(candidate, candidate.reason),
   );
-  if (existingDecision && isOpenOrCompletedTaskDecisionStatus(existingDecision.status)) {
+  if (existingDecision && isSettledTaskDecision(existingDecision)) {
     return;
   }
 
@@ -485,7 +496,7 @@ async function handleLocalOauthSessionExpiredRecovery(
       'skipped',
       `A local agent-CLI OAuth-session-expired alert already exists`,
       { alertStatus: existingAlert.status },
-      'alert-cooldown',
+      ALERT_COOLDOWN_DECISION_REASON,
     );
     return;
   }
@@ -1225,7 +1236,7 @@ async function handleOauthSessionExpiredRecovery(
         targetId: candidate.targetId,
         alertStatus: existing.status,
       },
-      'alert-cooldown',
+      ALERT_COOLDOWN_DECISION_REASON,
     );
     return;
   }
@@ -1260,7 +1271,7 @@ async function handleValidatedGenericSshInfraCandidate(
     INFRA_REPAIR_WORKER_KIND,
     taskDecisionExternalKey(candidate, candidate.reason),
   );
-  if (existingDecision && isOpenOrCompletedTaskDecisionStatus(existingDecision.status)) {
+  if (existingDecision && isSettledTaskDecision(existingDecision)) {
     return;
   }
 
