@@ -256,6 +256,84 @@ class TestForkOfAFork(unittest.TestCase):
         self.assertNotIn(MARKER, self.proc.stdout)
 
 
+class TestForkOutsideTheWindow(unittest.TestCase):
+    """Parent P is forked twice: IN bills a turn inside --since, OLD's own
+    turns are all older than --since. Only IN is a fork of P for this window,
+    so fork_count is 1 and the median is IN's start context (2001), not the
+    1000 the excluded fork would pull it down to."""
+
+    PARENT = "44440000-0000-0000-0000-000000000004"
+    IN_WINDOW_FORK = "55550000-0000-0000-0000-000000000005"
+    OLD_FORK = "66660000-0000-0000-0000-000000000006"
+
+    def row(self, session_id, message_id, timestamp, input_tokens, cache_read, output_tokens):
+        return {
+            "type": "assistant",
+            "sessionId": session_id,
+            "timestamp": timestamp,
+            "requestId": "req_" + message_id,
+            "cwd": "/home/user/forks",
+            "message": {
+                "id": message_id,
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": MARKER}],
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": cache_read,
+                    "output_tokens": output_tokens,
+                },
+            },
+        }
+
+    def collect(self):
+        tmp = tempfile.mkdtemp()
+        project = os.path.join(tmp, "claude", "projects", "-home-user-forks")
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(project)
+        os.makedirs(empty)
+        parent_row = self.row(self.PARENT, "msg_p", "2026-09-20T10:00:00.000Z", 10, 0, 1)
+        logs = {
+            self.PARENT: [parent_row],
+            self.IN_WINDOW_FORK: [
+                parent_row,
+                self.row(self.IN_WINDOW_FORK, "msg_in", "2026-09-20T11:00:00.000Z", 1, 2000, 3),
+            ],
+            self.OLD_FORK: [
+                parent_row,
+                self.row(self.OLD_FORK, "msg_old", "2026-08-01T09:00:00.000Z", 1000, 0, 7),
+            ],
+        }
+        for session_id, rows in logs.items():
+            with open(os.path.join(project, session_id + ".jsonl"), "w") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+        proc = run_script([
+            "collect", "--since", SINCE, "--host", "mac", "--now", "2026-09-23T00:00:00Z",
+            "--claude-root", os.path.join(tmp, "claude", "projects"),
+            "--codex-root", empty, "--omp-root", empty,
+        ])
+        return proc, json.loads(proc.stdout)
+
+    def setUp(self):
+        self.proc, self.report = self.collect()
+        self.sessions = sessions_by_id(self.report)
+
+    def test_parent_counts_only_the_fork_with_an_in_window_turn(self):
+        row = self.sessions[self.PARENT]
+        self.assertEqual(row["fork_count"], 1)
+        self.assertEqual(row["median_fork_start_context"], 2001)
+
+    def test_fork_with_no_in_window_turn_is_not_reported_at_all(self):
+        self.assertIn(self.IN_WINDOW_FORK, self.sessions)
+        self.assertNotIn(self.OLD_FORK, self.sessions)
+        self.assertEqual(self.report["errors"]["forks_without_parent"], 0)
+
+    def test_no_message_text_leaks(self):
+        self.assertNotIn(MARKER, self.proc.stdout)
+
+
 class TestCodexCollection(unittest.TestCase):
     """total_token_usage runs 1000/400/100 -> 3000/1400/250 -> 500/100/20.
     Uncached input deltas are 600 + 1000 + 400 = 2000, cached 400 + 1000 + 100
