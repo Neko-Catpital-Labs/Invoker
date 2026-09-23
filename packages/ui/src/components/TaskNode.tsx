@@ -70,10 +70,12 @@ export function TaskNode({ data }: TaskNodeProps) {
   const isMuted = isStale || isSkipped;
   const isActionable = isTaskNodeActionable(task.status);
   const dotClass = `${colors.dot} ${isAnimated ? 'pulse-strong' : ''}`;
+  const opacityClass = dimmed ? 'opacity-20' : isMuted ? 'opacity-50' : '';
+  const interactionClass = dimmed || !isActionable ? 'pointer-events-none' : '';
 
   return (
     <div
-      className={`relative w-[167px] overflow-hidden rounded-xl border px-2 py-2 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isMuted ? `opacity-50${isActionable ? '' : ' pointer-events-none'}` : ''}`}
+      className={`relative w-[167px] overflow-hidden rounded-xl border px-2 py-2 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${opacityClass} ${interactionClass}`}
       title={task.id}
       data-selected={selected ? 'true' : 'false'}
     >

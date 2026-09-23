@@ -25,7 +25,7 @@ import type { TaskState, WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import { layoutNodes, layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
 import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
-import { TaskNode } from './TaskNode.js';
+import { TaskNode, isTaskNodeActionable } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
 import { MergeGateNode } from './MergeGateNode.js';
 import {
@@ -361,10 +361,13 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
           },
         });
       } else {
+        const actionable = isTaskNodeActionable(task.status);
         allNodes.push({
           id: task.id,
           type: 'taskNode',
           position: pos,
+          selectable: actionable,
+          focusable: actionable,
           data: {
             task,
             label: task.description,
@@ -625,36 +628,46 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     return () => clearInterval(interval);
   }, [nodes.length, fitView]);
 
+  const actionableTask = useCallback(
+    (node: Node): TaskState | undefined => {
+      const task = tasks.get(node.id);
+      if (!task) return undefined;
+      if (node.type === 'taskNode' && !isTaskNodeActionable(task.status)) return undefined;
+      return task;
+    },
+    [tasks],
+  );
+
   const onNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       if (event.detail > 1) return;
-      const task = tasks.get(node.id);
+      const task = actionableTask(node);
       if (task && onTaskClick) {
         onTaskClick(task);
       }
     },
-    [tasks, onTaskClick],
+    [actionableTask, onTaskClick],
   );
 
   const onNodeDoubleClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
-      const task = tasks.get(node.id);
+      const task = actionableTask(node);
       if (task && onTaskDoubleClick) {
         onTaskDoubleClick(task);
       }
     },
-    [tasks, onTaskDoubleClick],
+    [actionableTask, onTaskDoubleClick],
   );
 
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
       event.preventDefault();
-      const task = tasks.get(node.id);
+      const task = actionableTask(node);
       if (task && onTaskContextMenu) {
         onTaskContextMenu(task, event);
       }
     },
-    [tasks, onTaskContextMenu],
+    [actionableTask, onTaskContextMenu],
   );
 
   if (tasks.size === 0) {
