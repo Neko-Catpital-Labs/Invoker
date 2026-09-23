@@ -191,8 +191,8 @@ const bazelOverlayFiles = [
   'MODULE.bazel',
   'scripts/bazel/generate-package-build.mjs',
   'tools/bazel/workflow-graph-tools/package.json',
-  'packages/workflow-graph/tsconfig.bazel.json',
-  'packages/workflow-graph/vitest.bazel.config.ts',
+  'tools/bazel/workflow-graph-tools/tsconfig.bazel.json',
+  'tools/bazel/workflow-graph-tools/vitest.bazel.config.ts',
 ];
 for (const path of bazelOverlayFiles) {
   assert.deepEqual(

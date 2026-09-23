@@ -16,17 +16,14 @@ _TESTS = glob(["src/**/__tests__/**/*.ts"])
 
 js_library(
     name = "lib",
-    srcs = _SRCS + [
-        "package.json",
-        "tsconfig.bazel.json",
-    ],
+    srcs = _SRCS + ["package.json"],
 )
 
 tsup_bin.tsup(
     name = "build",
     srcs = _SRCS + [
         "package.json",
-        "tsconfig.bazel.json",
+        "//tools/bazel/workflow-graph-tools:tsconfig_bazel",
         "//tools/bazel/workflow-graph-tools:node_modules/typescript",
         "//tools/bazel/workflow-graph-tools:node_modules/@types/node",
         "//tools/bazel/workflow-graph-tools:node_modules",
@@ -41,7 +38,7 @@ tsup_bin.tsup(
         "esm",
         "--dts",
         "--tsconfig",
-        "tsconfig.bazel.json",
+        "../../tools/bazel/workflow-graph-tools/tsconfig.bazel.json",
         "--out-dir",
         "dist",
     ],
@@ -57,13 +54,13 @@ vitest_bin.vitest_test(
     args = [
         "run",
         "--config",
-        "../../../packages/workflow-graph/vitest.bazel.config.ts",
+        "vitest.bazel.config.ts",
     ],
     chdir = "tools/bazel/workflow-graph-tools",
     data = _SRCS + _TESTS + [
-        "vitest.bazel.config.ts",
-        "tsconfig.bazel.json",
         "package.json",
+        "//tools/bazel/workflow-graph-tools:vitest_config",
+        "//tools/bazel/workflow-graph-tools:tsconfig_bazel",
         "//packages/execution-engine:src/__tests__/fixtures/pr-6976-oauth-session-expired.ts",
         "//tools/bazel/workflow-graph-tools:node_modules/vitest",
         "//tools/bazel/workflow-graph-tools:node_modules/@types/node",

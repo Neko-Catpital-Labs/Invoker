@@ -923,12 +923,11 @@ assert(
 assert(
   JSON.stringify(scopeKindsForChangedFiles([
     'tools/bazel/workflow-graph-tools/package.json',
-    'packages/workflow-graph/tsconfig.bazel.json',
-    'packages/workflow-graph/vitest.bazel.config.ts',
+    'tools/bazel/workflow-graph-tools/tsconfig.bazel.json',
+    'tools/bazel/workflow-graph-tools/vitest.bazel.config.ts',
   ])) === JSON.stringify(['policy']),
-  'Bazel tools lock and package-local bazel configs classify as policy',
+  'Bazel tools lock and the bazel-only tsup/vitest configs under tools/bazel/ classify as policy',
 );
-
 
 const ciRepairFiles = ['.github/workflows/ci.yml'];
 const ciRepairBehaviorErrors = await validatePrBody(validMinimal, { changedFiles: ciRepairFiles });

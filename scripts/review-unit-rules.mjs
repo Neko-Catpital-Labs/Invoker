@@ -124,8 +124,6 @@ export function classifyReviewUnitsForPath(filePath) {
     || basename === 'buildbuddy.yaml'
     || path.startsWith('scripts/bazel/')
     || path.startsWith('tools/bazel/')
-    || basename === 'tsconfig.bazel.json'
-    || basename === 'vitest.bazel.config.ts'
   ) {
     return ['tooling-policy'];
   }
