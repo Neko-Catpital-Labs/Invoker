@@ -1888,6 +1888,55 @@ describe('PersistedWorkflowMutationCoordinator', () => {
       .filter((event) => event.eventType === 'workflow.mutation.failed')).toHaveLength(1);
   });
 
+  it('keeps the preemption error when the late dispatch message is a substring of it', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-0'));
+
+    const gate = deferred();
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? String(args[0]);
+        if (command.includes('hold-work')) {
+          await gate.promise;
+          throw new Error('recreate intent #2');
+        }
+      },
+      {},
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/task-0', 'hold-work'] }],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    await coordinator.enqueue<void>('wf-1', 'high', 'headless.exec', [{ args: ['recreate', 'wf-1'] }]);
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+
+    gate.resolve();
+    await waitFor(() => (
+      adapter.loadWorkflowMutationIntent(1)?.error?.includes('dispatch rejected:') === true
+    ));
+
+    const preemptedIntent = adapter.loadWorkflowMutationIntent(1);
+    expect(preemptedIntent?.error).toContain('Superseded by recreate intent #2');
+    expect(preemptedIntent?.error).toContain('dispatch rejected: recreate intent #2');
+  });
+
   it('invokes onIntentFailed with intent metadata when the async handler throws', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);

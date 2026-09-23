@@ -426,6 +426,23 @@ export class PersistedWorkflowMutationCoordinator {
     intent: WorkflowMutationIntent,
     error: unknown,
   ): void {
+    try {
+      this.recordDispatchRejection(workflowId, intent, error);
+    } catch (handlerError) {
+      const handlerMessage = handlerError instanceof Error
+        ? handlerError.message
+        : String(handlerError);
+      process.stderr.write(
+        `[workflow-mutation-coordinator] failed to record dispatch rejection for intent ${intent.id} workflow ${workflowId}: ${handlerMessage}\n`,
+      );
+    }
+  }
+
+  private recordDispatchRejection(
+    workflowId: string,
+    intent: WorkflowMutationIntent,
+    error: unknown,
+  ): void {
     const message = summarizeMutationFailureMessage(error);
     const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
     if (latestIntent?.status === 'running') {
@@ -452,12 +469,12 @@ export class PersistedWorkflowMutationCoordinator {
     failedIntent: WorkflowMutationIntent,
     message: string,
   ): void {
-    const recordedMessage = failedIntent.error && !failedIntent.error.includes(message)
-      ? `${failedIntent.error}; dispatch rejected: ${message}`
-      : message;
-    if (failedIntent.error === recordedMessage) {
+    const dispatchSuffix = `dispatch rejected: ${message}`;
+    const existingError = failedIntent.error ?? '';
+    if (existingError.includes(dispatchSuffix)) {
       return;
     }
+    const recordedMessage = existingError ? `${existingError}; ${dispatchSuffix}` : dispatchSuffix;
     this.persistence.failWorkflowMutationIntent(failedIntent.id, recordedMessage);
   }
 
