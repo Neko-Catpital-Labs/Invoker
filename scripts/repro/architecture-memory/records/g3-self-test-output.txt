@@ -1,0 +1,118 @@
+PASS pinned input unchanged: controls/baseline/bypass-command-service.patch
+PASS pinned input unchanged: controls/baseline/gold.patch
+PASS pinned input unchanged: controls/baseline/noop-todo-test.patch
+PASS pinned input unchanged: controls/baseline/skip-review-close.patch
+PASS pinned input unchanged: controls/baseline/stub-empty-result.patch
+PASS pinned input unchanged: controls/baseline/unscoped-dispatch.patch
+PASS pinned input unchanged: controls/treatment/bypass-command-service.patch
+PASS pinned input unchanged: controls/treatment/gold.patch
+PASS pinned input unchanged: controls/treatment/noop-todo-test.patch
+PASS pinned input unchanged: controls/treatment/skip-review-close.patch
+PASS pinned input unchanged: controls/treatment/stub-empty-result.patch
+PASS pinned input unchanged: controls/treatment/unscoped-dispatch.patch
+PASS pinned input unchanged: fixture/treatment-structural-delta.patch
+PASS pinned input unchanged: grader/hidden-edit-task-pool.test.ts
+PASS pinned input unchanged: runners.json
+PASS pinned input unchanged: task/prompt.md
+PASS source commit retrievable with pinned tree — 0ca415e4d69a tree 8248449ec6a6
+PASS focused unit tests (test_run.py) — OK
+PASS configuration equality: both arms normalize to one config hash — 088778de8c6f4526
+PASS configuration equality: a model change is detected
+PASS pinned harness argv carries model/effort/isolation flags — claude 2.1.281 (Claude Code)
+PASS access control: read hidden grader in evaluator repo → deny (exit 1)
+PASS access control: read committed gold control → deny (exit 1)
+PASS access control: read evaluator private copy → deny (exit 1)
+PASS access control: read other arm's trial copy → deny (exit 1)
+PASS access control: list evaluator state/ledger dir → deny (exit 1)
+PASS access control: list personal ~/.claude → deny (exit 1)
+PASS access control: read gh credentials dir → deny (exit 1)
+PASS access control: list prior sessions in harness config → deny (exit 1)
+PASS access control: read harness prompt history → deny (exit 1)
+PASS access control: execute gh → deny (exit 71)
+PASS access control: execute invoker-cli → deny (exit 71)
+PASS access control: read own trial file → allow (exit 0)
+PASS access control: write own trial file → allow (exit 0)
+PASS access control: run node inside trial → allow (exit 0)
+PASS process timeout kills the trial process group — exit -15 after 2.0s
+PASS baseline equivalence: existing tests on unpatched baseline — exit 0, 172 passed
+PASS baseline equivalence: existing tests on unpatched treatment — exit 0, 172 passed
+PASS baseline equivalence: identical per-test outcomes across arms
+PASS unedited snapshots fail the same hidden checks in both arms
+PASS control baseline/bypass-command-service: expect fail, got fail (hidden exit 1, 2 passed/4 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hid
+PASS control baseline/gold: expect pass, got pass (hidden exit 0, 6 passed/0 failed)
+PASS control baseline/noop-todo-test: expect fail, got fail (hidden exit 1, 0 passed/6 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool rout
+PASS control baseline/skip-review-close: expect fail, got fail (hidden exit 1, 5 passed/1 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs
+PASS control baseline/stub-empty-result: expect fail, got fail (hidden exit 1, 1 passed/5 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hid
+PASS control baseline/unedited-snapshot: expect fail, got fail (hidden exit 1, 0 passed/6 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool rout
+PASS control baseline/unscoped-dispatch: expect fail, got fail (hidden exit 1, 5 passed/1 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest
+PASS control treatment/bypass-command-service: expect fail, got fail (hidden exit 1, 2 passed/4 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hid
+PASS control treatment/gold: expect pass, got pass (hidden exit 0, 6 passed/0 failed)
+PASS control treatment/noop-todo-test: expect fail, got fail (hidden exit 1, 0 passed/6 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool rout
+PASS control treatment/skip-review-close: expect fail, got fail (hidden exit 1, 5 passed/1 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs
+PASS control treatment/stub-empty-result: expect fail, got fail (hidden exit 1, 1 passed/5 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hid
+PASS control treatment/unedited-snapshot: expect fail, got fail (hidden exit 1, 0 passed/6 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool rout
+PASS control treatment/unscoped-dispatch: expect fail, got fail (hidden exit 1, 5 passed/1 failed) — archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest
+[pilot] running treatment (1/2) with selftest none
+[pilot] running baseline (2/2) with selftest none
+[pilot] grading baseline in a fresh evaluator copy
+[pilot] grading treatment in a fresh evaluator copy
+{
+  "pair_id": "selftest-pair",
+  "order": [
+    "treatment",
+    "baseline"
+  ],
+  "outcomes": {
+    "baseline": {
+      "trial": "completed",
+      "graded_pass": true,
+      "reason": "passed"
+    },
+    "treatment": {
+      "trial": "completed",
+      "graded_pass": true,
+      "reason": "passed"
+    }
+  },
+  "validation_errors": []
+}
+PASS fake pair runs end to end with a randomized recorded order — order ['treatment', 'baseline']
+PASS fake agent could not read the grader from inside the sandbox
+PASS fake pair graded in fresh copies (edit passes in both arms)
+PASS idempotent ledger: a second pilot for a recorded pair is refused — pair selftest-pair already has a committed record; a new pair needs a new id
+PASS idempotent ledger: a retried task cannot re-run a started trial
+[pilot] running treatment (2/2) with selftest none
+[pilot] grading baseline in a fresh evaluator copy
+[pilot] grading treatment in a fresh evaluator copy
+{
+  "pair_id": "partial-pair",
+  "order": [
+    "baseline",
+    "treatment"
+  ],
+  "outcomes": {
+    "baseline": {
+      "trial": "abandoned_partial",
+      "graded_pass": false,
+      "reason": "hidden_checks_failed"
+    },
+    "treatment": {
+      "trial": "completed",
+      "graded_pass": false,
+      "reason": "hidden_checks_failed"
+    }
+  },
+  "validation_errors": []
+}
+PASS resume records the partial start as abandoned and never re-invokes it — baseline invocations 1
+PASS resume still runs the untouched arm exactly once
+PASS pair validation accepts the complete fake pair
+PASS pair validation rejects mismatched arm configurations
+PASS pair validation rejects an incomplete record
+PASS pair validation rejects a bought extra trial
+PASS pair validation rejects a tampered patch
+PASS replay: verify-recorded logic regrades the fake pair to its recorded verdicts
+PASS replay: verify-recorded logic fails on a tampered patch
+
+self-test: 68 passed, 0 failed
+EXIT=0

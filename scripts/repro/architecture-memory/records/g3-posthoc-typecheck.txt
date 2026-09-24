@@ -1,0 +1,6 @@
+Post-hoc, NOT part of the pre-registered grader and not gating. Run by attempt g3.t15 on 2026-09-24T12:49:39Z.
+Command: pnpm exec tsc -p tsconfig.typecheck.json --noEmit (fresh git-archive copy of 0ca415e4d69a3f59a4b666e65f6362adf2d947ad, arm delta, then recorded patch)
+patch applied
+baseline: tsc exit 0, 0 error line(s)
+patch applied
+treatment: tsc exit 0, 0 error line(s)
