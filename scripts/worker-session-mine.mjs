@@ -518,8 +518,12 @@ function runEfficiencyPass(ledger, now) {
 
   const reports = listRollupReports();
   if (reports.length === 0) {
+    if (unchecked.length > 0) {
+      console.error(`session-mine: efficiency pass found no machine reports and ${unchecked.length} source(s) failed; retrying next tick: ${JSON.stringify(unchecked)}`);
+      return false;
+    }
     console.log('session-mine: efficiency pass found no machine reports; nothing to review');
-    recordEfficiencyPass(ledger, now, { submitted: false, reports: 0, unchecked: unchecked.length });
+    recordEfficiencyPass(ledger, now, { submitted: false, reports: 0, unchecked: 0 });
     return false;
   }
 

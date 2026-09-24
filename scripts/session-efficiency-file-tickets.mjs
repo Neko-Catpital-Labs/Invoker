@@ -13,6 +13,8 @@ const MARKER_PREFIX = 'token-pattern:';
 const MARKER_CHAR = /[a-z0-9-]/;
 const CLOSED_STATE_TYPES = new Set(['completed', 'canceled', 'cancelled']);
 const DEFAULT_REPO = 'https://github.com/Neko-Catpital-Labs/Invoker.git';
+const LINEAR_API_URL = process.env.INVOKER_LINEAR_API_URL || 'https://api.linear.app/graphql';
+const ISSUE_PAGE_SIZE = 250;
 const SEARCH_TIMEOUT_MS = Number(process.env.INVOKER_LINEAR_SEARCH_TIMEOUT_MS ?? '120000');
 const CREATE_TIMEOUT_MS = Number(process.env.INVOKER_LINEAR_CREATE_TIMEOUT_MS ?? '120000');
 
@@ -43,7 +45,7 @@ function slugify(text) {
 }
 
 async function linearGraphql(apiKey, query, variables = {}) {
-  const res = await fetch('https://api.linear.app/graphql', {
+  const res = await fetch(LINEAR_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: apiKey },
     body: JSON.stringify({ query, variables }),
@@ -69,16 +71,24 @@ async function fetchOpenIssues() {
   if (!apiKey) {
     throw new Error('LINEAR_API_KEY / INVOKER_LINEAR_API_KEY required (or set INVOKER_LINEAR_SEARCH_CMD)');
   }
-  const data = await linearGraphql(
-    apiKey,
-    `query($filter: IssueFilter) {
-      issues(filter: $filter, first: 250) {
-        nodes { id identifier title description state { type } }
-      }
-    }`,
-    { filter: { state: { type: { nin: ['completed', 'canceled'] } } } },
-  );
-  return data?.issues?.nodes ?? [];
+  const issues = [];
+  let after = null;
+  for (;;) {
+    const data = await linearGraphql(
+      apiKey,
+      `query($filter: IssueFilter, $first: Int!, $after: String) {
+        issues(filter: $filter, first: $first, after: $after) {
+          nodes { id identifier title description state { type } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { filter: { state: { type: { nin: ['completed', 'canceled'] } } }, first: ISSUE_PAGE_SIZE, after },
+    );
+    issues.push(...(data?.issues?.nodes ?? []));
+    const pageInfo = data?.issues?.pageInfo;
+    if (!pageInfo?.hasNextPage || !pageInfo.endCursor) return issues;
+    after = pageInfo.endCursor;
+  }
 }
 
 function containsMarker(text, marker) {
