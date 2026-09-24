@@ -134,6 +134,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No catstack-deploy runs recorded yet.',
     };
   }
+  if (kind === 'thrash-detector') {
+    return {
+      name: 'Thrash detector',
+      idleText: 'Idle. Aggregates recurring debug.auto-fix failure signatures and records thrash.detected audit events when turned on.',
+      noActionText: 'No thrash-detector detections recorded yet.',
+    };
+  }
   if (kind === 'hook-metrics-collect') {
     return {
       name: 'Hook metrics collector',

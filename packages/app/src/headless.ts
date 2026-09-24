@@ -39,6 +39,7 @@ import {
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { resolvePrMaintenanceWorkerConfig, resolveSpendCircuitBreakerWorkerConfig } from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
+import { classifyAutoFixRecoveryPhase } from './recovery-worker-observability.js';
 import {
   isDispatchableLaunch,
 } from './global-topup.js';
@@ -505,6 +506,17 @@ export function resolveHeadlessCatstackDeployConfig(
   };
 }
 
+export function resolveHeadlessThrashDetectorConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['thrashDetector']> {
+  return {
+    intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 15) * 60_000,
+    thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+    windowHours: invokerConfig.thrashDetector?.windowHours,
+    classifyAutoFixRecoveryPhase,
+  };
+}
+
 export function resolveHeadlessSelfDeployConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
 ): NonNullable<WorkerRuntimeDependencies['selfDeploy']> {
@@ -686,6 +698,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      thrashDetector: resolveHeadlessThrashDetectorConfig(deps.invokerConfig),
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });

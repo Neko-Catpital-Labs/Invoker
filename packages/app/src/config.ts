@@ -16,7 +16,12 @@ import type {
   PrMaintenanceWorkerConfig,
   SpendCircuitBreakerWorkerConfig,
 } from '@invoker/execution-engine';
-import { DEFAULT_CODEX_DAILY_TOKEN_BUDGET } from '@invoker/execution-engine';
+import {
+  DEFAULT_CODEX_DAILY_TOKEN_BUDGET,
+  DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES,
+  DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+  DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
+} from '@invoker/execution-engine';
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
 
 export { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
@@ -234,6 +239,27 @@ export interface CatstackDeployConfig {
 
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
+
+/**
+ * Built-in thrash-detector worker settings. Process on/off is SQLite
+ * `worker_desired_states`; `enabled` is a persisted operator preference for
+ * deployments that mirror config into desired state.
+ */
+export interface ThrashDetectorConfig {
+  enabled?: boolean;
+  /** Poll cadence in minutes. Default: 15. */
+  intervalMinutes?: number;
+  /** Distinct task ids per signature required before an audit event is logged. Default: 3. */
+  thresholdCount?: number;
+  /** Lookback window for matching debug.auto-fix events. Default: 24. */
+  windowHours?: number;
+}
+
+export {
+  DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES,
+  DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+  DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
+};
 
 export interface AgentLoginWatchConfig {
   intervalMinutes?: number;
@@ -645,6 +671,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  thrashDetector?: ThrashDetectorConfig;
   agentLoginWatch?: AgentLoginWatchConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;

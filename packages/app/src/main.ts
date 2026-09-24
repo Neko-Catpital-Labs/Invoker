@@ -137,6 +137,7 @@ import {
   resolveAutoApproveAIFixes,
   resolveAutoFixRetries,
 } from './autofix-defaults.js';
+import { classifyAutoFixRecoveryPhase } from './recovery-worker-observability.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
@@ -517,6 +518,12 @@ function buildRegisteredOwnerWorkerDeps(
         name: target.name,
         connection: target.connection,
       })),
+    },
+    thrashDetector: {
+      intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 15) * 60_000,
+      thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+      windowHours: invokerConfig.thrashDetector?.windowHours,
+      classifyAutoFixRecoveryPhase,
     },
     selfDeploy: {
       intervalMs: (invokerConfig.selfDeploy?.intervalMinutes ?? 30) * 60_000,
