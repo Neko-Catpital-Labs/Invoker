@@ -69,10 +69,9 @@ index.
 | --- | --- | --- | --- |
 | Verify skill contract | `skills/verify/SKILL.md`, fixtures, contract tests | Yes; Tier A | Verify-skill maintainer |
 | Skill efficacy evals | `evals/verify/`, paired stated-decision runs | No LLM run; hermetic catalog check may be Tier A | Evals maintainer |
-| Feature-map index job | `references/features/`, `catalog --check` | Yes; cheap consistency check | Maintain-verify maintainer |
+| Feature-map index job | `references/features/`, `catalog --check` | Yes; cheap consistency check | Verify-skill maintainer |
 
 ## Related docs
 
 - `../SKILL.md`
-- `../../maintain-verify/SKILL.md`
 - `../../../evals/verify/` (when the case catalog is present)
