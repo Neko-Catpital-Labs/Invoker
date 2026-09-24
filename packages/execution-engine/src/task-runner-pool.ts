@@ -824,6 +824,7 @@ export function selectExecutor(
         );
       }
 
+      const repoProvisionCommands = host.getRepoProvisionCommands();
       const configFingerprint = JSON.stringify({
         host: target.host,
         user: target.user,
@@ -835,6 +836,7 @@ export function selectExecutor(
         use_api_key: target.use_api_key === true,
         secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
         remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
+        repoProvisionCommands,
       });
       const cacheKey = `${targetId}|${configFingerprint}`;
 
@@ -862,6 +864,7 @@ export function selectExecutor(
         useApiKey: target.use_api_key,
         secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
         remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
+        repoProvisionCommands,
       });
       host.executorRegistry.register(`ssh:${targetId}`, ssh);
       host.sshExecutorCache.set(cacheKey, ssh);
