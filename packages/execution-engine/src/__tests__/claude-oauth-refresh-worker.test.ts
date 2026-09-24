@@ -66,7 +66,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(distributeFn).not.toHaveBeenCalled();
   });
 
-  it.fails('records expiring and missing remote Claude credentials without distributing owner credentials', async () => {
+  it('records expiring and missing remote Claude credentials without distributing owner credentials', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 60 * 60 * 1000);
     const distributeFn = vi.fn(async () => undefined);
@@ -97,7 +97,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(statuses).toEqual({ do1: 'failed', do2: 'failed' });
   });
 
-  it.fails('records a remote target holding a logged-out credential file without distributing owner credentials', async () => {
+  it('records a remote target holding a logged-out credential file without distributing owner credentials', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 7 * 60 * 60 * 1000);
     const loggedOut = JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: 0 } });
@@ -121,7 +121,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     ]);
   });
 
-  it.fails.each([
+  it.each([
     ['an empty object', '{}'],
     ['a null oauth block', JSON.stringify({ claudeAiOauth: null })],
     ['an empty access token with a future expiry', JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: 'r', expiresAt: 1_000_000_000_000 + 60 * 60 * 1000 } })],
@@ -144,7 +144,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(distributeFn).not.toHaveBeenCalled();
   });
 
-  it.fails('records only remote targets that need their own per-host Claude login', async () => {
+  it('records only remote targets that need their own per-host Claude login', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 7 * 60 * 60 * 1000);
     const logger = makeLogger();
@@ -192,7 +192,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
-  it.fails('treats a failed remote credential read as a missing per-host login, without stopping other targets', async () => {
+  it('treats a failed remote credential read as a missing per-host login, without stopping other targets', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 60 * 60 * 1000);
     const distributeFn = vi.fn(async () => undefined);
@@ -217,7 +217,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(statuses).toEqual({ do1: 'failed' });
   });
 
-  it.fails('refreshes and writes the local file without distributing to remote targets when the token is expiring', async () => {
+  it('refreshes and writes the local file without distributing to remote targets when the token is expiring', async () => {
     const now = 1_000_000_000_000;
     const refreshed = credentialsJson(now + 3_600_000);
     const writeCredentials = vi.fn();
@@ -269,7 +269,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect((rows as { status: string }[])[0].status).toBe('failed');
   });
 
-  it.fails('records every stale remote target without distributing and without losing the local refresh', async () => {
+  it('records every stale remote target without distributing and without losing the local refresh', async () => {
     const now = 1_000_000_000_000;
     const refreshed = credentialsJson(now + 3_600_000);
     const { store, rows } = makeStore();
@@ -360,7 +360,7 @@ describe('runCodexOauthRefreshCheck', () => {
     expect(distributeFn).not.toHaveBeenCalled();
   });
 
-  it.fails('refreshes and writes the local file without distributing to remote targets when the token is expiring', async () => {
+  it('refreshes and writes the local file without distributing to remote targets when the token is expiring', async () => {
     const now = 1_000_000_000_000;
     const refreshed = codexAuthJson(now + 3_600_000);
     const writeCredentials = vi.fn();
@@ -386,7 +386,7 @@ describe('runCodexOauthRefreshCheck', () => {
     expect(statuses).not.toContain('codex:do3:completed');
   });
 
-  it.fails('records stale and missing remote Codex auth without distributing owner auth', async () => {
+  it('records stale and missing remote Codex auth without distributing owner auth', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = codexAuthJson(now);
     const staleRemote = codexAuthJson(now, {
@@ -420,7 +420,7 @@ describe('runCodexOauthRefreshCheck', () => {
 });
 
 describe('runClaudeAndCodexOauthRefreshCheck', () => {
-  it.fails('still runs the Codex pass when Claude refresh fails', async () => {
+  it('still runs the Codex pass when Claude refresh fails', async () => {
     const now = 1_000_000_000_000;
     const refreshedCodex = codexAuthJson(now + 3_600_000);
     const writeClaude = vi.fn();
@@ -463,7 +463,7 @@ describe('runClaudeAndCodexOauthRefreshCheck', () => {
     expect(statuses).not.toContain('codex:do1:completed');
   });
 
-  it.fails('does not fail the Claude pass when Codex auth.json is missing', async () => {
+  it('does not fail the Claude pass when Codex auth.json is missing', async () => {
     const now = 1_000_000_000_000;
     const refreshedClaude = credentialsJson(now + 3_600_000);
     const writeClaude = vi.fn();
@@ -505,7 +505,7 @@ describe('runClaudeAndCodexOauthRefreshCheck', () => {
 });
 
 describe('createClaudeOauthRefreshWorker filesystem e2e', () => {
-  it.fails('one startup tick refreshes Claude + Codex files on disk without distributing either file', async () => {
+  it('one startup tick refreshes Claude + Codex files on disk without distributing either file', async () => {
     const now = 1_000_000_000_000;
     const dir = mkdtempSync(join(tmpdir(), 'invoker-oauth-e2e-'));
     const claudePath = join(dir, '.credentials.json');
@@ -662,7 +662,7 @@ describe('runClaudeOauthRefreshCheck owner worker credential copy', () => {
     expect(fs.files.get(workerPath)).toBe(owner);
   });
 
-  it.fails('copies a newer worker token back to the owner instead of refreshing with the owner token the CLI already rotated away', async () => {
+  it('copies a newer worker token back to the owner instead of refreshing with the owner token the CLI already rotated away', async () => {
     const now = 1_000_000_000_000;
     const staleOwner = tokenJson('owner', now);
     const newerWorker = tokenJson('worker', now + 8 * 60 * 60 * 1000);
