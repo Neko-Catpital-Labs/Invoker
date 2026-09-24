@@ -177,7 +177,76 @@ mkdir -p "$(dirname "$CLONE")"
 # safe.directory "*" wildcard covers the check on $REPO/.git (the -c form and a
 # specific path do not), so set it in the remote global config before cloning.
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
-if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
+if [ ! -d "$CLONE/.git" ]; then
+  # $CLONE only appears via an atomic rename made under $LOCK, so no run ever fetches from a half-made clone.
+  LOCK="$CLONE.lock"
+  TMP_CLONE="$CLONE.tmp.$$"
+  MAIN_PID=$$
+  WAITED=0
+  HEARTBEAT_PID=""
+  LAST_HEARTBEAT=""
+  release_mirror_lock() {
+    if [ -n "$HEARTBEAT_PID" ]; then
+      kill "$HEARTBEAT_PID" 2>/dev/null || true
+      HEARTBEAT_PID=""
+    fi
+    # Releasing a lock this run no longer owns would hand $CLONE to two cloners at once.
+    if [ "$(cat "$LOCK/pid" 2>/dev/null || true)" = "$MAIN_PID" ]; then rm -rf "$LOCK"; fi
+  }
+  until mkdir "$LOCK" 2>/dev/null; do
+    HOLDER_PID=$(cat "$LOCK/pid" 2>/dev/null || true)
+    HOLDER_HEARTBEAT=$(cat "$LOCK/heartbeat" 2>/dev/null || true)
+    HOLDER_STOPPED=1
+    if [ -n "$HOLDER_PID" ] && kill -0 "$HOLDER_PID" 2>/dev/null; then HOLDER_STOPPED=0; fi
+    LOCK_IDLE=0
+    case "$HOLDER_HEARTBEAT" in
+      '' | *[!0-9]*)
+        if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then LOCK_IDLE=1; fi
+        ;;
+      *)
+        if [ "$(($(date +%s) - HOLDER_HEARTBEAT))" -ge 600 ]; then LOCK_IDLE=1; fi
+        if [ "$HOLDER_HEARTBEAT" != "$LAST_HEARTBEAT" ]; then
+          LAST_HEARTBEAT="$HOLDER_HEARTBEAT"
+          WAITED=0
+        fi
+        ;;
+    esac
+    # A running clone keeps renewing its heartbeat, so age alone never breaks a lock:
+    # only one whose owner has both stopped renewing and exited is removed.
+    if [ "$LOCK_IDLE" = 1 ] && [ "$HOLDER_STOPPED" = 1 ] && mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null; then
+      rm -rf "$LOCK.stale.$$"
+      continue
+    fi
+    if [ "$WAITED" -ge 900 ]; then
+      echo "ERROR: timed out after $WAITED seconds waiting for mirror clone lock $LOCK" >&2
+      exit 34
+    fi
+    sleep 1
+    WAITED=$((WAITED + 1))
+  done
+  printf '%s\\n' "$MAIN_PID" > "$LOCK/pid"
+  date +%s > "$LOCK/heartbeat"
+  (
+    while kill -0 "$MAIN_PID" 2>/dev/null && [ "$(cat "$LOCK/pid" 2>/dev/null || true)" = "$MAIN_PID" ]; do
+      sleep 30
+      date +%s > "$LOCK/heartbeat" 2>/dev/null || exit 0
+    done
+  ) >/dev/null 2>&1 </dev/null &
+  HEARTBEAT_PID=$!
+  trap 'rm -rf "$TMP_CLONE"; release_mirror_lock' EXIT
+  if [ ! -d "$CLONE/.git" ]; then
+    rm -rf "$TMP_CLONE"
+    git clone "$REPO" "$TMP_CLONE"
+    # Renaming into a surviving $CLONE would nest the new clone inside it instead of publishing it.
+    if [ -e "$CLONE" ] && ! rmdir "$CLONE" 2>/dev/null; then
+      echo "ERROR: cannot publish mirror clone; $CLONE already exists and is not an empty directory" >&2
+      exit 35
+    fi
+    mv "$TMP_CLONE" "$CLONE"
+  fi
+  release_mirror_lock
+  trap - EXIT
+fi
 if ! git -C "$CLONE" fetch --all --prune; then
   echo "[WARNING] Git fetch failed for $CLONE" >&2
   echo "[WARNING] Continuing with existing refs. Tasks may use stale commits." >&2
