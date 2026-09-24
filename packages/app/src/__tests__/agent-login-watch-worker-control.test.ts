@@ -32,6 +32,7 @@ const emptyStore: WorkerRuntimeDependencies['store'] = {
 function persistence() {
   return {
     listWorkerActions: vi.fn(() => []),
+    listTaskEvents: vi.fn(() => []),
     listWorkflows: vi.fn(() => []),
     loadTasks: vi.fn(() => []),
     getEvents: vi.fn(() => []),
