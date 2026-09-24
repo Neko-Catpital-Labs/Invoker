@@ -190,22 +190,10 @@ scan_repo() {
         printf 'kind=%s\n' "$q_tsv_kind"
         printf 'key=%s\n' "$q_key"
         printf 'marker=%s\n' "$q_fingerprint"
-        printf 'ref="refs/heads/$branch"\n'
-        printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
-        printf 'if [ "$live" != "$expected" ]; then\n'
-        printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
-        printf '  exit 20\n'
-        printf 'fi\n'
-        printf 'pushed="$(git rev-parse HEAD)"\n'
-        printf 'git push --force-with-lease="$ref:$expected" origin "HEAD:$ref"\n'
-        printf 'verified="$(git ls-remote origin "$ref" | cut -f1)"\n'
-        printf 'if [ "$verified" != "$pushed" ]; then\n'
-        printf '  echo "post-push verification failed: $ref is ${verified:-missing}; expected $pushed" >&2\n'
-        printf '  exit 22\n'
-        printf 'fi\n'
-        printf 'mkdir -p "$(dirname "$ledger")"\n'
-        printf 'printf '"'"'%%s\\t%%s\\t%%s\\t%%s\\n'"'"' "$kind" "$key" "$marker" "$(date +%%s)" >> "$ledger"\n'
-        printf 'echo "pr-worker-safe-push: pushed $ref to $pushed"\n'
+        printf 'python3 scripts/pr_worker_safe_push.py \\\n'
+        printf '  --branch "$branch" --expected-head "$expected" --cwd . \\\n'
+        printf '  --record-tsv-ledger "$ledger" \\\n'
+        printf '  --tsv-kind "$kind" --tsv-key "$key" --tsv-marker "$marker"\n'
       } | sed 's/^/      /'
     } > "$plan_file"
 

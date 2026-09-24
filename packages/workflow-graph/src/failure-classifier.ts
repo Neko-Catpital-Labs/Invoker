@@ -97,7 +97,7 @@ export class FailureClassifier {
     if (errorText.includes('ERR_MODULE_NOT_FOUND') && errorText.includes("Cannot find package '")) {
       return 'dependency-missing';
     }
-    if (errorText.includes('pr-worker-safe-push: stale-head:')) {
+    if (errorText.includes('pr-worker-safe-push: stale-head:') || errorText.includes('stale-head: refs/heads/')) {
       return 'branch-head-moved';
     }
     if (errorText.includes('required by the merge/gate step was not found on the remote')) {

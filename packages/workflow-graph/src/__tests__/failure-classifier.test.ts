@@ -100,6 +100,10 @@ const SAFE_PUSH_STALE_HEAD_ERROR =
   'pr-worker-safe-push: stale-head: refs/heads/stack/EdbertChan/plan/x/y--917fad44 is '
   + '7af80382e9578c7500dbec4d8b1b845df8acc04d; expected b3fd0f58573e769ae60fd91f175d50a26f4e7593\n'
   + '[worktree] Process exited: actionId=wf-1789327282247-10/safe-push exitCode=20';
+const INLINE_SAFE_PUSH_STALE_HEAD_ERROR =
+  'stale-head: refs/heads/stack/EdbertChan/plan/x/y--917fad44 is missing; '
+  + 'expected b3fd0f58573e769ae60fd91f175d50a26f4e7593\n'
+  + '[worktree] Process exited: actionId=wf-1790064955879-81/safe-push exitCode=20';
 const MERGE_BRANCH_MISSING_ERROR =
   'Error: Branch "feature/local-llm-e2e" required by the merge/gate step was not found on the remote '
   + '(https://github.com/EdbertChan/fraud_repo.git). This branch is retrieved from origin, but it is not there';
@@ -117,6 +121,10 @@ describe('FailureClassifier.classifyWorkFailure', () => {
 
   it('classifies a safe-push refusal because the branch head moved', () => {
     expect(FailureClassifier.classifyWorkFailure(SAFE_PUSH_STALE_HEAD_ERROR)).toBe('branch-head-moved');
+  });
+
+  it('classifies the legacy inline safe-push stale-head refusal', () => {
+    expect(FailureClassifier.classifyWorkFailure(INLINE_SAFE_PUSH_STALE_HEAD_ERROR)).toBe('branch-head-moved');
   });
 
   it('classifies a merge gate whose branch is missing on the remote', () => {
