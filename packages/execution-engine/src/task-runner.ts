@@ -1742,7 +1742,21 @@ export class TaskRunner {
             INVOKER_REPAIR_SESSION_COMMIT: args.recordedFixCommit,
           }
           : {};
-        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver, repairPublicationEnv);
+        const result = await spawnAgentPrAuthorViaRegistry(
+          prompt,
+          args.cwd,
+          agent,
+          driver,
+          repairPublicationEnv,
+          (body) => {
+            try {
+              parseMakePrStackPublishResult(body);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        );
         logProgress('info', `${agent.name} make-pr agent finished; validating output`, {
           agentName: agent.name,
           sessionId: result.sessionId,
