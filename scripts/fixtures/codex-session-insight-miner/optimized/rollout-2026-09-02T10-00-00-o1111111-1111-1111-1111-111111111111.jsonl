@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-09-02T10:00:00.000Z","payload":{"id":"o1111111-1111-1111-1111-111111111111","cwd":"/home/user/.invoker/worktrees/x/experiment-wf-2-1-fix-ci-thing-g0.t0.a-ccc"}}
+{"type":"turn_context","timestamp":"2026-09-02T10:00:05.000Z","payload":{"model":"gpt-5.6-sol"}}
+{"type":"response_item","timestamp":"2026-09-02T10:01:00.000Z","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg -n foo .\",\"workdir\":\"/repo\"}"}}
+{"type":"response_item","timestamp":"2026-09-02T10:02:00.000Z","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"pnpm test\",\"workdir\":\"/repo\"}"}}
+{"type":"event_msg","timestamp":"2026-09-02T10:03:00.000Z","payload":{"type":"task_complete","last_agent_message":"done"}}
+{"type":"event_msg","timestamp":"2026-09-02T10:04:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":200000}}}}
