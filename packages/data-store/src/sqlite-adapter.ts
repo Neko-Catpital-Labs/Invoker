@@ -4726,7 +4726,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         [now, id],
       );
       const changed = (this.db.getRowsModified?.() ?? 0) > 0;
-      if (changed && before) {
+      if (changed && before && before.acknowledged_at == null) {
         this.appendQueueHistory({
           eventType: 'executor_admission',
           workflowId: String(before.workflow_id),
@@ -4891,10 +4891,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         [now, reason, ...rowIds],
       );
       for (const row of rows) {
-        const workflowId = String(row.workflow_id);
         this.appendQueueHistory({
           eventType: 'dispatch_state_transition',
-          workflowId,
+          workflowId: String(row.workflow_id),
           taskId: String(row.task_id),
           attemptId: String(row.attempt_id),
           dispatchId: Number(row.id),
@@ -4906,6 +4905,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
             abandonReason: 'lifecycle-reset',
           },
         });
+      }
+      for (const workflowId of new Set(rows.map((row) => String(row.workflow_id)))) {
         this.appendQueueSnapshot(workflowId, 'abandonLaunchDispatchesForTasks');
       }
 
@@ -4954,11 +4955,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
            AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
-      return expired.map((row) => {
-        const workflowId = String(row.workflow_id);
+      for (const row of expired) {
         this.appendQueueHistory({
           eventType: 'dispatch_state_transition',
-          workflowId,
+          workflowId: String(row.workflow_id),
           taskId: String(row.task_id),
           attemptId: String(row.attempt_id),
           dispatchId: Number(row.id),
@@ -4966,10 +4966,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
           toState: 'enqueued',
           payload: { source: 'reapExpiredLaunchDispatchLeases' },
         });
+      }
+      for (const workflowId of new Set(expired.map((row) => String(row.workflow_id)))) {
         this.appendQueueSnapshot(workflowId, 'reapExpiredLaunchDispatchLeases');
-        const reset = { ...row, state: 'enqueued', dispatch_owner: null, fenced_until: null };
-        return this.rowToTaskLaunchDispatch(reset);
-      });
+      }
+      return expired.map((row) =>
+        this.rowToTaskLaunchDispatch({ ...row, state: 'enqueued', dispatch_owner: null, fenced_until: null }));
     });
   }
 

@@ -290,4 +290,52 @@ describe('queue history persistence', () => {
       adapter.close();
     }
   });
+  async function twoDispatchAdapter(): Promise<SQLiteAdapter> {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-queue-history-'));
+    cleanup = () => rmSync(dir, { recursive: true, force: true });
+    const adapter = await SQLiteAdapter.create(join(dir, 'invoker.db'), { ownerCapability: true });
+    adapter.saveWorkflow(WORKFLOW);
+    for (const [task, attempt] of [['task-a', 'attempt-a'], ['task-b', 'attempt-b']] as const) {
+      adapter.saveTask(WORKFLOW.id, makeTask(task, attempt));
+      adapter.saveAttempt(makeAttempt(attempt, task, 1));
+      adapter.enqueueLaunchDispatch({ taskId: task, attemptId: attempt, workflowId: WORKFLOW.id, priority: 1, generation: 1 });
+    }
+    return adapter;
+  }
+
+  function eventsFrom(adapter: SQLiteAdapter, source: string): QueueHistoryRow[] {
+    return historyRows(adapter).filter((row) => {
+      const p = payload(row);
+      return p.source === source || p.cause === source;
+    });
+  }
+
+  it('records one executor admission when a dispatch is accepted twice', async () => {
+    const adapter = await twoDispatchAdapter();
+    const leased = adapter.claimLaunchDispatchAtomic({ ownerId: 'd', nowIso: '2026-09-15T00:00:10.000Z' });
+    adapter.markLaunchDispatchAccepted(leased!.id, '2026-09-15T00:00:11.000Z');
+    adapter.markLaunchDispatchAccepted(leased!.id, '2026-09-15T00:00:12.000Z');
+    expect(historyRows(adapter).filter((row) => row.event_type === 'executor_admission')).toHaveLength(1);
+  });
+
+  it('writes every bulk abandonment before one snapshot per workflow', async () => {
+    const adapter = await twoDispatchAdapter();
+    adapter.abandonLaunchDispatchesForTasks(['task-a', 'task-b'], 'reset', '2026-09-15T00:00:20.000Z');
+    expect(eventsFrom(adapter, 'abandonLaunchDispatchesForTasks').map((row) => row.event_type)).toEqual([
+      'dispatch_state_transition',
+      'dispatch_state_transition',
+      'queue_snapshot',
+    ]);
+  });
+
+  it('writes every bulk requeue before one snapshot per workflow', async () => {
+    const adapter = await twoDispatchAdapter();
+    adapter.claimLaunchDispatchAtomic({ ownerId: 'd', nowIso: '2026-09-15T00:00:10.000Z' });
+    adapter.claimLaunchDispatchAtomic({ ownerId: 'd', nowIso: '2026-09-15T00:00:10.000Z' });
+    adapter.reapExpiredLaunchDispatchLeases({ nowIso: '2026-09-16T00:00:00.000Z' });
+    const types = eventsFrom(adapter, 'reapExpiredLaunchDispatchLeases').map((row) => row.event_type);
+    expect(types.slice(0, 2)).toEqual(['dispatch_state_transition', 'dispatch_state_transition']);
+    expect(types.slice(2).every((type) => type === 'queue_snapshot')).toBe(true);
+    expect(types.length).toBeGreaterThan(2);
+  });
 });
