@@ -202,4 +202,48 @@ for (const path of bazelOverlayFiles) {
   );
 }
 
+const headlessSetCoupledFiles = [
+  'packages/contracts/src/headless-set-subcommands.ts',
+  'packages/app/src/headless.ts',
+  'packages/cli/src/index.ts',
+];
+assert.deepEqual(reviewUnitsForChangedFiles(headlessSetCoupledFiles), ['activation-surface']);
+assert.deepEqual(
+  reviewUnitsForChangedFiles([...headlessSetCoupledFiles, 'packages/cli/src/cli-runtime.ts']),
+  ['activation-surface'],
+);
+assert.ok(
+  reviewUnitsForChangedFiles([
+    'packages/contracts/src/headless-set-subcommands.ts',
+    'packages/app/src/headless.ts',
+  ]).includes('contract'),
+  'an incomplete coupling entry must not suppress the contract unit',
+);
+assert.deepEqual(
+  reviewUnitsForChangedFiles(['packages/contracts/src/headless-set-subcommands.ts']),
+  ['contract'],
+);
+assert.deepEqual(
+  validateSingleReviewUnitFiles({ files: headlessSetCoupledFiles, context: 'Task "x"' }),
+  [],
+);
+assert.deepEqual(
+  validateReviewUnitChangedFiles({
+    declaredReviewUnit: 'activation-surface',
+    changedFiles: headlessSetCoupledFiles,
+    context: 'PR body',
+  }),
+  [],
+);
+assert.deepEqual(classifyReviewUnitsForPath('packages/contracts/src/index.ts'), ['contract']);
+assert.deepEqual(
+  reviewUnitsForChangedFiles(['packages/contracts/src/index.ts', 'packages/app/src/headless.ts']),
+  ['contract', 'activation-surface'],
+);
+assert.deepEqual(
+  reviewUnitsForChangedFiles([...headlessSetCoupledFiles, 'packages/contracts/src/index.ts']),
+  ['contract', 'activation-surface'],
+  'a contract file outside the coupling entry still counts as its own unit',
+);
+
 console.log('review-unit classification: all assertions passed');
