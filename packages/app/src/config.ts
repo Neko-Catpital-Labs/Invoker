@@ -235,6 +235,21 @@ export interface CatstackDeployConfig {
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
+export interface ThrashDetectorConfig {
+  /** Runtime guard for detection ticks. Defaults to true. */
+  enabled?: boolean;
+  /** Poll cadence in minutes. Default: 15. */
+  intervalMinutes?: number;
+  /** Distinct matching task ids required to emit thrash.detected. Default: 3. */
+  thresholdCount?: number;
+  /** Sliding detection window in hours. Default: 24. */
+  windowHours?: number;
+}
+
+export const DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES = 15;
+export const DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT = 3;
+export const DEFAULT_THRASH_DETECTOR_WINDOW_HOURS = 24;
+
 export interface SelfDeployConfig {
   intervalMinutes?: number;
   repoPath?: string;
@@ -637,8 +652,9 @@ export interface InvokerConfig {
    * Catstack deploy worker: clone/pull/install cadence and paths.
    * Process on/off is SQLite `worker_desired_states`, not a config boolean.
    * Remotes always come from top-level `remoteTargets`.
-   */
+  */
   catstackDeploy?: CatstackDeployConfig;
+  thrashDetector?: ThrashDetectorConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
   dbReaper?: DbReaperConfig;

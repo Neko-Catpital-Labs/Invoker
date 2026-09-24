@@ -80,6 +80,20 @@ const AUTO_FIX_RECREATE_ACTION_TYPE = 'auto-recreate';
  */
 export const DEFAULT_CIRCUIT_BREAKER_PAUSE_MS = 6 * 60 * 60 * 1000;
 
+export type AutoFixRecoveryPhaseAction = 'wakeup' | 'scan' | 'submit' | 'skip';
+
+export function classifyAutoFixRecoveryPhase(
+  phase: string,
+  details: Record<string, unknown> = {},
+): AutoFixRecoveryPhaseAction | undefined {
+  if (phase === 'delta-failed') return 'wakeup';
+  if (phase === 'poll-failed' || phase === 'schedule-enter') return 'scan';
+  if (phase === 'schedule-enqueued' || phase === 'worker-autofix-submitted') return 'submit';
+  if (phase === 'schedule-skip' || phase.endsWith('-skip')) return 'skip';
+  if (details.reason && (phase.includes('skip') || phase.includes('error'))) return 'skip';
+  return undefined;
+}
+
 /** Substrings that indicate a prior fix attempt already diagnosed an invalid merge workspace. */
 export const INVALID_MERGE_WORKSPACE_ERROR_MARKERS = [
   "Cannot apply a fix because this merge gate's saved workspace",
