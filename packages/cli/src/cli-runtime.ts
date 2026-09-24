@@ -802,7 +802,7 @@ async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume' | 'd
     bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
     await requireLiveOwnerForMutation(bus);
     await sendHeadlessExec(bus, [command, targetId]);
-    process.stdout.write(`${command} accepted by live owner.\n`);
+    process.stdout.write(`${command} accepted by live owner (re-read with invoker-cli query to confirm).\n`);
     return 0;
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
@@ -906,7 +906,7 @@ async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
     bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
     await requireLiveOwnerForMutation(bus);
     await sendHeadlessExec(bus, ['delete-all']);
-    process.stdout.write('delete-all accepted by live owner.\n');
+    process.stdout.write('delete-all queued by live owner (not yet applied; re-read with invoker-cli query to confirm).\n');
     return 0;
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
@@ -1072,7 +1072,7 @@ async function runSetMutation(options: SetOptions, deps: CliDeps): Promise<numbe
       throw new Error(`Cannot set ${options.field} on task "${task.id}": ${refusal}.`);
     }
     await sendHeadlessExec(bus, ['set', options.field, options.taskId, ...options.values]);
-    process.stdout.write(`set ${options.field} accepted by live owner.\n`);
+    process.stdout.write(`set ${options.field} queued by live owner (not yet applied; re-read with invoker-cli query to confirm).\n`);
     return 0;
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
