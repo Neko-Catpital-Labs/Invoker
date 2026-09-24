@@ -147,7 +147,8 @@ write_file() {
     return 0
   fi
   mkdir -p "$(dirname "$path")"
-  printf '%s' "$content" > "$path"
+  content="${content%"${content##*[!$'\n']}"}"
+  printf '%s\n' "$content" > "$path"
 }
 
 append_once() {
