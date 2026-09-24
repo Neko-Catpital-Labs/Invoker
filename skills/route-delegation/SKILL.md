@@ -26,6 +26,8 @@ lives in `skill://plan-to-invoker/SKILL.md`. This skill only picks the road.
 
    No output named, or a name not on this list: stop and name it. An output
    nobody declared is unchecked, not clean.
+   Count the independent publishing units too (PR stacks to land or repair,
+   separate workflows).
 2. **Some work publishes no matter what it says it produces:** an approved
    plan, a post-land babysit (wait until `MERGED`, merge-queue watching), and
    an already-named execution backlog.
@@ -33,8 +35,14 @@ lives in `skill://plan-to-invoker/SKILL.md`. This skill only picks the road.
    subagents, collect reports async, and grep each transcript for writes or
    commits before trusting its summary.
 4. **Something publishes → never a subagent swarm.**
+   - More than one independent publishing unit: never serial in this chat.
+     Invoker first, one workflow per unit. When Invoker MCP is missing, or
+     the user directs subagents, use one worktree-isolated subagent per unit
+     (`subagent_worktree_per_unit`), run in parallel, each transcript
+     grepped for writes. Many read-only units keep the plain fan-out.
    - Invoker MCP (`invoker_prepare_plan_review` and `invoker_submit_plan`)
-     missing: stay local — the parent session does it in its own worktree.
+     missing, one unit: stay local — the parent session does it in its own
+     worktree.
    - One-slice, one-file, or read-only work: stay local in this chat.
    - Approved plan, or durable/parallel work: submit to Invoker through
      `skill://chat-submit/SKILL.md`.
@@ -42,12 +50,15 @@ lives in `skill://plan-to-invoker/SKILL.md`. This skill only picks the road.
 Executable form, same table:
 
 ```bash
-node skills/route-delegation/scripts/route-delegation.mjs '{"tools":["invoker_prepare_plan_review","invoker_submit_plan"],"work_kind":"durable_parallel","produces":["commit","pull_request"]}'
+node skills/route-delegation/scripts/route-delegation.mjs '{"tools":["invoker_prepare_plan_review","invoker_submit_plan"],"work_kind":"durable_parallel","produces":["commit","pull_request"],"units":1}'
 ```
 
 It prints `{"route": ..., "steps": [...]}` where `route` is one of
-`local`, `delegate_invoker`, or `subagent_fanout`, and exits non-zero on an
-undeclared output or an unknown work kind.
+`local`, `delegate_invoker`, `subagent_fanout`, or
+`subagent_worktree_per_unit`. `units` defaults to 1;
+`user_directed_subagents: true` picks the per-unit subagent route over
+Invoker. It exits non-zero on an undeclared output, an unknown work kind, or
+a `units` value that is not a positive integer.
 
 ## Why
 
@@ -58,6 +69,14 @@ subagents spawned because the work was "separable, default to parallel",
 each producing a PR-worthy commit, with `invoker-cli` installed and the
 routing rule never consulted. Nothing in a fan-out default said no, because
 nothing in it was ever about publishing.
+
+The second failure: asked to land dozens of PR stacks across two repos, the
+parent worked the ~20 rebases and review fixes one at a time in one
+worktree, because the table returned `local` for publishing work without
+Invoker at any unit count. Independent units run in parallel, never serial.
+Amdahl, "Validity of the single processor approach to achieving large scale
+computing capabilities", AFIPS 1967, https://doi.org/10.1145/1465482.1465560
+— the serial fraction bounds the whole job.
 
 Prior art: least privilege. Saltzer and Schroeder, "Basic Principles of
 Information Protection" (1975),
