@@ -18,6 +18,14 @@ describe('getWorkerDisplayCopy', () => {
     });
   });
 
+  it('returns dedicated display copy for the hook metrics collector worker', () => {
+    expect(getWorkerDisplayCopy('hook-metrics-collect')).toEqual({
+      name: 'Hook metrics collector',
+      idleText: 'Idle. Copies catstack hook event logs from every remote machine so the hook report covers the whole fleet.',
+      noActionText: 'No hook-metrics-collect runs recorded yet.',
+    });
+  });
+
   it('returns dedicated display copy for the db-reaper worker', () => {
     expect(getWorkerDisplayCopy('db-reaper')).toEqual({
       name: 'DB reaper',
