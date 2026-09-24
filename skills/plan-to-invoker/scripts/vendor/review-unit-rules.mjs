@@ -113,6 +113,20 @@ export function classifyReviewUnitsForPath(filePath) {
   const lowerPath = path.toLowerCase();
   const basename = path.split('/').pop() ?? '';
 
+  if (
+    basename === 'BUILD.bazel'
+    || basename === 'MODULE.bazel'
+    || basename === 'MODULE.bazel.lock'
+    || basename === '.bazelrc'
+    || basename === '.bazelrc.user.example'
+    || basename === '.bazelignore'
+    || basename === '.bazelversion'
+    || basename === 'buildbuddy.yaml'
+    || path.startsWith('scripts/bazel/')
+    || path.startsWith('tools/bazel/')
+  ) {
+    return ['tooling-policy'];
+  }
   if (path.startsWith('scripts/repro/')) return ['proof'];
   if (
     path === 'scripts/pr-body-template.md'
