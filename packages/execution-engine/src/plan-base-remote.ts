@@ -23,23 +23,25 @@ async function tryResolveCommit(runGit: GitExec, refExpr: string): Promise<strin
   }
 }
 
-async function tryResolveRemoteHeadCommit(runGit: GitExec, remoteName: string): Promise<string | undefined> {
-  try {
-    const remoteHeadRef = (await runGit([
-      'symbolic-ref',
-      '--quiet',
-      '--short',
-      `refs/remotes/${remoteName}/HEAD`,
-    ])).trim();
-    if (!remoteHeadRef) return undefined;
-    return await tryResolveCommit(runGit, `${remoteHeadRef}^{commit}`);
-  } catch {
-    return undefined;
-  }
+function alternateDefaultBranch(branchName: string): string | undefined {
+  if (branchName === 'main') return 'master';
+  if (branchName === 'master') return 'main';
+  return undefined;
 }
 
-async function tryResolveOriginHeadCommit(runGit: GitExec): Promise<string | undefined> {
-  return tryResolveRemoteHeadCommit(runGit, 'origin');
+async function tryResolveAlternateDefaultBranch(
+  runGit: GitExec,
+  branchName: string,
+  remoteName: string,
+): Promise<string | undefined> {
+  const alternate = alternateDefaultBranch(branchName);
+  if (!alternate) return undefined;
+  const remoteExpr = `${remoteName}/${alternate}^{commit}`;
+  const cached = await tryResolveCommit(runGit, remoteExpr);
+  if (cached) return cached;
+  await syncPlanBaseRemote(runGit, alternate, remoteName);
+  return (await tryResolveCommit(runGit, remoteExpr))
+    ?? (await tryResolveCommit(runGit, `refs/heads/${alternate}^{commit}`));
 }
 
 async function listRemoteNames(runGit: GitExec): Promise<string[]> {
@@ -197,16 +199,16 @@ export async function resolvePlanBaseRevision(
     const synced = await tryResolveCommit(runGit, remoteExpr);
     if (synced) return synced;
 
-    const remoteHeadFallback = await tryResolveRemoteHeadCommit(runGit, explicitRemote.remoteName);
-    if (remoteHeadFallback) return remoteHeadFallback;
-    const originHeadFallback = explicitRemote.remoteName === 'origin'
-      ? undefined
-      : await tryResolveOriginHeadCommit(runGit);
-    if (originHeadFallback) return originHeadFallback;
+    const alternateResolved = await tryResolveAlternateDefaultBranch(
+      runGit,
+      explicitRemote.branchName,
+      explicitRemote.remoteName,
+    );
+    if (alternateResolved) return alternateResolved;
 
     throw new Error(
-      `Unable to resolve base ref "${r}" as ${remoteExpr}. `
-      + `Ensure the branch exists locally or on ${explicitRemote.remoteName}.`,
+      `Base branch "${explicitRemote.branchName}" (from "${r}") was not found on the remote `
+      + `${explicitRemote.remoteName}; refusing to fall back to another branch.`,
     );
   }
 
@@ -232,16 +234,12 @@ export async function resolvePlanBaseRevision(
   const localAfterSync = await tryResolveCommit(runGit, localExpr);
   if (localAfterSync) return localAfterSync;
 
-  const preferredHeadFallback = await tryResolveRemoteHeadCommit(runGit, preferredRemote);
-  if (preferredHeadFallback) return preferredHeadFallback;
-  const originHeadFallback = preferredRemote === 'origin'
-    ? undefined
-    : await tryResolveOriginHeadCommit(runGit);
-  if (originHeadFallback) return originHeadFallback;
+  const alternateResolved = await tryResolveAlternateDefaultBranch(runGit, branchName, preferredRemote);
+  if (alternateResolved) return alternateResolved;
 
   throw new Error(
-    `Unable to resolve base ref "${r}" as ${remoteExpr} or ${localExpr}. `
-    + `Ensure the branch exists locally or on ${preferredRemote}.`,
+    `Base branch "${branchName}" was not found on the remote ${preferredRemote} `
+    + `(checked ${remoteExpr} and ${localExpr}); refusing to fall back to another branch.`,
   );
 }
 
