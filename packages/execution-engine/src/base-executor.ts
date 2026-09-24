@@ -37,6 +37,12 @@ const FAILED_TASK_ERROR_LINE_PATTERNS = [
 ];
 
 const PACKAGE_PATH_RE = /\bpackages\/[A-Za-z0-9._-]+(?=\/|\b)/g;
+const EMBEDDED_JOB_LOG_RE = /^Job log \(tail\):[ \t]*$/m;
+
+function withoutEmbeddedJobLog(part: string): string {
+  const marker = part.search(EMBEDDED_JOB_LOG_RE);
+  return marker === -1 ? part : part.slice(0, marker);
+}
 
 function inferOwningPackage(request: WorkRequest): string {
   const haystack = [
@@ -44,7 +50,10 @@ function inferOwningPackage(request: WorkRequest): string {
     request.inputs.description,
     request.inputs.prompt,
     request.inputs.command,
-  ].filter((part): part is string => typeof part === 'string' && part.length > 0).join('\n');
+  ]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .map(withoutEmbeddedJobLog)
+    .join('\n');
   const packages = [...new Set(haystack.match(PACKAGE_PATH_RE) ?? [])];
   if (packages.length === 1) return packages[0];
   if (packages.length > 1) return `${packages[0]} (plus explicitly named sibling paths)`;
