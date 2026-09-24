@@ -16,7 +16,8 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "composite": true
+    "composite": true,
+    "allowImportingTsExtensions": true
   },
   "include": [
     "src"
