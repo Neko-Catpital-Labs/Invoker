@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "NODE_OPTIONS='--max-old-space-size=4096' vite build && tsup src/lib/workflow-core-activity.ts --format esm --out-dir dist/lib --clean false",
     "test": "node scripts/run-vitest.mjs",
-    "typecheck": "node -e 'const cp = require(\"child_process\"); const fs = require(\"fs\"); const path = require(\"path\"); const repoRoot = path.resolve(process.cwd(), \"../..\"); const baselinePath = path.join(process.cwd(), \"typecheck-baseline.txt\"); let output = \"\"; try {   output = cp.execSync(\"tsc -p tsconfig.json --noEmit\", { encoding: \"utf8\" }); } catch (e) {   output = (e.stdout || \"\") + (e.stderr || \"\"); } const re = /^(.+?)\\((\\d+),(\\d+)\\): error (TS\\d+):/; const counts = {}; for (const line of output.split(\"\\n\")) {   const m = line.match(re);   if (!m) continue;   const abs = path.resolve(process.cwd(), m[1]);   const rel = path.relative(repoRoot, abs).split(path.sep).join(\"/\");   const key = rel + \"\\t\" + m[4];   counts[key] = (counts[key] || 0) + 1; } const baseline = {}; if (fs.existsSync(baselinePath)) {   for (const line of fs.readFileSync(baselinePath, \"utf8\").split(\"\\n\")) {     if (!line.trim()) continue;     const parts = line.split(\"\\t\");     baseline[parts[0] + \"\\t\" + parts[1]] = parseInt(parts[2], 10);   } } let failed = false; for (const key of Object.keys(counts)) {   const base = baseline[key] || 0;   if (counts[key] > base) {     failed = true;     console.error(\"typecheck: unbaselined error \" + key + \" (actual \" + counts[key] + \", baseline \" + base + \")\");   } } if (failed) process.exit(1); process.exit(0);'"
+    "typecheck": "node scripts/typecheck-baseline.mjs"
   },
   "dependencies": {
     "@invoker/contracts": "workspace:*",
