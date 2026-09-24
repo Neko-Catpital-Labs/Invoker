@@ -21,6 +21,7 @@ import {
   buildReadCredentialsScript,
   buildSshConnectionArgs,
   execRemoteCapture,
+  shellPosixSingleQuote,
 } from '@invoker/execution-engine';
 
 import type { PtyForkOptionsLike, PtyLike, PtySpawnFn } from './embedded-terminal-manager.js';
@@ -83,6 +84,7 @@ export interface AgentLoginSessionDependencies {
 export const DEFAULT_AGENT_LOGIN_SESSION_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_PARSE_TIMEOUT_MS = 30_000;
 const DEFAULT_CODEX_REMOTE_AUTH_PATH = '~/.codex/auth.json';
+const CODEX_REMOTE_PROBE_PROMPT = 'Reply with just the word ok';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-9;]*[a-zA-Z]|\][^\x07\x1b]*(?:\x07|\x1b\\))/g;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/;
@@ -323,6 +325,39 @@ async function defaultProbeClaude(token: string, deps: AgentLoginSessionDependen
   });
 }
 
+function buildRemoteCodexLoginScript(): string {
+  return `set -euo pipefail
+CODEX_HOME="$(mktemp -d)"
+cleanup() {
+  rm -rf "$CODEX_HOME"
+}
+trap cleanup EXIT
+export CODEX_HOME
+codex login --device-auth
+if ! codex exec --skip-git-repo-check ${shellPosixSingleQuote(CODEX_REMOTE_PROBE_PROMPT)}; then
+  echo "Codex login probe failed; the live Codex login was left untouched." >&2
+  exit 42
+fi
+if [ ! -s "$CODEX_HOME/auth.json" ]; then
+  echo "Codex login did not produce auth.json; the live Codex login was left untouched." >&2
+  exit 43
+fi
+mkdir -p "$HOME/.codex"
+INCOMING="$HOME/.codex/auth.json.incoming-$$"
+cp "$CODEX_HOME/auth.json" "$INCOMING"
+chmod 600 "$INCOMING"
+mv "$INCOMING" "$HOME/.codex/auth.json"
+`;
+}
+
+function remoteCodexFailureMessage(target: AgentLoginRemoteTarget, code: number | null, output: string): string {
+  const text = stripAnsiColorCodes(output);
+  const knownFailure = text
+    .split('\n')
+    .find((line) => line.includes('Codex login probe failed') || line.includes('Codex login did not produce auth.json'));
+  return knownFailure ?? `remote codex login on "${target.name}" exited with code ${code ?? 'null'}`;
+}
+
 async function installCodexAuth(
   state: AgentLoginInternalState,
   deps: AgentLoginSessionDependencies,
@@ -374,7 +409,26 @@ function createSession(
   return state;
 }
 
-async function beginCodexLogin(state: AgentLoginInternalState, deps: AgentLoginSessionDependencies): Promise<void> {
+async function beginCodexLogin(
+  state: AgentLoginInternalState,
+  deps: AgentLoginSessionDependencies,
+  host?: string,
+): Promise<void> {
+  if (host) {
+    const target = (deps.remoteTargets ?? []).find((candidate) => candidate.name === host);
+    if (!target) {
+      finalizeFailure(
+        state,
+        `Remote target "${host}" was not found in config.`,
+        deps,
+        deps.now?.() ?? Date.now(),
+      );
+      return;
+    }
+    await beginRemoteCodexLogin(state, deps, target);
+    return;
+  }
+
   const spawnFn = deps.spawnFn ?? (nodeSpawn as unknown as AgentLoginSpawnFn);
   const parseTimeoutMs = deps.parseTimeoutMs ?? DEFAULT_PARSE_TIMEOUT_MS;
   const child = spawnFn('codex', ['login', '--device-auth'], {
@@ -465,6 +519,87 @@ async function beginCodexLogin(state: AgentLoginInternalState, deps: AgentLoginS
   })();
 }
 
+async function beginRemoteCodexLogin(
+  state: AgentLoginInternalState,
+  deps: AgentLoginSessionDependencies,
+  target: AgentLoginRemoteTarget,
+): Promise<void> {
+  const parseTimeoutMs = deps.parseTimeoutMs ?? DEFAULT_PARSE_TIMEOUT_MS;
+  const sshArgs = buildSshConnectionArgs(target.connection, { batchMode: true });
+  const child = nodeSpawn('ssh', [...sshArgs, 'bash', '-s'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  child.stdin?.write(buildRemoteCodexLoginScript());
+  child.stdin?.end();
+
+  const parsed = createDeferred<{ url: string; code: string }>();
+  let buffer = '';
+  const onData = (chunk: Buffer | string): void => {
+    buffer += chunk.toString();
+    const found = parseCodexDeviceAuthOutput(buffer);
+    if (found) parsed.resolve(found);
+  };
+  child.stdout?.on('data', onData);
+  child.stderr?.on('data', onData);
+
+  const exitPromise = new Promise<number | null>((resolve, reject) => {
+    child.once('exit', (code) => resolve(code));
+    child.once('error', (err) => reject(err));
+  });
+  exitPromise.catch((error) => parsed.reject(error));
+
+  let found: { url: string; code: string };
+  try {
+    found = await withTimeout(
+      parsed.promise,
+      parseTimeoutMs,
+      `remote codex login on "${target.name}" did not print a device URL and code in time`,
+    );
+  } catch (error) {
+    try {
+      child.kill();
+    } catch (killError) {
+      deps.logger?.debug('agent-login-session: remote codex login process kill failed (already exited)', {
+        sessionId: state.sessionId,
+        target: target.name,
+        reason: killError instanceof Error ? killError.message : String(killError),
+      });
+    }
+    finalizeFailure(state, error instanceof Error ? error.message : String(error), deps, deps.now?.() ?? Date.now());
+    return;
+  }
+
+  state.loginUrl = found.url;
+  state.code = found.code;
+  transition(state, 'awaiting_user', deps.now?.() ?? Date.now());
+
+  void (async () => {
+    let exitCode: number | null;
+    try {
+      exitCode = await exitPromise;
+    } catch (error) {
+      finalizeFailure(
+        state,
+        `remote codex login process error: ${error instanceof Error ? error.message : String(error)}`,
+        deps,
+        deps.now?.() ?? Date.now(),
+      );
+      return;
+    }
+    if (exitCode !== 0) {
+      finalizeFailure(
+        state,
+        remoteCodexFailureMessage(target, exitCode, buffer),
+        deps,
+        deps.now?.() ?? Date.now(),
+      );
+      return;
+    }
+
+    finalizeSuccess(state, deps, deps.now?.() ?? Date.now());
+  })();
+}
+
 function loadNodePtySpawn(): PtySpawnFn {
   try {
     const nodeRequire = createRequire(__filename);
@@ -549,10 +684,18 @@ async function beginClaudeLogin(state: AgentLoginInternalState, deps: AgentLogin
 export async function startAgentLogin(
   provider: AgentLoginProvider,
   deps: AgentLoginSessionDependencies = {},
+  host?: string,
 ): Promise<AgentLoginSessionStatusView> {
   const state = createSession(provider, deps);
   if (provider === 'codex') {
-    await beginCodexLogin(state, deps);
+    await beginCodexLogin(state, deps, host);
+  } else if (host) {
+    finalizeFailure(
+      state,
+      'Remote host login is only supported for Codex.',
+      deps,
+      deps.now?.() ?? Date.now(),
+    );
   } else {
     await beginClaudeLogin(state, deps);
   }
