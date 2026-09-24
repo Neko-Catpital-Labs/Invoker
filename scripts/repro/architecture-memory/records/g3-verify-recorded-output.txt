@@ -1,0 +1,40 @@
+PASS pinned input controls/baseline/bypass-command-service.patch sha256 matches manifest
+PASS pinned input controls/baseline/gold.patch sha256 matches manifest
+PASS pinned input controls/baseline/noop-todo-test.patch sha256 matches manifest
+PASS pinned input controls/baseline/skip-review-close.patch sha256 matches manifest
+PASS pinned input controls/baseline/stub-empty-result.patch sha256 matches manifest
+PASS pinned input controls/baseline/unscoped-dispatch.patch sha256 matches manifest
+PASS pinned input controls/treatment/bypass-command-service.patch sha256 matches manifest
+PASS pinned input controls/treatment/gold.patch sha256 matches manifest
+PASS pinned input controls/treatment/noop-todo-test.patch sha256 matches manifest
+PASS pinned input controls/treatment/skip-review-close.patch sha256 matches manifest
+PASS pinned input controls/treatment/stub-empty-result.patch sha256 matches manifest
+PASS pinned input controls/treatment/unscoped-dispatch.patch sha256 matches manifest
+PASS pinned input fixture/treatment-structural-delta.patch sha256 matches manifest
+PASS pinned input grader/hidden-edit-task-pool.test.ts sha256 matches manifest
+PASS pinned input runners.json sha256 matches manifest
+PASS pinned input task/prompt.md sha256 matches manifest
+PASS source 0ca415e4d69a tree 8248449ec6a6
+PASS pilot-001: pair record complete and configs identical 
+PASS pilot-001: record came from a real harness run, not the self-test fake
+PASS pilot-001: recorded pinned inputs match manifest
+PASS pilot-001: source commit matches manifest
+PASS pilot-001: ledger shows 1 invocation(s) for baseline
+PASS pilot-001: baseline ledger patch hash matches recorded patch
+PASS pilot-001: ledger shows 1 invocation(s) for treatment
+PASS pilot-001: treatment ledger patch hash matches recorded patch
+PASS pilot-001: preflight (access denial, equivalence, controls) passed before trials
+PASS pilot-001: baseline snapshot rebuilds to recorded tree ac518fa9c4ec
+PASS pilot-001: treatment snapshot rebuilds to recorded tree 9cd6118e2b18
+     baseline: recorded passed=True (passed), regraded passed=True (passed), hidden exit 0
+       |  ✓ src/__tests__/archmem-hidden-edit-task-pool.test.ts (6 tests) 6ms
+       |  Test Files  1 passed (1)
+       |       Tests  6 passed (6)
+PASS pilot-001: baseline regrade in a fresh copy reproduces the recorded verdict and per-check statuses
+     treatment: recorded passed=True (passed), regraded passed=True (passed), hidden exit 0
+       |  ✓ src/__tests__/archmem-hidden-edit-task-pool.test.ts (6 tests) 6ms
+       |  Test Files  1 passed (1)
+       |       Tests  6 passed (6)
+PASS pilot-001: treatment regrade in a fresh copy reproduces the recorded verdict and per-check statuses
+verify-recorded: OK
+EXIT=0

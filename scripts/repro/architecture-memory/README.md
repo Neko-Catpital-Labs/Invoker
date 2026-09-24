@@ -87,5 +87,7 @@ While authoring, two throwaway `claude-haiku-4-5` smoke calls checked that the h
 
 - **One pair:** it shows the apparatus runs end to end. It is not a statistically supported architecture effect.
 - **Dollars:** these are the harness's own client-side estimate. No prices are invented, and there is no dollar-efficiency conclusion.
-- **Typecheck:** there is none, because the source commit has no working per-package `tsc` entry point. Grading is behavioral (vitest) only.
+- **Typecheck:** the pre-registered grader is behavioral (vitest) only. The earlier claim that the source commit has no working `tsc` entry point was wrong. The repo-wide `pnpm exec tsc -p tsconfig.typecheck.json --noEmit` works at that commit and reports errors. It was never part of this pair's grader, so any typecheck result for the recorded patches is post-hoc and not gating (see `records/g3-posthoc-typecheck.txt`). Later experiments should pre-register it.
+- **Tool parity caveat:** both arms had the same Bash allowlist, and it does not cover `tsc`. The treatment agent said it skipped a typecheck because it needed approval.
+- **Prior attempts:** earlier regenerations of this Invoker task ran three real pairs with different tasks and apparatus. See `records/prior-attempts.md`. They are disclosed there and never pooled with `pilot-001`.
 - **Later protocol, not launched:** six frozen tasks × five paired repeats, with a pre-registered primary metric.
