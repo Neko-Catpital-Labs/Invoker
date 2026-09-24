@@ -386,4 +386,24 @@ function assertionEditDiff(removedLines, addedLines) {
   }
 }
 
+// Case: a mis-shaped argument throws instead of reporting a clean diff.
+{
+  const text = diff([
+    'diff --git a/packages/core/src/add.ts b/packages/core/src/add.ts',
+    '--- a/packages/core/src/add.ts',
+    '+++ b/packages/core/src/add.ts',
+    '@@ -1,1 +1,1 @@',
+    '-export const a = 1;',
+    '+export const a = 2;',
+  ]);
+  const parsed = parseUnifiedDiff(text);
+  assert.throws(() => collectDiffAtomicityFindings(parsed), TypeError);
+  assert.throws(() => collectDiffAtomicityFindings(), TypeError);
+  assert.throws(() => collectDiffAtomicityFindings({}), TypeError);
+  assert.throws(() => collectDiffAtomicityFindings({ diffText: null }), TypeError);
+  assert.throws(() => collectDiffAtomicityFindings(text), TypeError);
+  assert.deepEqual(collectDiffAtomicityFindings({ files: parsed }), []);
+  assert.deepEqual(collectDiffAtomicityFindings({ diffText: '' }), []);
+}
+
 console.log('ok pr diff atomicity');
