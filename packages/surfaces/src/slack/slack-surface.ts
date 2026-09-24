@@ -47,6 +47,12 @@ import {
 import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
+import {
+  AgentLoginThreadController,
+  buildAgentLoginAlertMetadata,
+  readAgentLoginMetadata,
+} from './slack-agent-login.js';
+import type { AgentLoginTarget, SlackMessageMetadata } from './slack-agent-login.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
@@ -138,6 +144,7 @@ export interface SlackSurfaceConfig {
   runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
   /** Relaunches Invoker (host-owned). Enables the `restart` lobby verb. */
   onRestartInvoker?: () => Promise<void>;
+  runHeadlessCommand?: (args: string[]) => Promise<unknown>;
   /** Identifies the owning Slack manager process in request and reply logs. */
   instanceId?: string;
   /** Resolves a per-turn harness session driver for a preset (append-based continuity instead of prompt replay), when feasible. */
@@ -219,6 +226,7 @@ function normalizeAlertSurfaceEvent(event: AlertSurfaceEvent): AlertSurfaceEvent
  */
 const MAX_LOCAL_CAPTURE_CHARS = 65_536;
 const DEFAULT_ALERT_POST_COOLDOWN_MS = 30 * 60 * 1_000;
+const AGENT_LOGIN_THREAD_CACHE_LIMIT = 500;
 
 // Internal marker for the "success with empty stdout" case so the runOneShotPlanner
 // retry wrapper can distinguish transient silent-success from user-actionable
@@ -404,6 +412,9 @@ export class SlackSurface implements Surface {
   private gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   private runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
   private onRestartInvoker?: () => Promise<void>;
+  private runHeadlessCommand?: (args: string[]) => Promise<unknown>;
+  private agentLogin: AgentLoginThreadController;
+  private agentLoginThreadTargets = new Map<string, AgentLoginTarget | null>();
   private instanceId: string;
   private harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
   /** Guard key -> last lobby alert post timestamp, held in-process like watchdog cooldowns. */
@@ -453,6 +464,7 @@ export class SlackSurface implements Surface {
     this.gatherWorkflowContext = config.gatherWorkflowContext;
     this.runWorkflowOp = config.runWorkflowOp;
     this.onRestartInvoker = config.onRestartInvoker;
+    this.runHeadlessCommand = config.runHeadlessCommand;
     this.instanceId = config.instanceId ?? 'local';
     this.harnessSessionDriverFactory = config.harnessSessionDriverFactory;
     this.log = config.log ?? ((source, level, msg) => {
@@ -491,6 +503,15 @@ export class SlackSurface implements Surface {
       store: this.slackSessionRepo,
       runWorkflowOp: this.runWorkflowOp,
       restart: this.onRestartInvoker,
+    });
+    this.agentLogin = new AgentLoginThreadController({
+      isAdmin: (userId) => this.isLocalCommandAuthorized(userId),
+      resolveTarget: (channel, threadTs) => this.resolveAgentLoginThreadTarget(channel, threadTs),
+      runHeadlessCommand: (args) => this.runAgentLoginHeadlessCommand(args),
+      post: async (text, threadTs, channel) => {
+        await this.postMessage({ text: sanitizeSlackOutbound(text), blocks: [] }, channel, threadTs);
+      },
+      log: coreLog,
     });
     this.planDrafts = new PlanDraftLifecycle({
       platformName: 'Slack',
@@ -608,8 +629,12 @@ export class SlackSurface implements Surface {
       }
       const message = formatSurfaceEvent(alert);
       if (!message) return;
-      const ts = await this.postMessage(message, this.lobbyChannelId);
+      const agentLoginMetadata = buildAgentLoginAlertMetadata(alert.alertKey);
+      const ts = await this.postMessage(message, this.lobbyChannelId, undefined, agentLoginMetadata);
       if (ts) this.alertLastPostAt.set(alert.alertKey, now);
+      if (ts && agentLoginMetadata) {
+        this.agentLoginThreadTargets.set(ts, readAgentLoginMetadata(agentLoginMetadata));
+      }
       return;
     }
 
@@ -1639,6 +1664,41 @@ export class SlackSurface implements Surface {
     }
   }
 
+  private async runAgentLoginHeadlessCommand(args: string[]): Promise<unknown> {
+    if (!this.runHeadlessCommand) {
+      throw new Error('This Invoker instance cannot run owner commands from Slack.');
+    }
+    return await this.runHeadlessCommand(args);
+  }
+
+  private async resolveAgentLoginThreadTarget(
+    channel: string,
+    threadTs: string,
+  ): Promise<AgentLoginTarget | null> {
+    const cached = this.agentLoginThreadTargets.get(threadTs);
+    if (cached !== undefined) return cached;
+
+    let target: AgentLoginTarget | null = null;
+    try {
+      const replies = await this.app.client.conversations.replies({
+        channel,
+        ts: threadTs,
+        limit: 1,
+        include_all_metadata: true,
+      } as never) as unknown as { messages?: Array<{ metadata?: unknown }> };
+      target = readAgentLoginMetadata(replies.messages?.[0]?.metadata);
+    } catch (err) {
+      this.log('slack', 'warn', `[AGENT_LOGIN] Could not read thread parent metadata (thread_ts=${threadTs}): ${err}`);
+      return null;
+    }
+
+    if (this.agentLoginThreadTargets.size >= AGENT_LOGIN_THREAD_CACHE_LIMIT) {
+      this.agentLoginThreadTargets.clear();
+    }
+    this.agentLoginThreadTargets.set(threadTs, target);
+    return target;
+  }
+
   /** Only configured admins may run raw local shell. Empty admin set = nobody. */
   private isLocalCommandAuthorized(userId?: string): boolean {
     return !!userId && this.adminUserIds.has(userId);
@@ -2375,6 +2435,13 @@ ${text}`;
         return;
       }
 
+      if (await this.agentLogin.handleReply({
+        channel,
+        threadTs: msg.thread_ts,
+        userId: msg.user,
+        text,
+      })) return;
+
       if (await this.approvals.resolveConfirm(msg.thread_ts, text, say, channel)) return;
 
       const rebind = await this.maybeRebindThreadRepo(channel, msg.thread_ts, msg.user, text, say);
@@ -3017,13 +3084,19 @@ ${text}`;
     }
   }
 
-  private async postMessage(message: SlackMessage, channel = this.lobbyChannelId, threadTs?: string): Promise<string | undefined> {
+  private async postMessage(
+    message: SlackMessage,
+    channel = this.lobbyChannelId,
+    threadTs?: string,
+    metadata?: SlackMessageMetadata,
+  ): Promise<string | undefined> {
     try {
       const result = await this.app.client.chat.postMessage({
         channel,
         text: message.text,
         blocks: message.blocks as any,
         ...(threadTs ? { thread_ts: threadTs } : {}),
+        ...(metadata ? { metadata: metadata as never } : {}),
       });
       this.log('slack', 'info', `Posted message: "${message.text.slice(0, 80)}..."`);
       return result.ts;
