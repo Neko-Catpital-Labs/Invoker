@@ -12,6 +12,7 @@ import { expandTildeHome, type DiskHeadroomWorkerStore } from './disk-headroom-r
 import {
   enforceHourlySnapshotRetention,
   reapDeletingOrphans,
+  reapStaleAgentArtifacts,
   reapStaleInvokerCliTempDirs,
   reapStaleAutomationCheckouts,
   reapStaleDevelopmentHomes,
@@ -51,6 +52,7 @@ export interface ReaperWorkerOptions {
   reapWorktrees?: typeof reapStaleWorktrees;
   /** Test seam: override stale CLI temp-directory reap. */
   reapTempDirs?: typeof reapStaleInvokerCliTempDirs;
+  reapAgentArtifacts?: typeof reapStaleAgentArtifacts;
   /** Test seam: override snapshot-retention enforcement. */
   enforceRetention?: typeof enforceHourlySnapshotRetention;
   /** Test seam: wrap the worker tick for observability. */
@@ -62,6 +64,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
   const reapCheckouts = options.reapCheckouts ?? reapStaleAutomationCheckouts;
   const reapWorktrees = options.reapWorktrees ?? reapStaleWorktrees;
   const reapTempDirs = options.reapTempDirs ?? reapStaleInvokerCliTempDirs;
+  const reapAgentArtifacts = options.reapAgentArtifacts ?? reapStaleAgentArtifacts;
   const enforceRetention = options.enforceRetention ?? enforceHourlySnapshotRetention;
   const reapMergeClones = options.reapMergeClones ?? reapStaleMergeClones;
   const reapDevHomes = options.reapDevHomes ?? reapStaleDevelopmentHomes;
@@ -94,6 +97,10 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
       });
       if (ctx.signal?.aborted) return;
       const snapshotsPruned = enforceRetention(options.invokerHome, undefined, {
+        logger: options.logger,
+      });
+      const agentArtifactResult = reapAgentArtifacts({
+        invokerHome: options.invokerHome,
         logger: options.logger,
       });
       const logShardsPurged = purgeOldLogShards(expandTildeHome(options.invokerHome));
@@ -134,6 +141,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
         `Reaper pass: orphan targets ${orphanResults.length - orphanFailed.length}/${orphanResults.length} ok, `
         + `checkouts removed ${checkoutsRemoved.length}, CLI temp dirs removed ${tempDirsRemoved.length}, `
         + `snapshots pruned ${snapshotsPruned}, `
+        + `agent artifacts removed ${agentArtifactResult.removed.length}, agent artifacts unchecked ${agentArtifactResult.unchecked.length}, `
         + `log shards purged ${logShardsPurged.length}, worktrees removed ${worktreesRemoved}, `
         + `merge clones removed ${mergeCloneResult.removed.length}`
         + (mergeCloneResult.ok ? '' : ` (merge clone reap failed: ${mergeCloneResult.reason})`)
@@ -157,6 +165,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
             checkoutsRemoved,
             tempDirsRemoved,
             snapshotsPruned,
+            agentArtifactResult,
             logShardsPurged,
             worktreeResults,
             worktreesRemoved,
@@ -178,7 +187,7 @@ export function registerReaperWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: REAPER_WORKER_KIND,
-    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, stale CLI temp dirs, stale task worktrees, stale merge clones no unfinished task uses, week-old dev homes with no running process, stale worktrees inside dev homes, and excess hourly snapshots on an interval.',
+    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, stale CLI temp dirs, stale task worktrees, stale merge clones no unfinished task uses, week-old dev homes with no running process, stale worktrees inside dev homes, two-week-old agent-session and task-output files, and excess hourly snapshots on an interval.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createReaperWorker({
         logger: deps.logger,
