@@ -1,0 +1,87 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index bfc485e..220eab1 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -15,7 +15,7 @@
+  * remain in the entrypoint layer.
+  */
+ 
+-import type { Logger } from '@invoker/contracts';
++import type { CommandEnvelope, Logger } from '@invoker/contracts';
+ import { makeEnvelope } from '@invoker/contracts';
+ import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+ import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
+@@ -106,6 +106,10 @@ export interface SpawnRepairWorkflowMutationResult extends MutationResult {
+   workflowId?: string;
+ }
+ 
++type CommandOutcome =
++  | { ok: true; data: TaskState[] }
++  | { ok: false; error: { code: string; message: string } };
++
+ type DispatchScope = {
+   scopedWorkflowId?: string;
+   scopedTaskIds?: string[];
+@@ -170,19 +174,19 @@ export class WorkflowMutationFacade {
+   }
+ 
+   async retryTask(taskId: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = await this.runViaCommandService(
+-      (cs) => cs.retryTask(makeEnvelope('facade.retry-task', 'surface', 'task', { taskId })),
++    return this.runTaskCommand(
++      taskId,
++      'facade.retry-task',
++      (cs, envelope) => cs.retryTask(envelope),
+     );
+-    return this.finalizeWithTopup(started, 'facade.retry-task', { scopedTaskIds: [taskId] });
+   }
+ 
+   async recreateTask(taskId: string): Promise<MutationResult> {
+-    await this.closeReviewForTask(taskId);
+-    const started = await this.runViaCommandService(
+-      (cs) => cs.recreateTask(makeEnvelope('facade.recreate-task', 'surface', 'task', { taskId })),
++    return this.runTaskCommand(
++      taskId,
++      'facade.recreate-task',
++      (cs, envelope) => cs.recreateTask(envelope),
+     );
+-    return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
+   }
+ 
+   async deleteTask(taskId: string): Promise<MutationResult> {
+@@ -573,13 +577,33 @@ export class WorkflowMutationFacade {
+     return { started, runnable, topup };
+   }
+ 
++  /**
++   * Task-scoped CommandService mutation lifecycle. Every task-level mutation
++   * that CommandService owns goes through here so it keeps the same
++   * guarantees: the workflow review closes before the mutation, the mutation
++   * is serialized by CommandService (never a direct orchestrator call), and
++   * only the target task is dispatched as mutation-scoped work while other
++   * started tasks fall through to global topup.
++   */
++  private async runTaskCommand<P extends object = Record<never, never>>(
++    taskId: string,
++    context: string,
++    routed: (cs: CommandService, envelope: CommandEnvelope<{ taskId: string } & P>) => Promise<CommandOutcome>,
++    payload: P = {} as P,
++  ): Promise<MutationResult> {
++    await this.closeReviewForTask(taskId);
++    const envelope = makeEnvelope(context, 'surface', 'task', { taskId, ...payload });
++    const started = await this.runViaCommandService((cs) => routed(cs, envelope));
++    return this.finalizeWithTopup(started, context, { scopedTaskIds: [taskId] });
++  }
++
+   /**
+    * Route lifecycle mutations through CommandService so they get mutex
+    * serialization, executor kill on cancel-in-flight, and cross-workflow
+    * cascade. There is intentionally no direct orchestrator fallback.
+    */
+   private async runViaCommandService(
+-    routed: (cs: CommandService) => Promise<{ ok: true; data: TaskState[] } | { ok: false; error: { code: string; message: string } }>,
++    routed: (cs: CommandService) => Promise<CommandOutcome>,
+   ): Promise<TaskState[]> {
+     const result = await routed(this.deps.commandService);
+     if (!result.ok) {

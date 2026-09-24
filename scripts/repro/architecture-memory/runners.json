@@ -1,0 +1,60 @@
+{
+  "selection": {
+    "harness": "claude",
+    "model": "claude-sonnet-5",
+    "effort": "medium",
+    "budget_usd": 5.0,
+    "trial_timeout_seconds": 900
+  },
+  "harnesses": {
+    "claude": {
+      "binary": "claude",
+      "version_args": ["--version"],
+      "argv": [
+        "--print",
+        "--output-format", "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--setting-sources", "",
+        "--strict-mcp-config",
+        "--settings", "{\"autoMemoryEnabled\":false,\"disableAllHooks\":true}",
+        "--model", "{model}",
+        "--effort", "{effort}",
+        "--max-budget-usd", "{budget_usd}",
+        "--tools", "Bash,Read,Edit,Write,Glob,Grep",
+        "--permission-mode", "acceptEdits",
+        "--allowedTools",
+        "Bash(pnpm test:*)", "Bash(pnpm exec vitest:*)", "Bash(pnpm vitest:*)", "Bash(npx vitest:*)",
+        "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git add:*)", "Bash(git commit:*)",
+        "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)", "Bash(sed -n:*)",
+        "--",
+        "{prompt}"
+      ],
+      "env": {
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CONFIG_DIR": "{auth_config_dir}"
+      },
+      "telemetry": "claude-stream-json",
+      "auth_config_dir_env": "ARCHMEM_CLAUDE_CONFIG_DIR",
+      "auth_config_dir_default": "~/.claude"
+    },
+    "codex": {
+      "binary": "codex",
+      "version_args": ["--version"],
+      "argv": [
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--skip-git-repo-check",
+        "--sandbox", "workspace-write",
+        "--json",
+        "-m", "{model}",
+        "-c", "model_reasoning_effort=\"{effort}\"",
+        "{prompt}"
+      ],
+      "env": {},
+      "telemetry": "codex-jsonl"
+    }
+  }
+}
