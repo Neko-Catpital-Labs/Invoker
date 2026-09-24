@@ -139,6 +139,7 @@ describe('reaper worker', () => {
       { ...okResult('ssh:remote-1 ~/.invoker'), reason: 'reap-worktrees', detail: 'removed 3' },
     ]);
     const reapTempDirs = vi.fn(async () => ['/tmp/invoker-cli-prompt-old']);
+    const reapAgentArtifacts = vi.fn(() => ({ removed: ['/tmp/invoker-home/agent-sessions/old.jsonl'], unchecked: [] }));
     const enforceRetention = vi.fn(() => 2);
     const reapMergeClones = vi.fn(async () => ({
       ok: true,
@@ -164,6 +165,7 @@ describe('reaper worker', () => {
       reapCheckouts,
       reapWorktrees,
       reapTempDirs,
+      reapAgentArtifacts,
       enforceRetention,
       reapMergeClones,
       reapDevHomes,
@@ -180,6 +182,8 @@ describe('reaper worker', () => {
     expect(reapCheckouts.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
     expect(reapTempDirs).toHaveBeenCalledTimes(1);
     expect(reapTempDirs.mock.calls[0]?.[0]).toMatchObject({ tempRoot: expect.any(String) });
+    expect(reapAgentArtifacts).toHaveBeenCalledTimes(1);
+    expect(reapAgentArtifacts.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
     expect(enforceRetention).toHaveBeenCalledTimes(1);
     expect(enforceRetention.mock.calls[0]?.[0]).toBe('/tmp/invoker-home');
     expect(reapWorktrees).toHaveBeenCalledTimes(1);
@@ -201,6 +205,7 @@ describe('reaper worker', () => {
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('checkouts removed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('CLI temp dirs removed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('snapshots pruned 2');
+    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('agent artifacts removed 1');
     expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('worktrees removed 5');
     expect(reapMergeClones).toHaveBeenCalledTimes(1);
     expect(reapMergeClones.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home', taskStore });
