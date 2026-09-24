@@ -42,6 +42,8 @@ import {
 import { SLACK_BUG_SCAN_WORKER_KIND } from '@invoker/slack-bug-scan';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
+export const AGENT_LOGIN_WATCH_WORKER_KIND = 'agent-login-watch';
+
 /**
  * Worker kinds auto-started on every owner boot.
  * Per-worker SQLite `worker_desired_states` still overrides in both directions.
@@ -377,6 +379,7 @@ export const BUILT_IN_WORKER_KINDS = new Set<string>([
   SESSION_TOKEN_PUSH_WORKER_KIND,
   CATSTACK_DEPLOY_WORKER_KIND,
   SELF_DEPLOY_WORKER_KIND,
+  AGENT_LOGIN_WATCH_WORKER_KIND,
   WORKFLOW_CLEANUP_WORKER_KIND,
 ]);
 
