@@ -235,6 +235,12 @@ export interface CatstackDeployConfig {
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
+export interface AgentLoginWatchConfig {
+  intervalMinutes?: number;
+}
+
+export const DEFAULT_AGENT_LOGIN_WATCH_INTERVAL_MINUTES = 60;
+
 export interface SelfDeployConfig {
   intervalMinutes?: number;
   repoPath?: string;
@@ -639,6 +645,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  agentLoginWatch?: AgentLoginWatchConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
   dbReaper?: DbReaperConfig;
@@ -926,6 +933,18 @@ export function resolveSpendCircuitBreakerWorkerConfig(
       })),
     },
   };
+}
+
+export interface AgentLoginWatchWorkerConfig {
+  intervalMs: number;
+}
+
+export function resolveAgentLoginWatchWorkerConfig(
+  invokerConfig: InvokerConfig,
+): AgentLoginWatchWorkerConfig {
+  const intervalMinutes = invokerConfig.agentLoginWatch?.intervalMinutes
+    ?? DEFAULT_AGENT_LOGIN_WATCH_INTERVAL_MINUTES;
+  return { intervalMs: intervalMinutes * 60_000 };
 }
 
 export function resolvePrMaintenanceWorkerConfig(
