@@ -790,6 +790,94 @@ async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume' | 'd
   }
 }
 
+const AGENT_LOGIN_USAGE = 'Usage: invoker-cli agent-login <start <claude|codex> | code <sessionId> <code> | status <sessionId>> [--output text|json]';
+
+const AGENT_LOGIN_TIMEOUT_MS = 120_000;
+
+type AgentLoginOutputFormat = 'text' | 'json';
+
+type AgentLoginResponse = {
+  sessionId: string;
+  provider: string;
+  status: string;
+  url?: string;
+  userCode?: string;
+  message: string;
+};
+
+function parseAgentLoginOutputFormat(args: string[]): AgentLoginOutputFormat {
+  const index = args.indexOf('--output');
+  if (index === -1) return 'text';
+  const value = args[index + 1];
+  if (value !== 'text' && value !== 'json') {
+    throw new Error(`Invalid --output format: "${value ?? ''}". Must be text|json.`);
+  }
+  return value;
+}
+
+function requireAgentLoginResponseString(value: Record<string, unknown>, field: string): string {
+  const found = value[field];
+  if (typeof found !== 'string') {
+    throw new Error(`Live owner returned invalid agent-login response: missing ${field} string`);
+  }
+  return found;
+}
+
+function optionalAgentLoginResponseString(value: Record<string, unknown>, field: string): string | undefined {
+  const found = value[field];
+  return typeof found === 'string' && found.length > 0 ? found : undefined;
+}
+
+function validateAgentLoginResponse(raw: unknown): AgentLoginResponse {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Live owner returned invalid agent-login response: expected object, got ${raw === null ? 'null' : typeof raw}`);
+  }
+  const value = raw as Record<string, unknown>;
+  const url = optionalAgentLoginResponseString(value, 'url');
+  const userCode = optionalAgentLoginResponseString(value, 'userCode');
+  return {
+    sessionId: requireAgentLoginResponseString(value, 'sessionId'),
+    provider: requireAgentLoginResponseString(value, 'provider'),
+    status: requireAgentLoginResponseString(value, 'status'),
+    message: requireAgentLoginResponseString(value, 'message'),
+    ...(url ? { url } : {}),
+    ...(userCode ? { userCode } : {}),
+  };
+}
+
+function renderAgentLoginResponse(raw: unknown, output: AgentLoginOutputFormat): string {
+  const result = validateAgentLoginResponse(raw);
+  if (output === 'json') return JSON.stringify(result);
+  const lines = [`session ${result.sessionId} (${result.provider}): ${result.status}`];
+  if (result.url) lines.push(`url: ${result.url}`);
+  if (result.userCode) lines.push(`code: ${result.userCode}`);
+  lines.push(result.message);
+  return lines.join('\n');
+}
+
+async function runAgentLoginMutation(args: string[], deps: CliDeps): Promise<number> {
+  if (args.length === 0) {
+    throw new Error(AGENT_LOGIN_USAGE);
+  }
+  const output = parseAgentLoginOutputFormat(args);
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    await requireLiveOwnerForMutation(bus);
+    const raw = await withTimeout(
+      bus.request('headless.exec', { args: ['agent-login', ...args], noTrack: true }),
+      AGENT_LOGIN_TIMEOUT_MS,
+    );
+    process.stdout.write(`${renderAgentLoginResponse(raw, output)}\n`);
+    return 0;
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+}
+
 async function runDeleteAllMutation(deps: CliDeps): Promise<number> {
   let bus: MessageBus | undefined;
   try {
@@ -1563,6 +1651,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
       return await runWorkerOnce(definition, bus, workerArgs);
+    }
+    if (argv[0] === 'agent-login') {
+      return await runAgentLoginMutation(argv.slice(1), deps);
     }
     if (argv[0] === 'query') {
       return await runQuery(parseQueryArgs(argv.slice(1)), deps);

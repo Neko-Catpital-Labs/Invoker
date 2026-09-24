@@ -85,6 +85,12 @@ ${BOLD}Lifecycle:${RESET}
   delete <workflowId>                                  Delete a single workflow
   delete-all                                           Delete all workflows
   open-terminal <taskId>                              Open OS terminal for a task
+  agent-login start <claude|codex> [--output text|json]
+                                                      Start a Claude or Codex login and print its URL and code
+  agent-login code <sessionId> <code> [--output text|json]
+                                                      Pass a login code back to a waiting login session
+  agent-login status <sessionId> [--output text|json]
+                                                      Report the status of a login session
   slack                                               Start Slack bot (long-running)
   worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)
 

@@ -43,10 +43,14 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import {
+  type AgentLoginCommandResult,
   findHeadlessSetSubcommandScope,
+  formatAgentLoginCommandResult,
   formatHeadlessSetSubcommands,
   type HeadlessSetSubcommand,
   isHeadlessHelpCommand,
+  parseAgentLoginCommand,
+  runAgentLoginCommand,
 } from './headless-command-registry.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
@@ -264,6 +268,13 @@ async function headlessInstallSkills(
   }
 }
 
+async function headlessAgentLogin(args: string[]): Promise<AgentLoginCommandResult> {
+  const { output } = parseAgentLoginCommand(args);
+  const result = await runAgentLoginCommand(args);
+  process.stdout.write(`${formatAgentLoginCommandResult(result, output)}\n`);
+  return result;
+}
+
 // ── Headless Command Router ──────────────────────────────────
 
 export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<unknown> {
@@ -429,6 +440,8 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<u
     case 'query-select':
       await headlessQuerySelect(args[1], deps);
       break;
+    case 'agent-login':
+      return await headlessAgentLogin(args.slice(1));
     case 'worker':
       await headlessWorker(args.slice(1), deps);
       break;
