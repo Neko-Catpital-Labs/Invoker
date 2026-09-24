@@ -218,6 +218,35 @@ describe('interpretRequestTiming evidence limits', () => {
     );
   });
 
+  it('keeps one execution when an unmatched background completion lands mid-span', () => {
+    const model = interpretRequestTiming([
+      mutation(0, 'dispatch', 'started', BOOT_ONE),
+      { operation: 'wal_checkpoint', event: 'end', wall_time: at(4000), intentId: 43681 },
+      mutation(5000, 'retryTask', 'started', BOOT_ONE),
+      mutation(8000, 'retryTask', 'completed', { ...BOOT_ONE, durationMs: 3000 }),
+      mutation(9000, 'dispatch', 'completed', { ...BOOT_ONE, durationMs: 9000 }),
+    ]);
+    const executions = model.intents[0]!.executions;
+
+    expect(executions).toHaveLength(1);
+    expect(spanMs(executions[0]!, 'dispatch')).toBe(9000);
+    expect(executions[0]!.spans.find((span) => span.name === 'retryTask')!.containedBy).toBe('dispatch');
+  });
+
+  it('reports an unstarted completion without a duration as missing its start', () => {
+    const model = interpretRequestTiming([
+      mutation(0, 'dispatch', 'started', BOOT_ONE),
+      { operation: 'wal_checkpoint', event: 'end', wall_time: at(4000), intentId: 43681 },
+      mutation(9000, 'dispatch', 'completed', { ...BOOT_ONE, durationMs: 9000 }),
+    ]);
+    const checkpoint = model.intents[0]!.executions[0]!.spans.find(
+      (span) => span.name === 'wal_checkpoint',
+    )!;
+
+    expect(checkpoint.outcome).toBe('unstarted');
+    expect(checkpoint.durationMs).toEqual({ kind: 'unknown', reason: 'no-start-record' });
+  });
+
   it('reports an unterminated span as unknown rather than guessing an end', () => {
     const model = interpretRequestTiming([
       mutation(0, 'dispatch', 'started', BOOT_ONE),

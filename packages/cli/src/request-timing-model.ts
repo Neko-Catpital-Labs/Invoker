@@ -50,6 +50,7 @@ export type UnknownTimingReason =
   | 'no-queued-record'
   | 'negative-queue-sentinel'
   | 'no-completion-record'
+  | 'no-start-record'
   | 'clock-discontinuity';
 
 export type TimingValue =
@@ -327,7 +328,7 @@ function splitExecutions(records: readonly NormalizedRecord[]): NormalizedRecord
   let current: NormalizedRecord[] | null = null;
   let bootId: string | null = null;
   let traceId: string | null = null;
-  let openSpans = 0;
+  let openSpans = new Map<string, number>();
   let openedAny = false;
 
   for (const record of records) {
@@ -336,14 +337,14 @@ function splitExecutions(records: readonly NormalizedRecord[]): NormalizedRecord
       ((bootId !== null && record.bootId !== null && record.bootId !== bootId) ||
         (traceId !== null && record.traceId !== null && record.traceId !== traceId));
     const restarted =
-      current !== null && openedAny && openSpans === 0 && record.role !== 'close';
+      current !== null && openedAny && openSpans.size === 0 && record.role !== 'close';
 
     if (current === null || identityChanged || restarted) {
       current = [];
       groups.push(current);
       bootId = null;
       traceId = null;
-      openSpans = 0;
+      openSpans = new Map();
       openedAny = false;
     }
 
@@ -351,10 +352,12 @@ function splitExecutions(records: readonly NormalizedRecord[]): NormalizedRecord
     if (bootId === null) bootId = record.bootId;
     if (traceId === null) traceId = record.traceId;
     if (record.role === 'open') {
-      openSpans += 1;
+      openSpans.set(record.name, (openSpans.get(record.name) ?? 0) + 1);
       openedAny = true;
-    } else if (record.role === 'close' && openSpans > 0) {
-      openSpans -= 1;
+    } else if (record.role === 'close') {
+      const open = openSpans.get(record.name) ?? 0;
+      if (open > 1) openSpans.set(record.name, open - 1);
+      else openSpans.delete(record.name);
     }
   }
 
@@ -500,7 +503,7 @@ function unstartedSpan(closed: NormalizedRecord): ExecutionSpan {
     durationMs:
       closed.durationMs !== null
         ? { kind: 'measured', ms: closed.durationMs, evidence }
-        : { kind: 'unknown', reason: 'no-completion-record' },
+        : { kind: 'unknown', reason: 'no-start-record' },
     coverage: null,
     containedBy: null,
     evidence,
