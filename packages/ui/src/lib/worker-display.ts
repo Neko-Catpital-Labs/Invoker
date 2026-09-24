@@ -134,6 +134,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No catstack-deploy runs recorded yet.',
     };
   }
+  if (kind === 'hook-metrics-collect') {
+    return {
+      name: 'Hook metrics collector',
+      idleText: 'Idle. Copies catstack hook event logs from every remote machine so the hook report covers the whole fleet.',
+      noActionText: 'No hook-metrics-collect runs recorded yet.',
+    };
+  }
   if (kind === 'db-reaper') {
     return {
       name: 'DB reaper',
