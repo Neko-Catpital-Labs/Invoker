@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -45,8 +45,17 @@ function rejection(run: () => void): Error {
 }
 
 describe('validateInvokerConfig with an unavailable Codex CLI', () => {
+  let clock = 0;
+  let nowSpy: MockInstance<typeof Date.now>;
+
   beforeEach(() => {
     spawnSyncMock.mockReset();
+    clock += 60 * 60_000;
+    nowSpy = vi.spyOn(Date, 'now').mockReturnValue(clock);
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
   });
 
   it('accepts a configured Codex model when every discovery probe fails', () => {
