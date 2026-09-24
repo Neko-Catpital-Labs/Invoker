@@ -6,6 +6,7 @@ import {
 import {
   normalizeGithubOwnerRepo,
   type AdminBypassE2eBabysitConfig,
+  type AgentLoginWatchConfig,
   type CatstackDeployConfig,
   type DbReaperConfig,
   type CrossRepoResearchConfig,
@@ -266,6 +267,24 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateAgentLoginWatchConfig(config: InvokerConfig): void {
+  const agentLoginWatch = config.agentLoginWatch;
+  if (agentLoginWatch === undefined) return;
+  if (typeof agentLoginWatch !== 'object' || agentLoginWatch === null || Array.isArray(agentLoginWatch)) {
+    throw new Error('agentLoginWatch must be an object');
+  }
+  const typed = agentLoginWatch as AgentLoginWatchConfig;
+  if (typed.intervalMinutes !== undefined) {
+    if (
+      typeof typed.intervalMinutes !== 'number'
+      || !Number.isInteger(typed.intervalMinutes)
+      || typed.intervalMinutes <= 0
+    ) {
+      throw new Error('agentLoginWatch.intervalMinutes must be an integer > 0');
+    }
+  }
+}
+
 function validateSelfDeployConfig(config: InvokerConfig): void {
   const selfDeploy = config.selfDeploy;
   if (selfDeploy === undefined) return;
@@ -412,6 +431,7 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateAgentLoginWatchConfig(config);
   validateSelfDeployConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);
