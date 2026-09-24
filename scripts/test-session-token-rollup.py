@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "session-token-rollup.py")
 FIXTURES = os.path.join(HERE, "fixtures", "session-token-rollup")
 CLAUDE_ROOT = os.path.join(FIXTURES, "claude", "projects")
+CLAUDE_ROOT_USAGE = os.path.join(FIXTURES, "claude-root-usage", "projects")
 CODEX_ROOT = os.path.join(FIXTURES, "codex", "sessions")
 OMP_ROOT = os.path.join(FIXTURES, "omp", "sessions")
 MARKER = "SECRET-TEXT-9f3"
@@ -31,6 +32,7 @@ SESSION_A = "aaaa1111-1111-1111-1111-111111111111"
 SESSION_FORK = "cccc3333-3333-3333-3333-333333333333"
 SESSION_WORKER = "dddd4444-4444-4444-4444-444444444444"
 SESSION_BAD_LINE = "eeee5555-5555-5555-5555-555555555555"
+SESSION_ROOT_USAGE = "ffff6666-6666-6666-6666-666666666666"
 SESSION_CODEX = "019f0000-1111-2222-3333-444455556666"
 SESSION_OMP = "019f9999-aaaa-bbbb-cccc-ddddeeeeffff"
 SESSION_PRE_WINDOW = "9999aaaa-0000-0000-0000-000000000000"
@@ -107,7 +109,7 @@ class TestFixturesCarryTheMarker(unittest.TestCase):
                 with open(path, errors="replace") as handle:
                     if MARKER in handle.read():
                         found.append(path)
-        self.assertEqual(len(found), 7, "expected 7 marker-bearing fixture logs, got {}".format(found))
+        self.assertEqual(len(found), 8, "expected 8 marker-bearing fixture logs, got {}".format(found))
 
 
 class TestCollectLeaksNothing(unittest.TestCase):
@@ -336,6 +338,43 @@ class TestForkOutsideTheWindow(unittest.TestCase):
         self.assertNotIn(MARKER, self.proc.stdout)
 
 
+class TestClaudeRootLevelUsage(unittest.TestCase):
+    """Legacy Claude logs keep usage/model on the entry root instead of under
+    message. Session ffff6666 bills the root-shape row (40/30/20/5) once despite
+    the duplicate stream row sharing requestId, plus the two rows that carry no
+    message id and no requestId (1/3/2/4 each), for 42/36/24/13. The root-level
+    <synthetic> row is excluded."""
+
+    def setUp(self):
+        _proc, self.report = run_collect(extra_claude_roots=[CLAUDE_ROOT_USAGE])
+        self.sessions = sessions_by_id(self.report)
+
+    def test_root_level_usage_and_model_are_billed(self):
+        row = self.sessions[SESSION_ROOT_USAGE]
+        self.assertEqual(row["tool"], "claude")
+        self.assertEqual(row["model"], "claude-opus-5")
+        self.assertEqual(row["input"], 42)
+        self.assertEqual(row["cache_read"], 36)
+        self.assertEqual(row["cache_write"], 24)
+        self.assertEqual(row["output"], 13)
+        self.assertEqual(row["total"], 115)
+        self.assertEqual(row["turns"], 3)
+        self.assertEqual(row["peak_context"], 90)
+
+    def test_root_shape_rows_reach_day_totals(self):
+        totals = self.report["totals_by_tool_origin_model_day"]
+        self.assertEqual(
+            totals["claude|interactive|claude-opus-5|2026-09-20"],
+            {"input": 1153, "cache_read": 366, "cache_write": 244, "output": 169, "total": 1932, "turns": 7},
+        )
+
+    def test_root_shape_log_leaks_no_message_text(self):
+        proc, _report = run_collect(extra_claude_roots=[CLAUDE_ROOT_USAGE])
+        self.assertNotIn(MARKER, proc.stdout)
+        self.assertNotIn(MARKER, proc.stderr)
+        self.assertNotIn("legacy root-shape log", proc.stdout)
+
+
 class TestCodexCollection(unittest.TestCase):
     """total_token_usage runs 1000/400/100 -> 3000/1400/250 -> 500/100/20.
     Uncached input deltas are 600 + 1000 + 400 = 2000, cached 400 + 1000 + 100
@@ -547,7 +586,9 @@ class TestMachineSessionCount(unittest.TestCase):
         _proc, report = run_collect(session_limit=2)
         self.assertEqual(len(report["sessions"]), 2)
         self.assertEqual(report["session_count"], 6)
-        self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
+        merged = self.merged_for(report)
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+        self.assertEqual(merged["machines"]["mac"]["sessions"], 6)
 
     def test_report_without_session_count_falls_back_to_the_list(self):
         _proc, report = run_collect()
