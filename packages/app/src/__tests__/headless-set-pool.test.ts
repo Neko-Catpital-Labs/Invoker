@@ -5,7 +5,9 @@ import { LocalBus } from '@invoker/transport';
 import type { CommandService } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 
-describe('headless set task-pool', () => {
+const REMOVED_POOL_SUBCOMMAND = ['task', 'pool'].join('-');
+
+describe('headless set pool', () => {
   let mockDeps: HeadlessDeps;
 
   beforeEach(() => {
@@ -22,6 +24,7 @@ describe('headless set task-pool', () => {
       } as unknown as SQLiteAdapter,
       commandService: {
         editTaskPool: vi.fn(async () => ({ ok: true as const, data: [] })),
+        editTaskType: vi.fn(),
       } as unknown as CommandService,
       executorRegistry: {} as any,
       messageBus: new LocalBus() as any,
@@ -33,15 +36,25 @@ describe('headless set task-pool', () => {
   });
 
   it('calls commandService.editTaskPool with the resolved task id and poolId', async () => {
-    await runHeadless(['set', 'task-pool', 'wf-1/task-1', 'local-mac-only'], mockDeps);
+    await runHeadless(['set', 'pool', 'wf-1/task-1', 'local-mac-only'], mockDeps);
     expect(mockDeps.commandService.editTaskPool).toHaveBeenCalledWith(
       expect.objectContaining({ payload: { taskId: 'wf-1/task-1', poolId: 'local-mac-only' } }),
     );
   });
 
   it('throws a clear error when taskId or poolId is missing', async () => {
-    await expect(runHeadless(['set', 'task-pool', 'wf-1/task-1'], mockDeps)).rejects.toThrow(
-      'Missing arguments. Usage: --headless set task-pool <taskId> <poolId>',
+    await expect(runHeadless(['set', 'pool', 'wf-1/task-1'], mockDeps)).rejects.toThrow(
+      'Missing arguments. Usage: --headless set pool <taskId> <poolId>',
     );
+  });
+
+  it('never calls commandService.editTaskType for a pool name', async () => {
+    await runHeadless(['set', 'pool', 'wf-1/task-1', 'local-mac-only'], mockDeps);
+    expect(mockDeps.commandService.editTaskType).not.toHaveBeenCalled();
+  });
+
+  it('rejects the removed pool subcommand alias without calling editTaskPool', async () => {
+    await expect(runHeadless(['set', REMOVED_POOL_SUBCOMMAND, 'wf-1/task-1', 'local-mac-only'], mockDeps)).rejects.toThrow();
+    expect(mockDeps.commandService.editTaskPool).not.toHaveBeenCalled();
   });
 });
