@@ -138,7 +138,7 @@ export interface InfraRepairWorkerPolicyOptions {
   runRemoteProvisionRepairFn?: typeof runRemoteProvisionRepair;
   runRepoMirrorRepairFn?: typeof runRepoMirrorRepair;
   runWorktreeCorruptRepairFn?: typeof runWorktreeCorruptRepair;
-  cleanupRemoteInvokerHomeFn?: (opts: { target: RemoteDiskTarget }) => Promise<DiskCleanupResult>;
+  cleanupRemoteInvokerHomeFn?: (opts: { target: RemoteDiskTarget; store: InfraRepairWorkerStore }) => Promise<DiskCleanupResult>;
 }
 
 export interface InfraRepairWorkerOptions {
@@ -1086,6 +1086,7 @@ async function handleDiskFullRecovery(
     execute: async () => {
       const result = await (options.cleanupRemoteInvokerHomeFn ?? cleanupRemoteInvokerHome)({
         target: remoteDiskTarget,
+        store: options.store,
       });
       if (!result.ok) {
         throw new Error(`Disk cleanup ${result.reason} for ${result.targetKey}${result.detail ? `: ${result.detail}` : ''}`);
