@@ -20,6 +20,13 @@ export const DELEGATE_HANDOFF_STEPS = [
   'invoker_cli_wait_then_end_turn',
 ];
 
+export const SUBAGENT_PER_UNIT_STEPS = [
+  'one_worktree_per_unit',
+  'spawn_one_subagent_per_unit_in_parallel',
+  'collect_reports_async',
+  'grep_transcripts_for_writes',
+];
+
 export const SUBAGENT_FANOUT_STEPS = [
   'spawn_worktree_isolated_subagents',
   'collect_reports_async',
@@ -39,8 +46,21 @@ export function normalizeWorkKind(workKind) {
   throw new Error(`unknown work_kind: ${JSON.stringify(workKind)}`);
 }
 
-export function routeExecution({ tools, workKind }) {
+export function normalizeUnits(units) {
+  if (units === undefined) return 1;
+  if (!Number.isInteger(units) || units < 1) {
+    throw new Error(`units must be a positive integer, got ${JSON.stringify(units)}`);
+  }
+  return units;
+}
+
+export function routeExecution({ tools, workKind, units, userDirectedSubagents = false }) {
   const kind = normalizeWorkKind(workKind);
+  const unitCount = normalizeUnits(units);
+  if (unitCount > 1 && kind !== 'readonly') {
+    if (invokerMcpAvailable(tools) && !userDirectedSubagents) return 'delegate_invoker';
+    return 'subagent_worktree_per_unit';
+  }
   if (!invokerMcpAvailable(tools)) return 'local';
   if (kind === 'readonly' || kind === 'small_local') return 'local';
   return 'delegate_invoker';
@@ -63,15 +83,16 @@ export function publishes({ workKind, produces }) {
   return produces.some((output) => PUBLISHING_OUTPUTS.has(output));
 }
 
-export function routeDelegation({ tools, workKind, produces }) {
+export function routeDelegation({ tools, workKind, produces, units, userDirectedSubagents = false }) {
   normalizeWorkKind(workKind);
-  if (publishes({ workKind, produces })) return routeExecution({ tools, workKind });
+  if (publishes({ workKind, produces })) return routeExecution({ tools, workKind, units, userDirectedSubagents });
   return 'subagent_fanout';
 }
 
 export function handoffStepsFor(route) {
   if (route === 'local') return LOCAL_STEPS;
   if (route === 'subagent_fanout') return SUBAGENT_FANOUT_STEPS;
+  if (route === 'subagent_worktree_per_unit') return SUBAGENT_PER_UNIT_STEPS;
   if (route === 'delegate_invoker') return DELEGATE_HANDOFF_STEPS;
   throw new Error(`unknown route: ${JSON.stringify(route)}`);
 }
@@ -80,7 +101,13 @@ function main(argv) {
   const payload = argv[0] ? JSON.parse(argv[0]) : {};
   const tools = payload.tools ?? [];
   const workKind = payload.work_kind ?? 'small_local';
-  const route = routeDelegation({ tools, workKind, produces: payload.produces });
+  const route = routeDelegation({
+    tools,
+    workKind,
+    produces: payload.produces,
+    units: payload.units,
+    userDirectedSubagents: payload.user_directed_subagents === true,
+  });
   process.stdout.write(`${JSON.stringify({ route, steps: handoffStepsFor(route) })}\n`);
 }
 
