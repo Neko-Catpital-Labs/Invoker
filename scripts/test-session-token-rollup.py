@@ -33,6 +33,7 @@ SESSION_WORKER = "dddd4444-4444-4444-4444-444444444444"
 SESSION_BAD_LINE = "eeee5555-5555-5555-5555-555555555555"
 SESSION_CODEX = "019f0000-1111-2222-3333-444455556666"
 SESSION_OMP = "019f9999-aaaa-bbbb-cccc-ddddeeeeffff"
+SESSION_PRE_WINDOW = "9999aaaa-0000-0000-0000-000000000000"
 
 
 def run_script(args, check=True):
@@ -50,10 +51,10 @@ def run_script(args, check=True):
     return proc
 
 
-def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
+def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=(), session_limit=None, since=SINCE, check=True):
     args = [
         "collect",
-        "--since", SINCE,
+        "--since", since,
         "--host", host,
         "--now", now,
         "--claude-root", CLAUDE_ROOT,
@@ -62,8 +63,33 @@ def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
     ]
     for root in extra_claude_roots:
         args += ["--claude-root", root]
-    proc = run_script(args)
+    if session_limit is not None:
+        args += ["--sessions", str(session_limit)]
+    proc = run_script(args, check=check)
+    if not check and proc.returncode != 0:
+        return proc, None
     return proc, json.loads(proc.stdout)
+
+
+def claude_root_with_pre_window_session():
+    """A root whose only log is a 50900-token turn from before --since."""
+    tmp = tempfile.mkdtemp()
+    project = os.path.join(tmp, "-home-user-ancient")
+    os.makedirs(project)
+    row = {
+        "type": "assistant",
+        "sessionId": SESSION_PRE_WINDOW,
+        "timestamp": "2026-01-02T10:00:00.000Z",
+        "requestId": "req_old",
+        "message": {
+            "id": "msg_old",
+            "model": "claude-opus-5",
+            "usage": {"input_tokens": 50000, "output_tokens": 900},
+        },
+    }
+    with open(os.path.join(project, SESSION_PRE_WINDOW + ".jsonl"), "w") as handle:
+        handle.write(json.dumps(row) + "\n")
+    return tmp
 
 
 def sessions_by_id(report):
@@ -148,6 +174,168 @@ class TestClaudeCollection(unittest.TestCase):
         self.assertEqual(row["peak_context"], 6)
 
 
+class TestForkOfAFork(unittest.TestCase):
+    """Root R is forked into C, and C is forked again into G. G's log copies
+    both R's and C's rows, so a fork must attach to the session it was actually
+    forked from: R sees only C (start context 1002) and C sees only G (start
+    context 5004). G's own copied rows are never billed to R or C."""
+
+    ROOT = "11110000-0000-0000-0000-000000000001"
+    CHILD = "22220000-0000-0000-0000-000000000002"
+    GRANDCHILD = "33330000-0000-0000-0000-000000000003"
+
+    def row(self, session_id, message_id, input_tokens, cache_read, output_tokens):
+        return {
+            "type": "assistant",
+            "sessionId": session_id,
+            "timestamp": "2026-09-20T10:00:00.000Z",
+            "requestId": "req_" + message_id,
+            "cwd": "/home/user/forks",
+            "message": {
+                "id": message_id,
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": MARKER}],
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": cache_read,
+                    "output_tokens": output_tokens,
+                },
+            },
+        }
+
+    def collect(self):
+        tmp = tempfile.mkdtemp()
+        project = os.path.join(tmp, "claude", "projects", "-home-user-forks")
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(project)
+        os.makedirs(empty)
+        root_row = self.row(self.ROOT, "msg_r", 10, 0, 1)
+        child_row = self.row(self.CHILD, "msg_c", 2, 1000, 3)
+        logs = {
+            self.ROOT: [root_row],
+            self.CHILD: [root_row, child_row],
+            self.GRANDCHILD: [root_row, child_row, self.row(self.GRANDCHILD, "msg_g", 4, 5000, 5)],
+        }
+        for session_id, rows in logs.items():
+            with open(os.path.join(project, session_id + ".jsonl"), "w") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+        proc = run_script([
+            "collect", "--since", SINCE, "--host", "mac", "--now", "2026-09-23T00:00:00Z",
+            "--claude-root", os.path.join(tmp, "claude", "projects"),
+            "--codex-root", empty, "--omp-root", empty,
+        ])
+        return proc, json.loads(proc.stdout)
+
+    def setUp(self):
+        self.proc, self.report = self.collect()
+        self.sessions = sessions_by_id(self.report)
+
+    def test_root_counts_only_its_direct_fork(self):
+        row = self.sessions[self.ROOT]
+        self.assertEqual(row["fork_count"], 1)
+        self.assertEqual(row["median_fork_start_context"], 1002)
+
+    def test_intermediate_fork_owns_the_fork_of_a_fork(self):
+        row = self.sessions[self.CHILD]
+        self.assertEqual(row["fork_count"], 1)
+        self.assertEqual(row["median_fork_start_context"], 5004)
+
+    def test_deepest_fork_has_no_forks_of_its_own(self):
+        row = self.sessions[self.GRANDCHILD]
+        self.assertEqual(row["fork_count"], 0)
+        self.assertIsNone(row["median_fork_start_context"])
+
+    def test_copied_rows_are_billed_once_to_their_own_session(self):
+        self.assertEqual(self.sessions[self.ROOT]["total"], 11)
+        self.assertEqual(self.sessions[self.CHILD]["total"], 1005)
+        self.assertEqual(self.sessions[self.GRANDCHILD]["total"], 5009)
+        self.assertEqual(self.report["errors"]["forks_without_parent"], 0)
+
+    def test_no_message_text_leaks(self):
+        self.assertNotIn(MARKER, self.proc.stdout)
+
+
+class TestForkOutsideTheWindow(unittest.TestCase):
+    """Parent P is forked twice: IN bills a turn inside --since, OLD's own
+    turns are all older than --since. Only IN is a fork of P for this window,
+    so fork_count is 1 and the median is IN's start context (2001), not the
+    1000 the excluded fork would pull it down to."""
+
+    PARENT = "44440000-0000-0000-0000-000000000004"
+    IN_WINDOW_FORK = "55550000-0000-0000-0000-000000000005"
+    OLD_FORK = "66660000-0000-0000-0000-000000000006"
+
+    def row(self, session_id, message_id, timestamp, input_tokens, cache_read, output_tokens):
+        return {
+            "type": "assistant",
+            "sessionId": session_id,
+            "timestamp": timestamp,
+            "requestId": "req_" + message_id,
+            "cwd": "/home/user/forks",
+            "message": {
+                "id": message_id,
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": MARKER}],
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": cache_read,
+                    "output_tokens": output_tokens,
+                },
+            },
+        }
+
+    def collect(self):
+        tmp = tempfile.mkdtemp()
+        project = os.path.join(tmp, "claude", "projects", "-home-user-forks")
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(project)
+        os.makedirs(empty)
+        parent_row = self.row(self.PARENT, "msg_p", "2026-09-20T10:00:00.000Z", 10, 0, 1)
+        logs = {
+            self.PARENT: [parent_row],
+            self.IN_WINDOW_FORK: [
+                parent_row,
+                self.row(self.IN_WINDOW_FORK, "msg_in", "2026-09-20T11:00:00.000Z", 1, 2000, 3),
+            ],
+            self.OLD_FORK: [
+                parent_row,
+                self.row(self.OLD_FORK, "msg_old", "2026-08-01T09:00:00.000Z", 1000, 0, 7),
+            ],
+        }
+        for session_id, rows in logs.items():
+            with open(os.path.join(project, session_id + ".jsonl"), "w") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+        proc = run_script([
+            "collect", "--since", SINCE, "--host", "mac", "--now", "2026-09-23T00:00:00Z",
+            "--claude-root", os.path.join(tmp, "claude", "projects"),
+            "--codex-root", empty, "--omp-root", empty,
+        ])
+        return proc, json.loads(proc.stdout)
+
+    def setUp(self):
+        self.proc, self.report = self.collect()
+        self.sessions = sessions_by_id(self.report)
+
+    def test_parent_counts_only_the_fork_with_an_in_window_turn(self):
+        row = self.sessions[self.PARENT]
+        self.assertEqual(row["fork_count"], 1)
+        self.assertEqual(row["median_fork_start_context"], 2001)
+
+    def test_fork_with_no_in_window_turn_is_not_reported_at_all(self):
+        self.assertIn(self.IN_WINDOW_FORK, self.sessions)
+        self.assertNotIn(self.OLD_FORK, self.sessions)
+        self.assertEqual(self.report["errors"]["forks_without_parent"], 0)
+
+    def test_no_message_text_leaks(self):
+        self.assertNotIn(MARKER, self.proc.stdout)
+
+
 class TestCodexCollection(unittest.TestCase):
     """total_token_usage runs 1000/400/100 -> 3000/1400/250 -> 500/100/20.
     Uncached input deltas are 600 + 1000 + 400 = 2000, cached 400 + 1000 + 100
@@ -168,6 +356,81 @@ class TestCodexCollection(unittest.TestCase):
         self.assertEqual(row["turns"], 3)
         self.assertEqual(row["compactions"], 1)
         self.assertEqual(row["peak_context"], 2000)
+
+
+class TestCodexMidSessionModelSwitch(unittest.TestCase):
+    """A rollout whose first token_count precedes any turn_context, then switches
+    model mid-session. Cumulative totals are 100/0/10 -> 300/100/30 -> 600/300/60,
+    so the deltas are 100/0/10, 100/100/20 and 100/200/30. The first two turns
+    belong to gpt-5.6-sol and the third to gpt-5.7-alto; the pre-turn_context
+    turn falls back to the first model seen, not the last."""
+
+    SESSION = "019f1111-2222-3333-4444-555566667777"
+
+    def collect(self):
+        tmp = tempfile.mkdtemp()
+        codex_root = os.path.join(tmp, "codex", "sessions", "2026", "09", "20")
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(codex_root)
+        os.makedirs(empty)
+        rows = [
+            {"type": "session_meta", "timestamp": "2026-09-20T09:00:00.000Z",
+             "payload": {"cwd": "/Users/dev/code", "instructions": MARKER}},
+            {"type": "event_msg", "timestamp": "2026-09-20T09:01:00.000Z",
+             "payload": {"type": "token_count", "info": {
+                 "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 0,
+                                       "output_tokens": 10, "total_tokens": 110},
+                 "last_token_usage": {"input_tokens": 100}}}},
+            {"type": "turn_context", "timestamp": "2026-09-20T09:01:30.000Z",
+             "payload": {"cwd": "/Users/dev/code", "model": "gpt-5.6-sol"}},
+            {"type": "event_msg", "timestamp": "2026-09-20T09:02:00.000Z",
+             "payload": {"type": "token_count", "info": {
+                 "total_token_usage": {"input_tokens": 300, "cached_input_tokens": 100,
+                                       "output_tokens": 30, "total_tokens": 430},
+                 "last_token_usage": {"input_tokens": 200}}}},
+            {"type": "turn_context", "timestamp": "2026-09-20T09:02:30.000Z",
+             "payload": {"cwd": "/Users/dev/code", "model": "gpt-5.7-alto"}},
+            {"type": "response_item", "timestamp": "2026-09-20T09:02:45.000Z",
+             "payload": {"type": "message", "content": [{"type": "text", "text": MARKER}]}},
+            {"type": "event_msg", "timestamp": "2026-09-20T09:03:00.000Z",
+             "payload": {"type": "token_count", "info": {
+                 "total_token_usage": {"input_tokens": 600, "cached_input_tokens": 300,
+                                       "output_tokens": 60, "total_tokens": 960},
+                 "last_token_usage": {"input_tokens": 300}}}},
+        ]
+        name = "rollout-2026-09-20T09-00-00-{}.jsonl".format(self.SESSION)
+        with open(os.path.join(codex_root, name), "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        proc = run_script([
+            "collect", "--since", SINCE, "--host", "mac", "--now", "2026-09-23T00:00:00Z",
+            "--claude-root", empty, "--codex-root", os.path.join(tmp, "codex", "sessions"),
+            "--omp-root", empty,
+        ])
+        return proc, json.loads(proc.stdout)
+
+    def test_each_turn_bills_the_model_in_effect(self):
+        _proc, report = self.collect()
+        totals = report["totals_by_tool_origin_model_day"]
+        self.assertEqual(
+            totals["codex|interactive|gpt-5.6-sol|2026-09-20"],
+            {"input": 200, "cache_read": 100, "cache_write": 0, "output": 30, "total": 330, "turns": 2},
+        )
+        self.assertEqual(
+            totals["codex|interactive|gpt-5.7-alto|2026-09-20"],
+            {"input": 100, "cache_read": 200, "cache_write": 0, "output": 30, "total": 330, "turns": 1},
+        )
+
+    def test_session_row_still_sums_every_turn(self):
+        _proc, report = self.collect()
+        row = sessions_by_id(report)[self.SESSION]
+        self.assertEqual(row["total"], 660)
+        self.assertEqual(row["turns"], 3)
+        self.assertEqual(row["model"], "gpt-5.6-sol")
+
+    def test_no_message_text_leaks(self):
+        proc, _report = self.collect()
+        self.assertNotIn(MARKER, proc.stdout)
 
 
 class TestOmpCollection(unittest.TestCase):
@@ -235,6 +498,96 @@ class TestDayTotalsAndErrors(unittest.TestCase):
         self.assertEqual(report["since"], SINCE)
         self.assertEqual(report["generatedAt"], "2026-09-23T00:00:00Z")
         self.assertEqual(len(report["sessions"]), 6)
+        self.assertEqual(report["session_count"], 6)
+
+
+class TestSessionsOutsideTheWindow(unittest.TestCase):
+    """A log whose only turn predates --since must not become a zero-token
+    session record, and must not be counted as a session on that machine."""
+
+    def setUp(self):
+        self.extra = claude_root_with_pre_window_session()
+        _proc, self.report = run_collect(extra_claude_roots=[self.extra])
+
+    def test_file_is_still_read_but_emits_no_session_record(self):
+        self.assertEqual(self.report["files"], 8)
+        self.assertNotIn(SESSION_PRE_WINDOW, sessions_by_id(self.report))
+        self.assertEqual(len(self.report["sessions"]), 6)
+        self.assertEqual(self.report["session_count"], 6)
+
+    def test_pre_window_tokens_are_not_billed(self):
+        self.assertEqual(
+            sum(v["total"] for v in self.report["totals_by_tool_origin_model_day"].values()),
+            505722,
+        )
+
+    def test_machine_session_count_excludes_it(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "mac.json")
+        with open(path, "w") as handle:
+            json.dump(self.report, handle)
+        merged = json.loads(
+            run_script(["merge", path, "--now", "2026-09-23T12:00:00Z", "--json"]).stdout
+        )
+        self.assertEqual(merged["machines"]["mac"]["sessions"], 6)
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+
+
+class TestMachineSessionCount(unittest.TestCase):
+    def merged_for(self, report):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "mac.json")
+        with open(path, "w") as handle:
+            json.dump(report, handle)
+        return json.loads(
+            run_script(["merge", path, "--now", "2026-09-23T12:00:00Z", "--json"]).stdout
+        )
+
+    def test_count_survives_the_emitted_session_limit(self):
+        _proc, report = run_collect(session_limit=2)
+        self.assertEqual(len(report["sessions"]), 2)
+        self.assertEqual(report["session_count"], 6)
+        self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
+
+    def test_report_without_session_count_falls_back_to_the_list(self):
+        _proc, report = run_collect()
+        del report["session_count"]
+        self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
+
+
+class TestSinceIsValidatedAndNormalized(unittest.TestCase):
+    """--since is parsed as a date, so an unpadded day still selects the window.
+
+    in_window compares timestamp[:10] >= since as strings, so an unpadded
+    "2026-9-1" would sort above every "2026-09-.." timestamp and silently
+    drop every dated turn, leaving a near-zero report that still exits 0.
+    """
+
+    def test_unpadded_since_selects_the_same_window_as_the_padded_form(self):
+        _proc, padded = run_collect()
+        _proc, unpadded = run_collect(since="2026-9-1")
+        self.assertEqual(unpadded["session_count"], padded["session_count"])
+        self.assertEqual(unpadded["sessions"], padded["sessions"])
+        self.assertEqual(
+            unpadded["totals_by_tool_origin_model_day"],
+            padded["totals_by_tool_origin_model_day"],
+        )
+
+    def test_unpadded_since_is_normalized_in_the_report(self):
+        _proc, report = run_collect(since="2026-9-1")
+        self.assertEqual(report["since"], SINCE)
+
+    def test_invalid_since_exits_nonzero_instead_of_an_empty_report(self):
+        proc, report = run_collect(since="banana", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIsNone(report)
+        self.assertIn("YYYY-MM-DD", proc.stderr)
+        self.assertNotIn("session_count", proc.stdout)
+
+    def test_impossible_calendar_day_is_rejected(self):
+        proc, _report = run_collect(since="2026-02-30", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("YYYY-MM-DD", proc.stderr)
 
 
 class TestMerge(unittest.TestCase):
@@ -293,6 +646,71 @@ class TestMerge(unittest.TestCase):
         self.assertIn("mac", text)
         self.assertIn("505722", text)
         self.assertIn(SESSION_FORK, text)
+
+
+class TestMergeSupersededReports(unittest.TestCase):
+    """Two in-window reports from the same host must not be added together:
+    the newest wins, the older is listed in skipped as superseded, and its
+    sessions must not appear a second time in the ranking."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _proc, yesterday = run_collect(host="do1", now="2026-09-22T00:00:00Z")
+        _proc, today = run_collect(host="do1", now="2026-09-23T00:00:00Z")
+        self.yesterday = os.path.join(self.tmp, "do1-yesterday.json")
+        self.today = os.path.join(self.tmp, "do1-today.json")
+        for path, payload in ((self.yesterday, yesterday), (self.today, today)):
+            with open(path, "w") as handle:
+                json.dump(payload, handle)
+
+    def merge(self, extra=()):
+        args = ["merge", self.yesterday, self.today, "--now", "2026-09-23T12:00:00Z"] + list(extra)
+        return run_script(args)
+
+    def test_totals_are_not_doubled(self):
+        merged = json.loads(self.merge(["--json"]).stdout)
+        self.assertEqual(merged["machines"]["do1"]["total"], 505722)
+        self.assertEqual(merged["machines"]["do1"]["sessions"], 6)
+
+    def test_only_the_newest_report_is_merged(self):
+        merged = json.loads(self.merge(["--json"]).stdout)
+        self.assertEqual(len(merged["reports"]), 1)
+        self.assertEqual(merged["reports"][0]["path"], self.today)
+        self.assertEqual(merged["reports"][0]["generatedAt"], "2026-09-23T00:00:00Z")
+
+    def test_older_report_is_skipped_as_superseded(self):
+        merged = json.loads(self.merge(["--json"]).stdout)
+        self.assertEqual(len(merged["skipped"]), 1)
+        skipped = merged["skipped"][0]
+        self.assertEqual(skipped["path"], self.yesterday)
+        self.assertEqual(skipped["host"], "do1")
+        self.assertEqual(skipped["generatedAt"], "2026-09-22T00:00:00Z")
+        self.assertEqual(skipped["reason"], "superseded")
+        self.assertIn("superseded", self.merge().stdout)
+
+    def test_sessions_are_ranked_once(self):
+        merged = json.loads(self.merge(["--json", "--top", "50"]).stdout)
+        keys = [(row["host"], row["session_id"]) for row in merged["top_sessions"]]
+        self.assertEqual(len(keys), 6)
+        self.assertEqual(len(set(keys)), len(keys))
+
+    def test_argument_order_does_not_change_the_winner(self):
+        reversed_args = ["merge", self.today, self.yesterday, "--now", "2026-09-23T12:00:00Z", "--json"]
+        merged = json.loads(run_script(reversed_args).stdout)
+        self.assertEqual(merged["reports"][0]["path"], self.today)
+        self.assertEqual(merged["skipped"][0]["path"], self.yesterday)
+        self.assertEqual(merged["machines"]["do1"]["total"], 505722)
+
+    def test_a_second_host_is_still_merged_alongside(self):
+        _proc, mac_report = run_collect(host="mac", now="2026-09-23T00:00:00Z")
+        mac = os.path.join(self.tmp, "mac.json")
+        with open(mac, "w") as handle:
+            json.dump(mac_report, handle)
+        args = ["merge", self.yesterday, self.today, mac, "--now", "2026-09-23T12:00:00Z", "--json"]
+        merged = json.loads(run_script(args).stdout)
+        self.assertEqual(sorted(merged["machines"]), ["do1", "mac"])
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+        self.assertEqual(merged["machines"]["do1"]["total"], 505722)
 
 
 if __name__ == "__main__":

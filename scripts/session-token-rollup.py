@@ -49,6 +49,14 @@ def utc_now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def iso_day(value):
+    try:
+        day = datetime.strptime((value or "").strip(), "%Y-%m-%d")
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected YYYY-MM-DD, got {!r}".format(value))
+    return "{:04d}-{:02d}-{:02d}".format(day.year, day.month, day.day)
+
+
 def parse_iso(value):
     text = (value or "").strip()
     if not text:
@@ -129,6 +137,9 @@ class SessionStats:
         billed = sum(tokens[field] for field in TOKEN_FIELDS)
         self.model_tokens[model] = self.model_tokens.get(model, 0) + billed
         self.note_timestamp(timestamp)
+
+    def has_window_activity(self):
+        return self.turns > 0 or self.compactions > 0 or self.notification_turns > 0
 
     def model(self):
         if not self.model_tokens:
@@ -239,7 +250,7 @@ class Rollup:
     def report(self, generated_at, session_limit):
         self.attach_forks()
         records = sorted(
-            (stats.record() for stats in self.sessions.values()),
+            (stats.record() for stats in self.sessions.values() if stats.has_window_activity()),
             key=lambda row: (-row["total"], row["tool"], row["session_id"]),
         )
         return {
@@ -253,6 +264,7 @@ class Rollup:
                 "forks_without_parent": self.forks_without_parent,
             },
             "totals_by_tool_origin_model_day": dict(sorted(self.day_totals.items())),
+            "session_count": len(records),
             "sessions": records[:session_limit],
         }
 
@@ -293,12 +305,12 @@ def claude_usage_tokens(usage):
 def collect_claude_file(rollup, root, path):
     project, session_id, is_subagent = claude_session_of(root, path)
     stats = rollup.session(CLAUDE, session_id, project)
-    parents = set()
+    forked_from = None
     fork_start_context = None
     for row in rollup.rows(path):
         row_session = row.get("sessionId")
         if not is_subagent and row_session and row_session != session_id:
-            parents.add(row_session)
+            forked_from = row_session
             continue
         timestamp = row.get("timestamp")
         if not rollup.in_window(timestamp):
@@ -332,11 +344,11 @@ def collect_claude_file(rollup, root, path):
         stats.note_worker_origin(row.get("cwd"))
         tokens = claude_usage_tokens(usage)
         context = tokens["input"] + tokens["cache_read"] + tokens["cache_write"]
-        if parents and fork_start_context is None:
+        if forked_from and fork_start_context is None:
             fork_start_context = context
         rollup.bill(stats, model, tokens, context, timestamp)
-    for parent_id in parents:
-        rollup.fork_starts.setdefault(parent_id, {})[session_id] = fork_start_context or 0
+    if forked_from is not None and fork_start_context is not None:
+        rollup.fork_starts.setdefault(forked_from, {})[session_id] = fork_start_context
 
 
 def collect_claude(rollup, roots):
@@ -370,6 +382,7 @@ def collect_codex_file(rollup, path):
     session_id = codex_session_id(path)
     stats = rollup.session(CODEX, session_id)
     model = None
+    first_model = None
     previous = None
     pending = []
     for row in rollup.rows(path):
@@ -380,6 +393,8 @@ def collect_codex_file(rollup, path):
             continue
         if row_type == "turn_context":
             model = payload.get("model") or model
+            if first_model is None:
+                first_model = model
             stats.note_worker_origin(payload.get("cwd"))
             continue
         if row_type != "event_msg" or payload.get("type") != "token_count":
@@ -406,9 +421,9 @@ def collect_codex_file(rollup, path):
             continue
         if restarted:
             stats.compactions += 1
-        pending.append((delta, context, timestamp))
-    for delta, context, timestamp in pending:
-        rollup.bill(stats, model or UNKNOWN_MODEL, delta, context, timestamp)
+        pending.append((delta, context, timestamp, model))
+    for delta, context, timestamp, turn_model in pending:
+        rollup.bill(stats, turn_model or first_model or UNKNOWN_MODEL, delta, context, timestamp)
 
 
 def collect_codex(rollup, root):
@@ -487,7 +502,8 @@ def machine_totals(report):
             totals[field] += as_int(bucket.get(field))
             totals["total"] += as_int(bucket.get(field))
         totals["turns"] += as_int(bucket.get("turns"))
-    totals["sessions"] = len(report.get("sessions") or [])
+    counted = report.get("session_count")
+    totals["sessions"] = counted if isinstance(counted, int) else len(report.get("sessions") or [])
     return totals
 
 
@@ -515,19 +531,30 @@ def load_reports(paths, now, max_age_days):
     return loaded, skipped, unreadable
 
 
+def newest_per_host(loaded):
+    newest = {}
+    for index, (_path, report) in enumerate(loaded):
+        host = report.get("host") or "unknown"
+        parsed = parse_iso(report.get("generatedAt"))
+        current = newest.get(host)
+        if current is None or parsed > current[0]:
+            newest[host] = (parsed, index)
+    keep = {index for _parsed, index in newest.values()}
+    kept = [entry for index, entry in enumerate(loaded) if index in keep]
+    superseded = [entry for index, entry in enumerate(loaded) if index not in keep]
+    return kept, superseded
+
+
 def merge_reports(paths, now, max_age_days, top):
     loaded, skipped, unreadable = load_reports(paths, now, max_age_days)
+    loaded, superseded = newest_per_host(loaded)
+    for path, report in superseded:
+        skipped.append({"path": path, "host": report.get("host"), "generatedAt": report.get("generatedAt"), "reason": "superseded"})
     machines = {}
     ranked = []
     for _path, report in loaded:
         host = report.get("host") or "unknown"
-        totals = machine_totals(report)
-        existing = machines.get(host)
-        if existing is None:
-            machines[host] = totals
-        else:
-            for field in list(empty_totals()):
-                existing[field] += totals[field]
+        machines[host] = machine_totals(report)
         for row in report.get("sessions") or []:
             entry = dict(row)
             entry["host"] = host
@@ -548,9 +575,15 @@ def print_merge_text(merged):
     print("merged {} report(s), skipped {}, unreadable {}".format(
         len(merged["reports"]), len(merged["skipped"]), len(merged["unreadable"])))
     for entry in merged["skipped"]:
-        label = "too old" if entry["reason"] == "too-old" else entry["reason"]
-        print("  skipped {} generatedAt={} ({}, limit {} days)".format(
-            entry.get("host"), entry.get("generatedAt"), label, merged["maxAgeDays"]))
+        reason = entry["reason"]
+        if reason == "too-old":
+            detail = "too old, limit {} days".format(merged["maxAgeDays"])
+        elif reason == "superseded":
+            detail = "superseded by a newer report from the same host"
+        else:
+            detail = reason
+        print("  skipped {} generatedAt={} ({})".format(
+            entry.get("host"), entry.get("generatedAt"), detail))
     for entry in merged["unreadable"]:
         print("  unreadable report {} ({})".format(entry["path"], entry["error"]))
     print("")
@@ -584,7 +617,7 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
 
     collect = sub.add_parser("collect", help="Scan local agent logs and print one JSON report.")
-    collect.add_argument("--since", required=True, help="Only count turns on or after this YYYY-MM-DD.")
+    collect.add_argument("--since", required=True, type=iso_day, help="Only count turns on or after this YYYY-MM-DD.")
     collect.add_argument("--host", default="", help="Host label for the report (default: hostname).")
     collect.add_argument("--now", default="", help="Override generatedAt (ISO8601).")
     collect.add_argument("--claude-root", action="append", default=[], help="Claude projects dir; repeatable.")
