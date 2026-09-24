@@ -108,6 +108,7 @@ run_capture() {
       xvfb-run --auto-servernum npx playwright test "${spec}" || PLAYWRIGHT_EXIT=$?
   else
     cd packages/app && CAPTURE_MODE="${label}" CAPTURE_VIDEO=1 \
+      INVOKER_ALLOW_HEADED_E2E=1 \
       npx playwright test "${spec}" || PLAYWRIGHT_EXIT=$?
   fi
   cd ../..
