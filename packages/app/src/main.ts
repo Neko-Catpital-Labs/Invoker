@@ -125,6 +125,7 @@ import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
   loadDefaultExecutionAgent,
+  resolveAgentLoginWatchWorkerConfig,
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
   resolveConfigFileState,
@@ -524,6 +525,14 @@ function buildRegisteredOwnerWorkerDeps(
       remoteName: invokerConfig.selfDeploy?.remoteName,
       branchName: invokerConfig.selfDeploy?.branchName,
       deployScriptPath: invokerConfig.selfDeploy?.deployScriptPath,
+    },
+    agentLoginWatch: {
+      ...resolveAgentLoginWatchWorkerConfig(invokerConfig),
+      enabled: true,
+      remoteTargets: remoteTargets.map((target) => ({
+        name: target.name,
+        connection: target.connection,
+      })),
     },
     dbReaper: {
       intervalMs: (invokerConfig.dbReaper?.intervalMinutes ?? 60) * 60_000,
