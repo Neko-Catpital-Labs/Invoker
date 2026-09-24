@@ -1,0 +1,11 @@
+diff --git a/packages/app/src/__tests__/edit-task-pool.test.ts b/packages/app/src/__tests__/edit-task-pool.test.ts
+new file mode 100644
+index 0000000..39dc6ea
+--- /dev/null
++++ b/packages/app/src/__tests__/edit-task-pool.test.ts
+@@ -0,0 +1,5 @@
++import { describe, it } from 'vitest';
++
++describe('WorkflowMutationFacade.editTaskPool', () => {
++  it.todo('routes pool edits through the facade');
++});
