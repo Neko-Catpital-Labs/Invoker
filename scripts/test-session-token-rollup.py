@@ -52,7 +52,7 @@ def run_script(args, check=True):
     return proc
 
 
-def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
+def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=(), session_limit=None):
     args = [
         "collect",
         "--since", SINCE,
@@ -64,6 +64,8 @@ def run_collect(host="mac", now="2026-09-23T00:00:00Z", extra_claude_roots=()):
     ]
     for root in extra_claude_roots:
         args += ["--claude-root", root]
+    if session_limit is not None:
+        args += ["--sessions", str(session_limit)]
     proc = run_script(args)
     return proc, json.loads(proc.stdout)
 
@@ -332,6 +334,30 @@ class TestMerge(unittest.TestCase):
         self.assertIn("mac", text)
         self.assertIn("505722", text)
         self.assertIn(SESSION_FORK, text)
+
+
+class TestMachineSessionCount(unittest.TestCase):
+    def merged_for(self, report):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "mac.json")
+        with open(path, "w") as handle:
+            json.dump(report, handle)
+        return json.loads(
+            run_script(["merge", path, "--now", "2026-09-23T12:00:00Z", "--json"]).stdout
+        )
+
+    def test_count_survives_the_emitted_session_limit(self):
+        _proc, report = run_collect(session_limit=2)
+        self.assertEqual(len(report["sessions"]), 2)
+        self.assertEqual(report["session_count"], 6)
+        merged = self.merged_for(report)
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+        self.assertEqual(merged["machines"]["mac"]["sessions"], 6)
+
+    def test_report_without_session_count_falls_back_to_the_list(self):
+        _proc, report = run_collect()
+        del report["session_count"]
+        self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
 
 
 if __name__ == "__main__":
