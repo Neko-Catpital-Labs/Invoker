@@ -205,10 +205,16 @@ class TestAggregateByTaskClass(unittest.TestCase):
         stats = out["fix-ci-thing"]
         self.assertEqual(stats["sessions"], 3)
         self.assertEqual(stats["token_median"], 200)
+        self.assertEqual(stats["token_p90"], 280)
+        self.assertEqual(stats["completed_sessions"], 1)
         self.assertAlmostEqual(stats["completion_rate"], 0.5)
         self.assertEqual(stats["completion_rate_sessions"], 2)
+        self.assertEqual(stats["proof_sessions"], 1)
         self.assertAlmostEqual(stats["proof_rate"], 1 / 3)
+        self.assertEqual(stats["rework_sessions"], 1)
         self.assertAlmostEqual(stats["rework_rate"], 1 / 3)
+        self.assertEqual(stats["max_rework_signal"], 4)
+        self.assertEqual(stats["rework_repeat_threshold"], 3)
 
     def test_empty_group_returns_none_stats_not_zero(self):
         out = miner.aggregate_by_task_class([{"task_type": "empty-class"}])
@@ -231,10 +237,15 @@ class TestPairedReport(unittest.TestCase):
 
         stats = report["by_task_class"]["fix-ci-thing"]
         self.assertLess(stats["optimized"]["token_median"], stats["baseline"]["token_median"])
+        self.assertLess(stats["optimized"]["token_p90"], stats["baseline"]["token_p90"])
         self.assertGreater(stats["optimized"]["proof_rate"], stats["baseline"]["proof_rate"])
         self.assertGreater(stats["optimized"]["completion_rate"], stats["baseline"]["completion_rate"])
         self.assertGreater(stats["baseline"]["rework_rate"], stats["optimized"]["rework_rate"])
         self.assertLess(stats["delta_token_median"], 0)
+        self.assertLess(stats["delta_token_p90"], 0)
+        self.assertGreater(stats["delta_proof_rate"], 0)
+        self.assertGreater(stats["delta_completion_rate"], 0)
+        self.assertLess(stats["delta_rework_rate"], 0)
 
     def test_cli_paired_mode_matches_direct_call(self):
         result = subprocess.run(

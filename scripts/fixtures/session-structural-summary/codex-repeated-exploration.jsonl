@@ -1,0 +1,5 @@
+{"type":"session_meta","payload":{"cwd":"/home/user/.invoker/worktrees/w/experiment-wf-3-5-fix-token-bench-g0.t0.a-def"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg -n token scripts\",\"workdir\":\"/repo\"}","call_id":"call_1","status":"completed"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg -n token scripts\",\"workdir\":\"/repo\"}","call_id":"call_2","status":"completed"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg -n token scripts\",\"workdir\":\"/repo\"}","call_id":"call_3","status":"completed"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg -n token scripts\",\"workdir\":\"/repo\"}","call_id":"call_4","status":"completed"}}

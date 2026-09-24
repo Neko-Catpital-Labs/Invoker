@@ -243,18 +243,34 @@ def aggregate_by_task_class(rows):
         tokens = sorted(r["total_tokens"] for r in group_rows if r.get("total_tokens") is not None)
         completions = [r["completed"] for r in group_rows if r.get("completed") is not None]
         proof_hits = [1 if (r.get("proof_signal") or 0) > 0 else 0 for r in group_rows]
-        rework_hits = [1 if (r.get("rework_signal") or 0) >= REWORK_REPEAT_THRESHOLD else 0 for r in group_rows]
+        rework_values = [r.get("rework_signal") or 0 for r in group_rows]
+        rework_hits = [1 if v >= REWORK_REPEAT_THRESHOLD else 0 for v in rework_values]
         out[task_class] = {
             "sessions": len(group_rows),
             "sessions_with_tokens": len(tokens),
             "token_median": statistics.median(tokens) if tokens else None,
             "token_p90": percentile(tokens, 0.9) if tokens else None,
+            "completed_sessions": sum(1 for v in completions if v),
             "completion_rate": (sum(completions) / len(completions)) if completions else None,
             "completion_rate_sessions": len(completions),
+            "proof_sessions": sum(proof_hits),
             "proof_rate": (sum(proof_hits) / len(proof_hits)) if proof_hits else None,
+            "rework_sessions": sum(rework_hits),
             "rework_rate": (sum(rework_hits) / len(rework_hits)) if rework_hits else None,
+            "max_rework_signal": max(rework_values) if rework_values else 0,
+            "rework_repeat_threshold": REWORK_REPEAT_THRESHOLD,
         }
     return out
+
+
+def numeric_delta(optimized_stats, baseline_stats, key):
+    if not baseline_stats or not optimized_stats:
+        return None
+    baseline = baseline_stats.get(key)
+    optimized = optimized_stats.get(key)
+    if baseline is None or optimized is None:
+        return None
+    return optimized - baseline
 
 
 def build_paired_report(baseline_rows, optimized_rows):
@@ -273,6 +289,10 @@ def build_paired_report(baseline_rows, optimized_rows):
             "baseline": baseline_stats,
             "optimized": optimized_stats,
             "delta_token_median": delta_token_median,
+            "delta_token_p90": numeric_delta(optimized_stats, baseline_stats, "token_p90"),
+            "delta_completion_rate": numeric_delta(optimized_stats, baseline_stats, "completion_rate"),
+            "delta_proof_rate": numeric_delta(optimized_stats, baseline_stats, "proof_rate"),
+            "delta_rework_rate": numeric_delta(optimized_stats, baseline_stats, "rework_rate"),
         }
 
     return {
