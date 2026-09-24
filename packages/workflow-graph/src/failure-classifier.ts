@@ -32,6 +32,7 @@ const agentQuotaRefusalPattern = new RegExp([
   'too many requests',
   'quota exceeded',
   'exceeded your quota',
+  'hit your session limit',
 ].join('|'), 'i');
 
 export class FailureClassifier {
