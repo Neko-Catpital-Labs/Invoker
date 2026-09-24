@@ -375,6 +375,7 @@ describe('invoker-cli set', () => {
     const result = await runSet(['task', TASK_ID, 'config.poolId', 'gpu-pool'], dockerTask());
 
     expect(result.code).toBe(1);
+    expect(result.stderr).toContain('docker tasks cannot have a pool or pool member; use `invoker-cli set executor`');
     expect(result.stderr).toContain('docker tasks cannot have a pool or pool member; use `invoker-cli set executor` or `invoker-cli set pool` to change routing');
     expect(result.execHandler).not.toHaveBeenCalled();
   });
