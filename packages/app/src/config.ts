@@ -15,6 +15,7 @@ import type {
   E2eAutoFixWorkerConfig,
   PrMaintenanceWorkerConfig,
   SpendCircuitBreakerWorkerConfig,
+  ThrashDetectorWorkerConfig,
 } from '@invoker/execution-engine';
 import { DEFAULT_CODEX_DAILY_TOKEN_BUDGET } from '@invoker/execution-engine';
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
@@ -234,6 +235,24 @@ export interface CatstackDeployConfig {
 
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
+
+/**
+ * Built-in thrash-detector worker settings. Process on/off is SQLite
+ * `worker_desired_states`; `enabled: false` makes a tick a read-only no-op.
+ */
+export interface ThrashDetectorConfig {
+  enabled?: boolean;
+  /** Poll cadence in minutes. Default: 15. */
+  intervalMinutes?: number;
+  /** Number of matching debug.auto-fix events needed within the window. Default: 3. */
+  thresholdCount?: number;
+  /** Lookback window in hours. Default: 24. */
+  windowHours?: number;
+}
+
+export const DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES = 15;
+export const DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT = 3;
+export const DEFAULT_THRASH_DETECTOR_WINDOW_HOURS = 24;
 
 export interface AgentLoginWatchConfig {
   intervalMinutes?: number;
@@ -645,6 +664,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  thrashDetector?: ThrashDetectorConfig;
   agentLoginWatch?: AgentLoginWatchConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
@@ -945,6 +965,20 @@ export function resolveAgentLoginWatchWorkerConfig(
   const intervalMinutes = invokerConfig.agentLoginWatch?.intervalMinutes
     ?? DEFAULT_AGENT_LOGIN_WATCH_INTERVAL_MINUTES;
   return { intervalMs: intervalMinutes * 60_000 };
+}
+
+export function resolveThrashDetectorWorkerConfig(
+  invokerConfig: InvokerConfig,
+): ThrashDetectorWorkerConfig {
+  return {
+    enabled: invokerConfig.thrashDetector?.enabled,
+    intervalMs: (invokerConfig.thrashDetector?.intervalMinutes
+      ?? DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES) * 60_000,
+    thresholdCount: invokerConfig.thrashDetector?.thresholdCount
+      ?? DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+    windowHours: invokerConfig.thrashDetector?.windowHours
+      ?? DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
+  };
 }
 
 export function resolvePrMaintenanceWorkerConfig(

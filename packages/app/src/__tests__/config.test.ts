@@ -24,6 +24,7 @@ import {
   DEFAULT_PR_MAINTENANCE_TARGET_REPO,
   DEFAULT_E2E_AUTOFIX_TARGET_REPO,
   resolveSpendCircuitBreakerWorkerConfig,
+  resolveThrashDetectorWorkerConfig,
 } from '../config.js';
 import { validateInvokerConfig } from '../config-validation.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -1013,6 +1014,45 @@ describe('catstackDeploy config', () => {
     expect(() => validateInvokerConfig({
       catstackDeploy: { intervalMinutes: 1.5 },
     })).toThrow(/catstackDeploy.intervalMinutes must be an integer > 0/);
+  });
+});
+
+describe('thrashDetector config', () => {
+  it('accepts valid fields and resolves worker defaults', () => {
+    const config = validateInvokerConfig({
+      thrashDetector: {
+        enabled: true,
+        intervalMinutes: 10,
+        thresholdCount: 4,
+        windowHours: 12,
+      },
+    });
+
+    expect(resolveThrashDetectorWorkerConfig(config)).toEqual({
+      enabled: true,
+      intervalMs: 10 * 60_000,
+      thresholdCount: 4,
+      windowHours: 12,
+    });
+  });
+
+  it('defaults threshold, window, and interval when omitted', () => {
+    expect(resolveThrashDetectorWorkerConfig({})).toEqual({
+      enabled: undefined,
+      intervalMs: 15 * 60_000,
+      thresholdCount: 3,
+      windowHours: 24,
+    });
+  });
+
+  it('rejects invalid threshold and window fields', () => {
+    expect(() => validateInvokerConfig({
+      thrashDetector: { thresholdCount: 0 },
+    })).toThrow(/thrashDetector.thresholdCount must be an integer > 0/);
+
+    expect(() => validateInvokerConfig({
+      thrashDetector: { windowHours: 1.5 },
+    })).toThrow(/thrashDetector.windowHours must be an integer > 0/);
   });
 });
 
