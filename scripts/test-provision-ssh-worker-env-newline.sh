@@ -39,6 +39,12 @@ if [[ "$got_b" != "2" ]]; then
   fail "appending corrupted the preceding export: B=[$got_b], expected [2]"
 fi
 
+MULTI="$TMP_ROOT/multi.sh"
+write_file "$MULTI" $'export A="1"\n\n\n'
+if ! cmp -s "$MULTI" <(printf 'export A="1"\n'); then
+  fail "write_file kept extra trailing newlines: $(od -An -c "$MULTI" | tr -s ' ')"
+fi
+
 if (( FAILURES > 0 )); then
   printf '%s: %d failure(s)\n' "$(basename "$0")" "$FAILURES" >&2
   exit 1
