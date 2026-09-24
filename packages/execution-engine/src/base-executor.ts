@@ -295,9 +295,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * pool's default when the task's `repoUrl` has an entry.
    */
   protected resolveProvisionCommand(repoUrl: string | undefined): string {
-    if (!repoUrl) return this.provisionCommand;
-    const override = this.repoProvisionCommands[normalizeRepoUrlForProvisionLookup(repoUrl)];
-    return override !== undefined ? override : this.provisionCommand;
+    return this.findRepoProvisionCommand(repoUrl) ?? this.provisionCommand;
+  }
+
+  protected findRepoProvisionCommand(repoUrl: string | undefined): string | undefined {
+    if (!repoUrl) return undefined;
+    return this.repoProvisionCommands[normalizeRepoUrlForProvisionLookup(repoUrl)];
   }
 
   protected setLocalProvisioningTimeout(executionId: string, timeoutMs: number): void {

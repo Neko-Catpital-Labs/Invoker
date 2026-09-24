@@ -105,6 +105,7 @@ export interface SshExecutorConfig {
   remoteInvokerHome?: string;
   /** Optional dependency/bootstrap command run inside managed worktrees before the payload. */
   provisionCommand?: string;
+  repoProvisionCommands?: Record<string, string>;
   /** Opt-in: export agent API keys from secretsFile into remote task shells. */
   useApiKey?: boolean;
   /** Optional local secrets file used when useApiKey is true. */
@@ -167,6 +168,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
     this.setProvisionCommand(config.provisionCommand, '');
+    this.setRepoProvisionCommands(config.repoProvisionCommands);
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
       typeof configuredRemoteHeartbeatInterval === 'number'
@@ -327,21 +329,23 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
 `;
   }
 
-  private buildRuntimeBootstrapScript(options: {
-    executionId: string;
-    actionId: string;
-    workspacePath: string;
-    payload: string;
-    managed: boolean;
-    envExports: string;
-  }): string {
-    const runner = this.buildRunnerScript();
-    const payload = this.buildPayloadScript(options.payload);
-    const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
-    const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
-    const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
-    const managedWorkspaceBootstrap = options.managed && this.provisionCommand
-      ? `ensure_managed_pnpm_workspace() {
+  private buildManagedWorkspaceBootstrap(options: { managed: boolean; repoUrl?: string }): string {
+    if (!options.managed) return '';
+    const repoCommand = this.findRepoProvisionCommand(options.repoUrl)?.trim();
+    if (repoCommand !== undefined) {
+      if (!repoCommand) return '';
+      return `ensure_managed_repo_workspace() {
+  if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
+    return 0
+  fi
+  echo "[SshExecutor] Installing managed worktree dependencies..."
+  ${repoCommand}
+}
+ensure_managed_repo_workspace
+`;
+    }
+    if (!this.provisionCommand) return '';
+    return `ensure_managed_pnpm_workspace() {
   if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
     return 0
   fi
@@ -352,8 +356,24 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
   ${this.provisionCommand}
 }
 ensure_managed_pnpm_workspace
-`
-      : '';
+`;
+  }
+
+  private buildRuntimeBootstrapScript(options: {
+    executionId: string;
+    actionId: string;
+    workspacePath: string;
+    payload: string;
+    managed: boolean;
+    envExports: string;
+    repoUrl?: string;
+  }): string {
+    const runner = this.buildRunnerScript();
+    const payload = this.buildPayloadScript(options.payload);
+    const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
+    const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
+    const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const managedWorkspaceBootstrap = this.buildManagedWorkspaceBootstrap(options);
     const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
@@ -983,6 +1003,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       payload,
       managed: true,
       envExports,
+      repoUrl,
     });
 
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {
