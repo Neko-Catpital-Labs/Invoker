@@ -42,4 +42,4 @@ For broad regression, walk top to bottom then finish with `multi-surface-journey
 node skills/verify/control-invoker.mjs catalog --check
 ```
 
-See `skills/maintain-verify/SKILL.md`.
+See `node skills/verify/control-invoker.mjs catalog --check`.
