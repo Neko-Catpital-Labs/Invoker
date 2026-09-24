@@ -134,6 +134,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No catstack-deploy runs recorded yet.',
     };
   }
+  if (kind === 'agent-login-watch') {
+    return {
+      name: 'Agent login watch',
+      idleText: 'Idle. Checks Claude and Codex CLI login health on this machine and every remoteTargets host when turned on.',
+      noActionText: 'No agent-login-watch runs recorded yet.',
+    };
+  }
   if (kind === 'hook-metrics-collect') {
     return {
       name: 'Hook metrics collector',
