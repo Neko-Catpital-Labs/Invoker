@@ -1,13 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  buildDistributeCredentialsScript,
-  buildReadCredentialsScript,
   createClaudeOauthRefreshWorker,
   runClaudeAndCodexOauthRefreshCheck,
   runClaudeOauthRefreshCheck,
@@ -66,12 +63,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(distributeFn).not.toHaveBeenCalled();
   });
 
-  it('reproduces the real incident: distributes current credentials to a remote target whose own copy is expiring, even when the local token is healthy', async () => {
-    // Real incident, 2026-08-16: the owner's own credentials stayed healthy
-    // (refreshed by its own live CLI usage) while all 5 SSH pool targets
-    // independently expired. The worker never fired because the entire
-    // check -- local refresh AND remote distribution -- was gated on the
-    // local token's own expiry alone.
+  it('records expiring and missing remote credentials without copying the owner Claude login to another host', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 60 * 60 * 1000);
     const distributeFn = vi.fn(async () => undefined);
@@ -82,11 +74,14 @@ describe('runClaudeOauthRefreshCheck', () => {
     await runClaudeOauthRefreshCheck({
       logger: makeLogger(),
       credentialsPath: '/home/invoker/.claude/.credentials.json',
-      remoteTargets: [makeTarget('do1'), makeTarget('do2')],
+      remoteTargets: [makeTarget('do1'), makeTarget('do2'), makeTarget('do3')],
       store,
       readCredentials: () => healthyLocal,
-      readRemoteCredentials: async (target) =>
-        target.name === 'do1' ? credentialsJson(now - 1) : credentialsJson(now + 60 * 60 * 1000),
+      readRemoteCredentials: async (target) => {
+        if (target.name === 'do1') return credentialsJson(now - 1);
+        if (target.name === 'do2') return null;
+        return credentialsJson(now + 60 * 60 * 1000);
+      },
       writeCredentials,
       refreshFn,
       distributeFn,
@@ -95,14 +90,12 @@ describe('runClaudeOauthRefreshCheck', () => {
 
     expect(refreshFn).not.toHaveBeenCalled();
     expect(writeCredentials).not.toHaveBeenCalled();
-    expect(distributeFn).toHaveBeenCalledTimes(1);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), healthyLocal);
+    expect(distributeFn).not.toHaveBeenCalled();
     const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
-    expect(statuses.do1).toBe('completed');
-    expect(statuses.do2).toBe('skipped');
+    expect(statuses).toEqual({ do1: 'skipped', do2: 'skipped' });
   });
 
-  it('distributes current credentials to a remote target holding a logged-out credential file', async () => {
+  it('records a logged-out remote credential file without copying the owner Claude login to it', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 7 * 60 * 60 * 1000);
     const loggedOut = JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: 0 } });
@@ -120,10 +113,9 @@ describe('runClaudeOauthRefreshCheck', () => {
       now: () => now,
     });
 
-    expect(distributeFn).toHaveBeenCalledTimes(1);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), healthyLocal);
+    expect(distributeFn).not.toHaveBeenCalled();
     expect((rows as { subjectId: string; status: string }[])).toEqual([
-      expect.objectContaining({ subjectId: 'do1', status: 'completed' }),
+      expect.objectContaining({ subjectId: 'do1', status: 'skipped' }),
     ]);
   });
 
@@ -132,7 +124,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     ['a null oauth block', JSON.stringify({ claudeAiOauth: null })],
     ['an empty access token with a future expiry', JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: 'r', expiresAt: 1_000_000_000_000 + 60 * 60 * 1000 } })],
     ['unparseable text', 'not json'],
-  ])('distributes current credentials to a remote target whose file holds %s', async (_label, remoteJson) => {
+  ])('records remote credentials whose file holds %s without copying the owner Claude login', async (_label, remoteJson) => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 7 * 60 * 60 * 1000);
     const distributeFn = vi.fn(async () => undefined);
@@ -147,10 +139,10 @@ describe('runClaudeOauthRefreshCheck', () => {
       now: () => now,
     });
 
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), healthyLocal);
+    expect(distributeFn).not.toHaveBeenCalled();
   });
 
-  it('logs and records a decision for every remote target, whether it is copied to or skipped', async () => {
+  it('logs and records a decision only for remote Claude targets that need per-host login attention', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 7 * 60 * 60 * 1000);
     const logger = makeLogger();
@@ -159,7 +151,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     await runClaudeOauthRefreshCheck({
       logger,
       credentialsPath: '/home/invoker/.claude/.credentials.json',
-      remoteTargets: [makeTarget('do1'), makeTarget('do2')],
+      remoteTargets: [makeTarget('do1'), makeTarget('do2'), makeTarget('do3')],
       store,
       readCredentials: () => healthyLocal,
       readRemoteCredentials: async (target) =>
@@ -169,10 +161,10 @@ describe('runClaudeOauthRefreshCheck', () => {
     });
 
     const infoLines = (logger.info as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[0]));
-    expect(infoLines.some((line) => line.includes('do1') && line.includes('distribut'))).toBe(true);
-    expect(infoLines.some((line) => line.includes('do2') && line.includes('skip'))).toBe(true);
+    expect(infoLines.some((line) => line.includes('do1') && line.includes('needs per-host login'))).toBe(true);
+    expect(infoLines.some((line) => line.includes('do2'))).toBe(false);
     const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
-    expect(statuses).toEqual({ do1: 'completed', do2: 'skipped' });
+    expect(statuses).toEqual({ do1: 'skipped' });
   });
 
   it('never writes to a remote target when the owner credential file holds no usable token', async () => {
@@ -198,7 +190,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
-  it('treats a failed remote credential read as needing distribution, without stopping other targets', async () => {
+  it('records a failed remote credential read as needing per-host login attention without stopping other targets', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = credentialsJson(now + 60 * 60 * 1000);
     const distributeFn = vi.fn(async () => undefined);
@@ -207,7 +199,7 @@ describe('runClaudeOauthRefreshCheck', () => {
     await runClaudeOauthRefreshCheck({
       logger: makeLogger(),
       credentialsPath: '/home/invoker/.claude/.credentials.json',
-      remoteTargets: [makeTarget('do1'), makeTarget('do2')],
+      remoteTargets: [makeTarget('do1'), makeTarget('do2'), makeTarget('do3')],
       store,
       readCredentials: () => healthyLocal,
       readRemoteCredentials: async (target) => {
@@ -218,14 +210,12 @@ describe('runClaudeOauthRefreshCheck', () => {
       now: () => now,
     });
 
-    expect(distributeFn).toHaveBeenCalledTimes(1);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), healthyLocal);
+    expect(distributeFn).not.toHaveBeenCalled();
     const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
-    expect(statuses.do1).toBe('completed');
-    expect(statuses.do2).toBe('skipped');
+    expect(statuses).toEqual({ do1: 'skipped' });
   });
 
-  it('refreshes, writes the local file, and distributes to every remote target when the token is expiring', async () => {
+  it('refreshes and writes the local file without copying the refreshed Claude login to remote targets', async () => {
     const now = 1_000_000_000_000;
     const refreshed = credentialsJson(now + 3_600_000);
     const writeCredentials = vi.fn();
@@ -238,6 +228,7 @@ describe('runClaudeOauthRefreshCheck', () => {
       remoteTargets: [makeTarget('do1'), makeTarget('do3')],
       store,
       readCredentials: () => credentialsJson(now),
+      readRemoteCredentials: async () => credentialsJson(now + 60 * 60 * 1000),
       writeCredentials,
       refreshFn: async () => refreshed,
       distributeFn,
@@ -245,13 +236,9 @@ describe('runClaudeOauthRefreshCheck', () => {
     });
 
     expect(writeCredentials).toHaveBeenCalledWith('/home/invoker/.claude/.credentials.json', refreshed);
-    expect(distributeFn).toHaveBeenCalledTimes(2);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), refreshed);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do3' }), refreshed);
+    expect(distributeFn).not.toHaveBeenCalled();
     const statuses = (rows as { status: string; subjectId: string }[]).map((r) => `${r.subjectId}:${r.status}`);
-    expect(statuses).toContain('local:completed');
-    expect(statuses).toContain('do1:completed');
-    expect(statuses).toContain('do3:completed');
+    expect(statuses).toEqual(['local:completed']);
   });
 
   it('logs and records a failure without throwing when the refresh request itself fails, leaving existing credentials in place', async () => {
@@ -278,16 +265,11 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect((rows as { status: string }[])[0].status).toBe('failed');
   });
 
-  it('reproduces the real incident: one remote target failing to distribute must not stop the others or lose the local refresh', async () => {
-    // Real incident tonight: 6 SSH pool machines all had "OAuth session
-    // expired" simultaneously. A worker that gave up after the first failed
-    // distribution would leave every other machine stuck too.
+  it('records each expiring remote Claude target after local refresh without distributing to any host', async () => {
     const now = 1_000_000_000_000;
     const refreshed = credentialsJson(now + 3_600_000);
     const { store, rows } = makeStore();
-    const distributeFn = vi.fn(async (target: ClaudeOauthRefreshTarget) => {
-      if (target.name === 'do6') throw new Error('ssh: connection refused');
-    });
+    const distributeFn = vi.fn(async () => undefined);
 
     await runClaudeOauthRefreshCheck({
       logger: makeLogger(),
@@ -295,17 +277,17 @@ describe('runClaudeOauthRefreshCheck', () => {
       remoteTargets: [makeTarget('do1'), makeTarget('do6'), makeTarget('do7')],
       store,
       readCredentials: () => credentialsJson(now),
+      readRemoteCredentials: async (target) =>
+        target.name === 'do7' ? credentialsJson(now + 60 * 60 * 1000) : credentialsJson(now - 1),
       writeCredentials: vi.fn(),
       refreshFn: async () => refreshed,
       distributeFn,
       now: () => now,
     });
 
-    expect(distributeFn).toHaveBeenCalledTimes(3);
+    expect(distributeFn).not.toHaveBeenCalled();
     const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
-    expect(statuses.do1).toBe('completed');
-    expect(statuses.do7).toBe('completed');
-    expect(statuses.do6).toBe('failed');
+    expect(statuses).toEqual({ local: 'completed', do1: 'skipped', do6: 'skipped' });
   });
 
   it('fails closed on a local read error without throwing, and never attempts a refresh or distribution', async () => {
@@ -371,7 +353,7 @@ describe('runCodexOauthRefreshCheck', () => {
     expect(distributeFn).not.toHaveBeenCalled();
   });
 
-  it('refreshes, writes the local file, and distributes to every remote target when the token is expiring', async () => {
+  it('refreshes and writes the local Codex file without copying the refreshed login to remote targets', async () => {
     const now = 1_000_000_000_000;
     const refreshed = codexAuthJson(now + 3_600_000);
     const writeCredentials = vi.fn();
@@ -382,6 +364,7 @@ describe('runCodexOauthRefreshCheck', () => {
       remoteTargets: [makeTarget('do1'), makeTarget('do3')],
       store,
       readCredentials: () => codexAuthJson(now, { expSeconds: Math.floor(now / 1000) }),
+      readRemoteCredentials: async () => codexAuthJson(now),
       writeCredentials,
       refreshFn: async () => refreshed,
       distributeFn,
@@ -389,16 +372,12 @@ describe('runCodexOauthRefreshCheck', () => {
     }));
 
     expect(writeCredentials).toHaveBeenCalledWith('/home/invoker/.codex/auth.json', refreshed);
-    expect(distributeFn).toHaveBeenCalledTimes(2);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), refreshed);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do3' }), refreshed);
+    expect(distributeFn).not.toHaveBeenCalled();
     const statuses = (rows as { status: string; subjectId: string }[]).map((r) => `${r.subjectId}:${r.status}`);
-    expect(statuses).toContain('codex:local:completed');
-    expect(statuses).toContain('codex:do1:completed');
-    expect(statuses).toContain('codex:do3:completed');
+    expect(statuses).toEqual(['codex:local:completed']);
   });
 
-  it('distributes current Codex auth to a remote target whose own copy is stale, even when the local token is healthy', async () => {
+  it('records stale and missing remote Codex auth without copying the owner Codex login to another host', async () => {
     const now = 1_000_000_000_000;
     const healthyLocal = codexAuthJson(now);
     const staleRemote = codexAuthJson(now, {
@@ -410,11 +389,14 @@ describe('runCodexOauthRefreshCheck', () => {
     const { store, rows } = makeStore();
 
     await runCodexOauthRefreshCheck(makeCodexOptions({
-      remoteTargets: [makeTarget('do1'), makeTarget('do2')],
+      remoteTargets: [makeTarget('do1'), makeTarget('do2'), makeTarget('do3')],
       store,
       readCredentials: () => healthyLocal,
-      readRemoteCredentials: async (target) =>
-        target.name === 'do1' ? staleRemote : codexAuthJson(now),
+      readRemoteCredentials: async (target) => {
+        if (target.name === 'do1') return staleRemote;
+        if (target.name === 'do2') return null;
+        return codexAuthJson(now);
+      },
       writeCredentials,
       refreshFn,
       distributeFn,
@@ -423,11 +405,9 @@ describe('runCodexOauthRefreshCheck', () => {
 
     expect(refreshFn).not.toHaveBeenCalled();
     expect(writeCredentials).not.toHaveBeenCalled();
-    expect(distributeFn).toHaveBeenCalledTimes(1);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), healthyLocal);
+    expect(distributeFn).not.toHaveBeenCalled();
     const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
-    expect(statuses['codex:do1']).toBe('completed');
-    expect(statuses['codex:do2']).toBeUndefined();
+    expect(statuses).toEqual({ 'codex:do1': 'skipped', 'codex:do2': 'skipped' });
   });
 });
 
@@ -457,6 +437,7 @@ describe('runClaudeAndCodexOauthRefreshCheck', () => {
         remoteTargets: [makeTarget('do1')],
         store,
         readCredentials: () => codexAuthJson(now, { expSeconds: Math.floor(now / 1000) }),
+        readRemoteCredentials: async () => codexAuthJson(now),
         writeCredentials: writeCodex,
         refreshFn: async () => refreshedCodex,
         distributeFn: distributeCodex,
@@ -467,11 +448,10 @@ describe('runClaudeAndCodexOauthRefreshCheck', () => {
     expect(writeClaude).not.toHaveBeenCalled();
     expect(distributeClaude).not.toHaveBeenCalled();
     expect(writeCodex).toHaveBeenCalledWith('/home/invoker/.codex/auth.json', refreshedCodex);
-    expect(distributeCodex).toHaveBeenCalledTimes(1);
+    expect(distributeCodex).not.toHaveBeenCalled();
     const statuses = (rows as { subjectId: string; status: string }[]).map((r) => `${r.subjectId}:${r.status}`);
     expect(statuses).toContain('local:failed');
     expect(statuses).toContain('codex:local:completed');
-    expect(statuses).toContain('codex:do1:completed');
   });
 
   it('does not fail the Claude pass when Codex auth.json is missing', async () => {
@@ -489,6 +469,7 @@ describe('runClaudeAndCodexOauthRefreshCheck', () => {
         remoteTargets: [makeTarget('do1')],
         store,
         readCredentials: () => credentialsJson(now),
+        readRemoteCredentials: async () => credentialsJson(now + 60 * 60 * 1000),
         writeCredentials: writeClaude,
         refreshFn: async () => refreshedClaude,
         distributeFn: vi.fn(async () => undefined),
@@ -509,13 +490,12 @@ describe('runClaudeAndCodexOauthRefreshCheck', () => {
     expect(distributeCodex).not.toHaveBeenCalled();
     const statuses = (rows as { subjectId: string; status: string }[]).map((r) => `${r.subjectId}:${r.status}`);
     expect(statuses).toContain('local:completed');
-    expect(statuses).toContain('do1:completed');
     expect(statuses.some((s) => s.startsWith('codex:'))).toBe(false);
   });
 });
 
 describe('createClaudeOauthRefreshWorker filesystem e2e', () => {
-  it('one startup tick refreshes Claude + Codex files on disk and distributes both independently', async () => {
+  it('one startup tick refreshes Claude + Codex files on disk without distributing either login remotely', async () => {
     const now = 1_000_000_000_000;
     const dir = mkdtempSync(join(tmpdir(), 'invoker-oauth-e2e-'));
     const claudePath = join(dir, '.credentials.json');
@@ -540,6 +520,8 @@ describe('createClaudeOauthRefreshWorker filesystem e2e', () => {
       now: () => now,
       refreshFn: async () => refreshedClaude,
       refreshCodexFn: async () => refreshedCodex,
+      readRemoteCredentials: async () => credentialsJson(now + 60 * 60 * 1000),
+      readRemoteCodexCredentials: async () => codexAuthJson(now),
       distributeFn: distributeClaude,
       distributeCodexFn: distributeCodex,
     });
@@ -550,61 +532,17 @@ describe('createClaudeOauthRefreshWorker filesystem e2e', () => {
         expect(readFileSync(claudePath, 'utf8')).toBe(refreshedClaude);
         expect(readFileSync(codexPath, 'utf8')).toBe(refreshedCodex);
       });
-      expect(distributeClaude).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), refreshedClaude);
-      expect(distributeCodex).toHaveBeenCalledWith(expect.objectContaining({ name: 'do1' }), refreshedCodex);
+      expect(distributeClaude).not.toHaveBeenCalled();
+      expect(distributeCodex).not.toHaveBeenCalled();
       const statuses = (rows as { subjectId: string; status: string }[]).map((r) => `${r.subjectId}:${r.status}`);
       expect(statuses).toEqual(expect.arrayContaining([
         'local:completed',
-        'do1:completed',
         'codex:local:completed',
-        'codex:do1:completed',
       ]));
     } finally {
       await worker.stop({ settleTimeoutMs: 2_000 });
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-});
-
-describe('buildDistributeCredentialsScript', () => {
-  it('writes the credentials to a temp path and renames atomically into place', () => {
-    const script = buildDistributeCredentialsScript('~/.claude/.credentials.json', '{"a":1}');
-    expect(script).toContain('mv "$TMP_PATH" "$REMOTE_PATH"');
-    expect(script).toContain('chmod 600 "$TMP_PATH"');
-  });
-
-  it('writes to and reads from the real home-relative credentials file when run by bash', () => {
-    const home = mkdtempSync(join(tmpdir(), 'invoker-oauth-home-'));
-    const cwd = mkdtempSync(join(tmpdir(), 'invoker-oauth-cwd-'));
-    const runBash = (script: string) => spawnSync('bash', ['-s'], {
-      input: script,
-      cwd,
-      env: { ...process.env, HOME: home },
-      encoding: 'utf8',
-    });
-    try {
-      mkdirSync(join(home, '.claude'));
-      writeFileSync(join(home, '.claude', '.credentials.json'), '{"claudeAiOauth":{"accessToken":""}}');
-
-      const read = runBash(buildReadCredentialsScript('~/.claude/.credentials.json'));
-      expect(read.status).toBe(0);
-      expect(read.stdout).toBe('{"claudeAiOauth":{"accessToken":""}}');
-
-      const write = runBash(buildDistributeCredentialsScript('~/.claude/.credentials.json', '{"a":1}'));
-      expect(write.status).toBe(0);
-      expect(readFileSync(join(home, '.claude', '.credentials.json'), 'utf8')).toBe('{"a":1}');
-      expect(existsSync(join(cwd, '~'))).toBe(false);
-      expect(existsSync(join(home, '~'))).toBe(false);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it('base64-encodes the content so JSON quoting/special characters never break the remote shell', () => {
-    const script = buildDistributeCredentialsScript('/x', '{"token":"a\'b$(rm -rf /)"}');
-    expect(script).not.toContain('rm -rf /');
-    expect(script).toMatch(/printf '%s' '[A-Za-z0-9+/=]+' \| invoker_base64_decode/);
   });
 });
 
@@ -695,7 +633,7 @@ describe('runClaudeOauthRefreshCheck owner worker credential copy', () => {
 
     expect(refreshFn).not.toHaveBeenCalled();
     expect(fs.files.get(ownerPath)).toBe(newerWorker);
-    expect(distributeFn).toHaveBeenCalledWith(expect.objectContaining({ name: 'do3' }), newerWorker);
+    expect(distributeFn).not.toHaveBeenCalled();
   });
 
   it('writes a freshly refreshed owner token to the worker copy too', async () => {
