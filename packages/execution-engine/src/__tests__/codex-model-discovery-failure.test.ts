@@ -1,6 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assertExecutionModelSupported, type ExecutionModelOption } from '../agent.js';
+import {
+  assertExecutionModelSupported,
+  isExecutionModelDiscoveryUnavailableError,
+  type ExecutionModelOption,
+} from '../agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -240,6 +244,25 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     expect(error.message).toContain('unavailable');
     expect(error.message).toContain('ENOENT');
     expect(error.message).not.toContain('is not supported for execution agent');
+  });
+
+  it('tags the discovery-unavailable error so read-only callers can classify it', () => {
+    stubProbes(spawnFailure('ENOENT'), spawnFailure('ENOENT'));
+    const agent = new CodexExecutionAgent();
+
+    expect(isExecutionModelDiscoveryUnavailableError(rejection(() => agent.supportedModels))).toBe(true);
+    expect(isExecutionModelDiscoveryUnavailableError(
+      rejection(() => assertExecutionModelSupported(agent, 'gpt-5.6-luna')),
+    )).toBe(true);
+  });
+
+  it('leaves a genuine unsupported-model rejection unclassified as a discovery failure', () => {
+    stubProbes(ok(LIVE_CATALOG));
+    const agent = new CodexExecutionAgent();
+
+    expect(isExecutionModelDiscoveryUnavailableError(
+      rejection(() => assertExecutionModelSupported(agent, 'gpt-5.9-invented')),
+    )).toBe(false);
   });
 
   it('surfaces a discovery-unavailable error when the CLI rejects --bundled', () => {
