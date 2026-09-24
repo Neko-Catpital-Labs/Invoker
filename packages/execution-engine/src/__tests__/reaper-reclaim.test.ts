@@ -143,7 +143,7 @@ describe('reapStaleWorktrees', () => {
     mkdirSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'), { recursive: true });
     const runLocalGit = vi.fn(async () => {});
 
-    const removed = await reapLocalStaleWorktrees({ invokerHome: home, userHome: root, runLocalGit });
+    const removed = await reapLocalStaleWorktrees({ invokerHome: home, userHome: root, runLocalGit, inUsePaths: new Set() });
 
     expect(removed).toEqual([]);
     expect(existsSync(join(home, 'worktrees', 'repoabc123456', 'fresh-branch'))).toBe(true);
@@ -168,6 +168,7 @@ describe('reapStaleWorktrees', () => {
       invokerHome: home,
       userHome: root,
       runLocalGit,
+      inUsePaths: new Set(),
     });
 
     expect(removed.sort()).toEqual([oldA, oldB].sort());
@@ -201,6 +202,7 @@ describe('reapStaleWorktrees', () => {
       invokerHome: home,
       userHome: root,
       runLocalGit,
+      inUsePaths: new Set(),
     });
 
     expect(removed).toEqual([old]);
@@ -224,6 +226,7 @@ describe('reapStaleWorktrees', () => {
       userHome: root,
       remoteTargets: [target],
       runRemoteScript,
+      taskStore: worktreeTaskStore([]),
     });
 
     expect(results).toHaveLength(2);
@@ -270,7 +273,7 @@ describe('reapStaleWorktrees', () => {
     if (argv[3] === 'remove') rmSync(argv[5]!, { recursive: true, force: true });
   });
 
-  it.fails('keeps an old worktree an unfinished task still uses and removes an idle one', async () => {
+  it('keeps an old worktree an unfinished task still uses and removes an idle one', async () => {
     const { root, home } = makeHome();
     const [inUse, idle] = seedStaleWorktrees(home, 'repoabc123456', ['in-use', 'idle']);
 
@@ -279,14 +282,14 @@ describe('reapStaleWorktrees', () => {
       userHome: root,
       runLocalGit: removingLocalGit(),
       taskStore: worktreeTaskStore([{ status: 'running', workspacePath: inUse! }]),
-    } as any);
+    });
 
     expect(results[0]).toMatchObject({ ok: true, detail: 'removed 1' });
     expect(existsSync(join(inUse!, 'file.txt'))).toBe(true);
     expect(existsSync(idle!)).toBe(false);
   });
 
-  it.fails('keeps an old worktree whose own in-use mark is fresh even when no local task names it', async () => {
+  it('keeps an old worktree whose own in-use mark is fresh even when no local task names it', async () => {
     const { root, home } = makeHome();
     const [marked, idle] = seedStaleWorktrees(home, 'repoabc123456', ['marked', 'idle']);
     mkdirSync(join(home, 'in-use', 'worktrees', 'repoabc123456'), { recursive: true });
@@ -297,13 +300,13 @@ describe('reapStaleWorktrees', () => {
       userHome: root,
       runLocalGit: removingLocalGit(),
       taskStore: worktreeTaskStore([]),
-    } as any);
+    });
 
     expect(existsSync(join(marked!, 'file.txt'))).toBe(true);
     expect(existsSync(idle!)).toBe(false);
   });
 
-  it.fails('removes nothing locally or remotely and reports why when no task store is given', async () => {
+  it('removes nothing locally or remotely and reports why when no task store is given', async () => {
     const { root, home } = makeHome();
     const [old] = seedStaleWorktrees(home, 'repoabc123456', ['old']);
     const runRemoteScript = vi.fn(async () => '');
@@ -321,7 +324,7 @@ describe('reapStaleWorktrees', () => {
     expect(results.map((result) => result.reason)).toEqual(['no-task-store', 'no-task-store']);
   });
 
-  it.fails('keeps in-use and freshly marked worktrees when the remote reap script runs for real', async () => {
+  it('keeps in-use and freshly marked worktrees when the remote reap script runs for real', async () => {
     const { root, home } = makeHome();
     const [inUse, marked, idle] = seedStaleWorktrees(home, 'repoabc123456', ['in-use', 'marked', 'idle']);
     mkdirSync(join(home, 'in-use', 'worktrees', 'repoabc123456'), { recursive: true });
@@ -342,7 +345,7 @@ describe('reapStaleWorktrees', () => {
       remoteTargets: [{ name: 'owner-host', connection: { host: 'h', user: 'u', sshKeyPath: '/k' }, remotePath: home }],
       runRemoteScript,
       taskStore: worktreeTaskStore([{ status: 'running', workspacePath: inUse! }]),
-    } as any);
+    });
 
     expect(runRemoteScript).toHaveBeenCalledTimes(1);
     expect(existsSync(join(inUse!, 'file.txt'))).toBe(true);
@@ -351,7 +354,7 @@ describe('reapStaleWorktrees', () => {
   });
 
   it('does not include the orphan glob in the stale-worktree remote script', () => {
-    const script = buildStaleWorktreeReapScript('~/.invoker', STALE_WORKTREE_MIN_AGE_HOURS);
+    const script = buildStaleWorktreeReapScript('~/.invoker', STALE_WORKTREE_MIN_AGE_HOURS, []);
     expect(script).toContain('$INVOKER_HOME/worktrees');
     expect(script).toContain('$INVOKER_HOME/repos/$repo_hash');
     expect(script).not.toContain("'*.deleting.*'");
