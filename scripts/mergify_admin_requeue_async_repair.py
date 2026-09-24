@@ -248,6 +248,17 @@ def _shlex(value: str) -> str:
 
 _JOB_LOG_EXCERPT_MAX_CHARS = 20000
 
+_JOB_LOG_ERROR_SIGNAL = re.compile(
+    r"##\[error\]|\b(?:errors?|failed|failure|fatal|panic|exception|traceback"
+    r"|refused|denied|rejected|unable|cannot|missing)\b"
+    r"|\bexit(?:ed)?\b[^\n]*\bcode\b|exitcode|\btimed out\b|not found",
+    re.IGNORECASE,
+)
+
+
+def _extract_error_signal(text: str) -> str:
+    return "\n".join(line for line in text.split("\n") if _JOB_LOG_ERROR_SIGNAL.search(line))
+
 
 def _job_log_excerpt(log_path: str) -> str:
     # log_path (from GhExecutor.download_job_log) is a local tempfile on the
@@ -263,6 +274,16 @@ def _job_log_excerpt(log_path: str) -> str:
         return "(not available)"
     if not text:
         return "(empty)"
+    if len(text) <= _JOB_LOG_EXCERPT_MAX_CHARS:
+        return text
+    # A blind tail is anchored to the end of the log, but a CI job ends with
+    # post-job cleanup, not with its error, so the failing step can fall
+    # outside the budget entirely. Keep the failure lines first and fall back
+    # to the raw tail only when nothing matches (same contract as
+    # buildAgentExitFailureDetail in packages/execution-engine, PR #6305).
+    signal = _extract_error_signal(text)
+    if signal:
+        return signal[-_JOB_LOG_EXCERPT_MAX_CHARS:]
     return text[-_JOB_LOG_EXCERPT_MAX_CHARS:]
 
 
