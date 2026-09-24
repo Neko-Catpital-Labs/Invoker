@@ -864,6 +864,26 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(capturedScript).toContain("'worktrees/hash1/branch'");
   });
 
+  it('reads a leading-~ target home made of many slashes in linear time', async () => {
+    const target = makeTarget({ remotePath: `~/${'/'.repeat(20_000)}x` });
+    const store: DiskHeadroomWorkerStore = {
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: () => [
+        makeTask({
+          id: 'wf-1/remote-task',
+          status: 'running',
+          config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'remote-1' },
+          execution: { workspacePath: '/home/invoker/.invoker/worktrees/hash1/branch' },
+        }),
+      ],
+    };
+    const runRemoteScript = vi.fn(async () => 'ok');
+
+    const result = await cleanupRemoteInvokerHome({ target, store, runRemoteScript });
+
+    expect(result.ok).toBe(true);
+  }, 2_000);
+
   it('passes mode through to the generated script and result reason, defaulting to critical', async () => {
     const target = makeTarget();
     const capturedScripts: string[] = [];

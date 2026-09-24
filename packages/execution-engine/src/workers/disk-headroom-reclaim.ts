@@ -909,9 +909,15 @@ function snapshotStoreOrThrow(store: DiskHeadroomWorkerStore): DiskHeadroomWorke
   };
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end -= 1;
+  return value.slice(0, end);
+}
+
 function relativeToRemoteHome(path: string, remoteHome: string): string | undefined {
   if (remoteHome.startsWith('~/')) {
-    const marker = `/${remoteHome.slice(2).replace(/\/+$/, '')}/`;
+    const marker = `/${trimTrailingSlashes(remoteHome.slice(2))}/`;
     const index = path.indexOf(marker);
     return index === -1 ? undefined : path.slice(index + marker.length) || undefined;
   }
