@@ -15,10 +15,17 @@ type Router = {
   NON_PUBLISHING_OUTPUTS: Set<string>;
   DELEGATE_HANDOFF_STEPS: string[];
   SUBAGENT_FANOUT_STEPS: string[];
+  SUBAGENT_PER_UNIT_STEPS: string[];
   normalizeWorkKind(workKind: string): string;
-  routeExecution(args: { tools: string[]; workKind: string }): string;
+  routeExecution(args: { tools: string[]; workKind: string; units?: unknown; userDirectedSubagents?: boolean }): string;
   publishes(args: { workKind: string; produces: unknown }): boolean;
-  routeDelegation(args: { tools: string[]; workKind: string; produces: unknown }): string;
+  routeDelegation(args: {
+    tools: string[];
+    workKind: string;
+    produces: unknown;
+    units?: unknown;
+    userDirectedSubagents?: boolean;
+  }): string;
   handoffStepsFor(route: string): string[];
 };
 
@@ -60,6 +67,55 @@ describe('route-delegation execution table', () => {
         'invoker_submit_plan',
         'invoker_cli_wait_then_end_turn',
       ]);
+    }
+  });
+});
+
+describe('route-delegation publishing unit count', () => {
+  it('never runs many publishing units serially in the parent chat', () => {
+    for (const workKind of ['durable_parallel', 'approved_plan', 'post_land_babysit', 'small_local']) {
+      for (const tools of [router.INVOKER_REQUIRED_TOOLS, []]) {
+        expect(router.routeExecution({ tools, workKind, units: 13 })).not.toBe('local');
+      }
+    }
+  });
+
+  it('prefers one Invoker workflow per unit, else one worktree subagent per unit', () => {
+    const tools = router.INVOKER_REQUIRED_TOOLS;
+    expect(router.routeExecution({ tools, workKind: 'post_land_babysit', units: 13 })).toBe('delegate_invoker');
+    expect(router.routeExecution({ tools: [], workKind: 'post_land_babysit', units: 13 })).toBe(
+      'subagent_worktree_per_unit',
+    );
+    expect(
+      router.routeExecution({ tools, workKind: 'post_land_babysit', units: 13, userDirectedSubagents: true }),
+    ).toBe('subagent_worktree_per_unit');
+    const steps = router.handoffStepsFor('subagent_worktree_per_unit');
+    expect(steps).toEqual(router.SUBAGENT_PER_UNIT_STEPS);
+    expect(steps[0]).toBe('one_worktree_per_unit');
+    expect(steps).toContain('grep_transcripts_for_writes');
+  });
+
+  it('reaches the per-unit route through routeDelegation for publishing work', () => {
+    expect(
+      router.routeDelegation({ tools: [], workKind: 'durable_parallel', produces: ['pull_request'], units: 4 }),
+    ).toBe('subagent_worktree_per_unit');
+  });
+
+  it('keeps many read-only units on the plain fan-out', () => {
+    expect(router.routeExecution({ tools: [], workKind: 'readonly', units: 5 })).toBe('local');
+    expect(router.routeDelegation({ tools: [], workKind: 'readonly', produces: ['report'], units: 5 })).toBe(
+      'subagent_fanout',
+    );
+  });
+
+  it('keeps existing routes for a single unit', () => {
+    expect(router.routeExecution({ tools: [], workKind: 'approved_plan', units: 1 })).toBe('local');
+    expect(router.routeExecution({ tools: [], workKind: 'approved_plan' })).toBe('local');
+  });
+
+  it('rejects a unit count that is not a positive integer', () => {
+    for (const units of [0, -1, 1.5, '3', null]) {
+      expect(() => router.routeExecution({ tools: [], workKind: 'durable_parallel', units })).toThrow(/units must be/);
     }
   });
 });
@@ -133,6 +189,18 @@ describe('route-delegation CLI', () => {
     expect(out.steps).toContain('invoker_submit_plan');
   });
 
+  it('routes a many-stack request to one worktree subagent per unit when Invoker is missing', () => {
+    const payload = JSON.stringify({
+      tools: [],
+      work_kind: 'post_land_babysit',
+      produces: ['merge'],
+      units: 13,
+    });
+    const out = JSON.parse(execFileSync(process.execPath, [scriptPath, payload], { encoding: 'utf8' }));
+    expect(out.route).toBe('subagent_worktree_per_unit');
+    expect(out.steps[0]).toBe('one_worktree_per_unit');
+  });
+
   it('exits non-zero on an undeclared output', () => {
     const payload = JSON.stringify({ tools: [], work_kind: 'durable_parallel', produces: [] });
     const result = spawnSync(process.execPath, [scriptPath, payload], { encoding: 'utf8' });
@@ -150,6 +218,8 @@ describe('route-delegation skill contract', () => {
     expect(skill).toContain('skill://chat-submit/SKILL.md');
     expect(skill).toContain('scripts/route-delegation.mjs');
     expect(skill).toContain('invoker-route-delegation');
+    expect(skill).toContain('subagent_worktree_per_unit');
+    expect(skill).toContain('never serial');
   });
 
   it('is reachable from chat-submit', () => {
