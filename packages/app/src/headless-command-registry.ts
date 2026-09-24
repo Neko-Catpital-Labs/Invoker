@@ -99,7 +99,7 @@ export interface AgentLoginCommandResult {
 }
 
 export type AgentLoginCommandRequest =
-  | { subcommand: 'start'; provider: AgentLoginProvider; output: AgentLoginOutputFormat }
+  | { subcommand: 'start'; provider: AgentLoginProvider; output: AgentLoginOutputFormat; host?: string }
   | { subcommand: 'code'; sessionId: string; code: string; output: AgentLoginOutputFormat }
   | { subcommand: 'status'; sessionId: string; output: AgentLoginOutputFormat };
 
@@ -107,6 +107,7 @@ export interface AgentLoginSessionModule {
   startAgentLogin(
     provider: AgentLoginProvider,
     deps?: AgentLoginSessionDependencies,
+    host?: string,
   ): Promise<AgentLoginSessionStatusView>;
   submitAgentLoginCode(
     sessionId: string,
@@ -142,11 +143,25 @@ function parseAgentLoginOutput(args: string[]): AgentLoginOutputFormat {
   return value;
 }
 
+function parseAgentLoginHost(args: string[]): string | undefined {
+  const index = args.indexOf('--host');
+  if (index === -1) return undefined;
+  const value = args[index + 1]?.trim();
+  if (!value || value.startsWith('--')) {
+    throw new AgentLoginCommandError('agent-login requires a host after --host.');
+  }
+  return value;
+}
+
 function agentLoginPositionalArgs(args: string[]): string[] {
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--output') {
+      i += 1;
+      continue;
+    }
+    if (arg === '--host') {
       i += 1;
       continue;
     }
@@ -176,6 +191,7 @@ function requireAgentLoginArg(value: string | undefined, label: string): string 
 
 export function parseAgentLoginCommand(args: string[]): AgentLoginCommandRequest {
   const output = parseAgentLoginOutput(args);
+  const host = parseAgentLoginHost(args);
   const positional = agentLoginPositionalArgs(args);
   const subcommand = positional[0];
   if (!subcommand) {
@@ -199,7 +215,11 @@ export function parseAgentLoginCommand(args: string[]): AgentLoginCommandRequest
         `Unknown agent-login provider "${provider}". Must be claude|codex.`,
       );
     }
-    return { subcommand, provider, output };
+    return { subcommand, provider, output, ...(host ? { host } : {}) };
+  }
+
+  if (host) {
+    throw new AgentLoginCommandError('Unknown agent-login option "--host".');
   }
 
   const sessionId = requireAgentLoginArg(positional[1], 'session id');
@@ -266,12 +286,16 @@ function rejectAgentLoginCode(sessionId: string, status: AgentLoginSessionStatus
 export async function runAgentLoginCommand(
   args: string[],
   sessionModule?: AgentLoginSessionModule,
+  startDeps?: AgentLoginSessionDependencies,
 ): Promise<AgentLoginCommandResult> {
   const request = parseAgentLoginCommand(args);
   const loginSessions = sessionModule ?? (await loadAgentLoginSessionModule());
 
   if (request.subcommand === 'start') {
-    return toAgentLoginCommandResult(await loginSessions.startAgentLogin(request.provider));
+    const started = request.host
+      ? await loginSessions.startAgentLogin(request.provider, startDeps, request.host)
+      : await loginSessions.startAgentLogin(request.provider);
+    return toAgentLoginCommandResult(started);
   }
 
   let current: AgentLoginSessionStatusView;
