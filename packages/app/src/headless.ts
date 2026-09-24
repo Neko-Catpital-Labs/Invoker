@@ -272,10 +272,23 @@ async function headlessInstallSkills(
   }
 }
 
-async function headlessAgentLogin(args: string[]): Promise<AgentLoginCommandResult> {
-  const { output } = parseAgentLoginCommand(args);
-  const result = await runAgentLoginCommand(args);
-  process.stdout.write(`${formatAgentLoginCommandResult(result, output)}\n`);
+async function headlessAgentLogin(args: string[], deps: HeadlessDeps): Promise<AgentLoginCommandResult> {
+  const request = parseAgentLoginCommand(args);
+  const startDeps = request.subcommand === 'start' && request.host
+    ? {
+        remoteTargets: Object.entries(deps.invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+          name,
+          connection: {
+            host: target.host,
+            user: target.user,
+            sshKeyPath: target.sshKeyPath,
+            port: target.port,
+          },
+        })),
+      }
+    : undefined;
+  const result = await runAgentLoginCommand(args, undefined, startDeps);
+  process.stdout.write(`${formatAgentLoginCommandResult(result, request.output)}\n`);
   return result;
 }
 
@@ -445,7 +458,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<u
       await headlessQuerySelect(args[1], deps);
       break;
     case 'agent-login':
-      return await headlessAgentLogin(args.slice(1));
+      return await headlessAgentLogin(args.slice(1), deps);
     case 'worker':
       await headlessWorker(args.slice(1), deps);
       break;
