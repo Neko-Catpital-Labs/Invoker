@@ -586,7 +586,9 @@ class TestMachineSessionCount(unittest.TestCase):
         _proc, report = run_collect(session_limit=2)
         self.assertEqual(len(report["sessions"]), 2)
         self.assertEqual(report["session_count"], 6)
-        self.assertEqual(self.merged_for(report)["machines"]["mac"]["sessions"], 6)
+        merged = self.merged_for(report)
+        self.assertEqual(merged["machines"]["mac"]["total"], 505722)
+        self.assertEqual(merged["machines"]["mac"]["sessions"], 6)
 
     def test_report_without_session_count_falls_back_to_the_list(self):
         _proc, report = run_collect()
