@@ -426,6 +426,7 @@ describe('infra-repair worker', () => {
 
     expect(h.cleanupRemoteInvokerHomeFn).toHaveBeenCalledTimes(1);
     expect(h.cleanupRemoteInvokerHomeFn).toHaveBeenCalledWith(expect.objectContaining({
+      store: expect.objectContaining({ listWorkflows: expect.any(Function), loadTasks: expect.any(Function) }),
       target: expect.objectContaining({
         name: 'remote-1',
         connection: expect.objectContaining({ host: '203.0.113.10' }),

@@ -789,7 +789,7 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(result.reason).toBe('warn-paced');
   });
 
-  it.fails('preserves every in-flight task on the host, whichever pool member or local target launched it', async () => {
+  it('preserves every in-flight task on the host, whichever pool member or local target launched it', async () => {
     const target = makeTarget({ name: 'remote-1', remotePath: '/home/invoker/.invoker' });
 
     const store: DiskHeadroomWorkerStore = {
@@ -839,7 +839,7 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(capturedScripts[0]).not.toContain('worktrees/hash4/branch');
   });
 
-  it.fails('preserves in-flight workspaces when the target home is written with a leading ~', async () => {
+  it('preserves in-flight workspaces when the target home is written with a leading ~', async () => {
     const target = makeTarget({ remotePath: '~/.invoker' });
     const store: DiskHeadroomWorkerStore = {
       listWorkflows: () => [{ id: 'wf-1' }],
@@ -884,7 +884,7 @@ describe('cleanupRemoteInvokerHome', () => {
     expect(capturedScripts[1]).toContain("pkill -9 -f 'pnpm install");
   });
 
-  it.fails('keeps an owner-local task workspace when a remote target names the owner host itself and the script runs for real', async () => {
+  it('keeps an owner-local task workspace when a remote target names the owner host itself and the script runs for real', async () => {
     const root = mkdtempSync(join(tmpdir(), 'invoker-remote-self-target-'));
     try {
       const invokerHome = join(root, 'home');
@@ -930,7 +930,7 @@ describe('cleanupRemoteInvokerHome', () => {
     }
   });
 
-  it.fails('refuses a critical run and sends nothing when no task store is provided', async () => {
+  it('refuses a critical run and sends nothing when no task store is provided', async () => {
     const target = makeTarget();
     const runRemoteScript = vi.fn(async () => 'ok');
 
