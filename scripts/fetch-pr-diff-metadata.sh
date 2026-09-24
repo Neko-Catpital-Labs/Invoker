@@ -51,6 +51,10 @@ if [ -z "$merge_base" ]; then
   merge_base="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")"
 fi
 
+commit_landed_nothing() {
+  [ -z "$(git diff-tree -r --no-commit-id --name-only "$1")" ]
+}
+
 our_commits="$(git log --format=%H --reverse "$merge_base..$HEAD_SHA")"
 if [ -n "$our_commits" ]; then
   cherry_marks="$(git cherry "origin/$BASE_REF" "$HEAD_SHA" "$merge_base")"
@@ -58,6 +62,9 @@ if [ -n "$our_commits" ]; then
   landed_prefix_end=""
   seen_new=0
   for commit in $our_commits; do
+    if commit_landed_nothing "$commit"; then
+      continue
+    fi
     mark="$(printf '%s\n' "$cherry_marks" | awk -v sha="$commit" '$2 == sha { print $1 }')"
     if [ "$mark" = "-" ]; then
       if [ "$seen_new" = "1" ]; then
