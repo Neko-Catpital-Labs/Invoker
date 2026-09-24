@@ -26,9 +26,82 @@ export function sessionHash(sessionId, workflowName = '') {
 const CWD_WORKTREE_RE = /experiment-wf-\d+-\d+-(.+?)-g\d+\.t\d+\.a-/;
 const CWD_MERGE_RE = /merge-clones\//;
 const CWD_SCRATCH_RE = /invoker-scratch-/;
-const PHASE_MARKER_RE = /^\s*(?:#+\s*)?(?:phase|step|checkpoint)\s*[:#]?\s*\d+/i;
-const READONLY_BASH_RE = /^\s*(cat|head|tail|less|ls|pwd|git status|git diff|git log)\b/;
+const PHASE_MARKER_RE = /^\s*(?:#+\s*)?(?:phase|step|checkpoint)\s*[:#]?\s*(?:\d+|[a-z][\w-]*)/i;
+const READONLY_BASH_RE = /^\s*(cat|head|tail|less|ls|pwd|git status|git diff|git log|rg|grep|sed|find)\b/;
 const PROOF_BASH_RE = /(pnpm\s+(?:run\s+)?test|npm\s+test|npx\s+vitest|vitest\b|pytest\b|python3?\s+-m\s+unittest|--self-test|self-test)/i;
+
+function taskClassFromCwd(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return '';
+  const m = CWD_WORKTREE_RE.exec(cwd);
+  if (m) return m[1];
+  if (CWD_MERGE_RE.test(cwd)) return 'merge-clone';
+  if (CWD_SCRATCH_RE.test(cwd)) return 'scratch';
+  return '';
+}
+
+function commandStatus(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  if (payload.status === 'completed') return true;
+  if (payload.status === 'failed' || payload.status === 'errored') return false;
+  return null;
+}
+
+function collectTextBlocks(row, msg, payload) {
+  const texts = [];
+  const visitContent = (content) => {
+    if (typeof content === 'string') texts.push(content);
+    else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (typeof block?.text === 'string') texts.push(block.text);
+      }
+    }
+  };
+  visitContent(msg?.content);
+  visitContent(payload?.content);
+  if (typeof row.text === 'string') texts.push(row.text);
+  return texts;
+}
+
+function classifySemanticStructure(summary) {
+  const progress = summary.progressSignals;
+  const repeatedReloads = summary.contextReloads.repeatedReadPaths.length
+    + summary.contextReloads.repeatedReadonlyCommands.length
+    + summary.contextReloads.repeatedCommands.length;
+  const successfulProof = summary.proofMarkers.some((m) => m.success === true);
+  const completed = summary.outcomeMarkers.some((m) => m.kind === 'task_complete' || m.kind === 'result_success');
+  const failed = summary.outcomeMarkers.some((m) => m.kind === 'error_event' || m.kind === 'result_error');
+
+  if ((progress.toolUseEdits > 0 || successfulProof || completed) && !failed) {
+    return {
+      label: 'structural-progress',
+      confidence: successfulProof || completed ? 'high' : 'medium',
+      signals: {
+        edits: progress.toolUseEdits,
+        successfulProofs: summary.proofMarkers.filter((m) => m.success === true).length,
+        completed,
+        repeatedReloads,
+      },
+    };
+  }
+  if (progress.toolUseEdits === 0 && !successfulProof && !completed && repeatedReloads > 0) {
+    return {
+      label: 'repeated-exploration',
+      confidence: repeatedReloads >= 2 ? 'high' : 'medium',
+      signals: { repeatedReloads, failed },
+    };
+  }
+  return {
+    label: 'inconclusive',
+    confidence: 'low',
+    signals: {
+      edits: progress.toolUseEdits,
+      proofMarkers: summary.proofMarkers.length,
+      completed,
+      failed,
+      repeatedReloads,
+    },
+  };
+}
 
 export function summarizeSessionStructure(text) {
   const lines = text.split(/\r?\n/).filter(Boolean);
@@ -38,14 +111,32 @@ export function summarizeSessionStructure(text) {
   let toolUseEdits = 0;
   let toolResultSuccesses = 0;
   let toolResultFailures = 0;
+  let commandExecutionCount = 0;
   let finalResult = null;
   const readPathCounts = new Map();
   const readonlyCmdCounts = new Map();
+  const commandCounts = new Map();
   const proofMarkers = [];
+  const outcomeMarkers = [];
   const checkpointCandidates = [];
   const pendingBashById = new Map();
   const parseErrors = [];
   let index = -1;
+
+  const recordCommand = (cmd, source, status = null, callId = '') => {
+    if (!cmd) return;
+    commandExecutionCount += 1;
+    commandCounts.set(cmd, (commandCounts.get(cmd) ?? 0) + 1);
+    if (READONLY_BASH_RE.test(cmd)) {
+      readonlyCmdCounts.set(cmd, (readonlyCmdCounts.get(cmd) ?? 0) + 1);
+    }
+    if (PROOF_BASH_RE.test(cmd) && source !== 'claude-tool-use') {
+      const marker = { command: cmd.slice(0, 200), index, success: status, source };
+      proofMarkers.push(marker);
+      if (status === true) checkpointCandidates.push({ index, kind: 'proof', detail: marker.command });
+    }
+    if (callId) pendingBashById.set(callId, cmd);
+  };
 
   for (const line of lines) {
     index += 1;
@@ -57,11 +148,18 @@ export function summarizeSessionStructure(text) {
       continue;
     }
 
-    if (!taskClass && typeof row.cwd === 'string' && row.cwd) {
-      const m = CWD_WORKTREE_RE.exec(row.cwd);
-      if (m) taskClass = m[1];
-      else if (CWD_MERGE_RE.test(row.cwd)) taskClass = 'merge-clone';
-      else if (CWD_SCRATCH_RE.test(row.cwd)) taskClass = 'scratch';
+    const payload = row.payload ?? {};
+    if (!taskClass) {
+      taskClass = taskClassFromCwd(row.cwd) || taskClassFromCwd(payload.cwd);
+    }
+
+    if (row.type === 'event_msg' && typeof payload.type === 'string') {
+      if (payload.type === 'task_complete') {
+        outcomeMarkers.push({ index, kind: 'task_complete', source: 'codex-event' });
+        checkpointCandidates.push({ index, kind: 'task-complete', detail: 'codex-event' });
+      } else if (payload.type === 'error') {
+        outcomeMarkers.push({ index, kind: 'error_event', source: 'codex-event' });
+      }
     }
 
     if (row.type === 'result' && typeof row.subtype === 'string') {
@@ -71,19 +169,35 @@ export function summarizeSessionStructure(text) {
         numTurns: typeof row.num_turns === 'number' ? row.num_turns : null,
         durationMs: typeof row.duration_ms === 'number' ? row.duration_ms : null,
       };
+      outcomeMarkers.push({
+        index,
+        kind: row.is_error ? 'result_error' : 'result_success',
+        source: 'claude-result',
+        subtype: row.subtype,
+      });
     }
 
     const msg = row.message ?? row;
     const role = msg.role ?? row.type;
+    for (const textBlock of collectTextBlocks(row, msg, payload)) {
+      for (const textLine of textBlock.split('\n')) {
+        if (PHASE_MARKER_RE.test(textLine)) phaseMarkers.push(textLine.trim().slice(0, 200));
+      }
+    }
+
+    if (row.type === 'response_item') {
+      let codexCmd = '';
+      if (payload.type === 'custom_tool_call' && payload.name === 'exec') {
+        codexCmd = extractCodexExecCommandFromJsInput(payload.input);
+      } else if (payload.type === 'function_call' && payload.name === 'exec_command') {
+        codexCmd = extractCodexExecCommandFromArguments(payload.arguments);
+      }
+      if (codexCmd) recordCommand(codexCmd, 'codex-response-item', commandStatus(payload), payload.call_id ?? payload.id ?? '');
+    }
 
     if (role === 'assistant' || row.type === 'assistant') {
       const content = Array.isArray(msg.content) ? msg.content : [];
       for (const block of content) {
-        if (block?.type === 'text' && typeof block.text === 'string') {
-          for (const textLine of block.text.split('\n')) {
-            if (PHASE_MARKER_RE.test(textLine)) phaseMarkers.push(textLine.trim().slice(0, 200));
-          }
-        }
         if (block?.type !== 'tool_use') continue;
         if (block.name === 'Edit' || block.name === 'Write') {
           toolUseEdits += 1;
@@ -93,10 +207,7 @@ export function summarizeSessionStructure(text) {
           if (p) readPathCounts.set(p, (readPathCounts.get(p) ?? 0) + 1);
         } else if (block.name === 'Bash' || block.name === 'bash') {
           const cmd = String(block.input?.command ?? block.input?.cmd ?? '').trim();
-          if (cmd && block.id) pendingBashById.set(block.id, cmd);
-          if (READONLY_BASH_RE.test(cmd)) {
-            readonlyCmdCounts.set(cmd, (readonlyCmdCounts.get(cmd) ?? 0) + 1);
-          }
+          recordCommand(cmd, 'claude-tool-use', null, block.id);
         }
       }
     }
@@ -114,6 +225,14 @@ export function summarizeSessionStructure(text) {
             proofMarkers.push(marker);
             if (!isError) checkpointCandidates.push({ index, kind: 'proof', detail: marker.command });
           }
+          if (cmd) {
+            outcomeMarkers.push({
+              index,
+              kind: isError ? 'tool_result_error' : 'tool_result_success',
+              source: 'claude-tool-result',
+              command: cmd.slice(0, 200),
+            });
+          }
         }
       }
     }
@@ -127,6 +246,8 @@ export function summarizeSessionStructure(text) {
   for (const [p, c] of readPathCounts) if (c > 1) repeatedReadPaths.push({ path: p, count: c });
   const repeatedReadonlyCommands = [];
   for (const [c, n] of readonlyCmdCounts) if (n > 1) repeatedReadonlyCommands.push({ command: c, count: n });
+  const repeatedCommands = [];
+  for (const [c, n] of commandCounts) if (n > 1) repeatedCommands.push({ command: c.slice(0, 200), count: n });
 
   return {
     taskClass: taskClass || 'unknown',
@@ -135,13 +256,23 @@ export function summarizeSessionStructure(text) {
       toolUseEdits,
       toolResultSuccesses,
       toolResultFailures,
+      commandExecutionCount,
       finalResult,
+    },
+    evidenceSignals: {
+      proofCommandCount: proofMarkers.length,
+      successfulProofCount: proofMarkers.filter((m) => m.success === true).length,
+      failedProofCount: proofMarkers.filter((m) => m.success === false).length,
+      taskCompleteCount: outcomeMarkers.filter((m) => m.kind === 'task_complete').length,
+      errorEventCount: outcomeMarkers.filter((m) => m.kind === 'error_event' || m.kind === 'result_error').length,
     },
     contextReloads: {
       repeatedReadPaths: repeatedReadPaths.slice(0, 20),
       repeatedReadonlyCommands: repeatedReadonlyCommands.slice(0, 20),
+      repeatedCommands: repeatedCommands.slice(0, 20),
     },
     proofMarkers: proofMarkers.slice(0, 20),
+    outcomeMarkers: outcomeMarkers.slice(0, 20),
     checkpointCandidates: checkpointCandidates.slice(0, 20),
     parseErrors: parseErrors.slice(0, 5),
   };
@@ -282,6 +413,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     reasons.push(`same_bash_argv=${maxSameBash}>=${thresholds.minSameBashArgv}`);
   }
 
+  const structuralSummary = summarizeSessionStructure(text);
   return {
     assistantTurns,
     cacheReadTokens,
@@ -291,7 +423,8 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     totalTokens,
     thrash: reasons.length > 0,
     reasons,
-    structuralSummary: summarizeSessionStructure(text),
+    structuralSummary,
+    semanticClassification: classifySemanticStructure(structuralSummary),
   };
 }
 
@@ -305,6 +438,7 @@ export function analyzeClaudeJsonlFile(path, thresholds = DEFAULT_THRESHOLDS) {
       totalTokens: 0,
       maxSameBash: 0,
       structuralSummary: null,
+      semanticClassification: null,
     };
   }
   return analyzeClaudeJsonl(readFileSync(path, 'utf8'), thresholds);
@@ -470,6 +604,8 @@ function selfTest() {
 
   const productive = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-productive-long.jsonl'));
   const exploration = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-repeated-exploration.jsonl'));
+  const codexProductive = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'codex-typed-progress.jsonl'));
+  const codexExploration = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'codex-repeated-exploration.jsonl'));
   if (productive.structuralSummary.taskClass !== 'fix-flaky-retry') {
     throw new Error(`expected productive taskClass fix-flaky-retry, got ${productive.structuralSummary.taskClass}`);
   }
@@ -479,8 +615,8 @@ function selfTest() {
   if (productive.structuralSummary.proofMarkers.length !== 1 || !productive.structuralSummary.proofMarkers[0].success) {
     throw new Error(`expected one successful proof marker, got ${JSON.stringify(productive.structuralSummary.proofMarkers)}`);
   }
-  if (productive.structuralSummary.phaseMarkers.length !== 2) {
-    throw new Error(`expected 2 phase markers, got ${JSON.stringify(productive.structuralSummary.phaseMarkers)}`);
+  if (productive.structuralSummary.phaseMarkers.length !== 3) {
+    throw new Error(`expected 3 phase markers, got ${JSON.stringify(productive.structuralSummary.phaseMarkers)}`);
   }
   if (productive.structuralSummary.contextReloads.repeatedReadonlyCommands.length !== 0) {
     throw new Error('productive fixture must have no repeated readonly commands');
@@ -498,6 +634,30 @@ function selfTest() {
   if (productive.structuralSummary.checkpointCandidates.length <= exploration.structuralSummary.checkpointCandidates.length) {
     throw new Error('expected productive session to surface more checkpoint candidates than repeated exploration');
   }
+  if (productive.semanticClassification.label !== 'structural-progress') {
+    throw new Error(`expected productive semantic classification structural-progress, got ${JSON.stringify(productive.semanticClassification)}`);
+  }
+  if (exploration.semanticClassification.label !== 'repeated-exploration') {
+    throw new Error(`expected exploration semantic classification repeated-exploration, got ${JSON.stringify(exploration.semanticClassification)}`);
+  }
+  if (codexProductive.structuralSummary.taskClass !== 'fix-token-bench') {
+    throw new Error(`expected codex taskClass fix-token-bench, got ${codexProductive.structuralSummary.taskClass}`);
+  }
+  if (codexProductive.structuralSummary.evidenceSignals.taskCompleteCount !== 1) {
+    throw new Error(`expected codex task_complete evidence, got ${JSON.stringify(codexProductive.structuralSummary.evidenceSignals)}`);
+  }
+  if (!codexProductive.structuralSummary.proofMarkers.some((m) => m.command === 'pnpm test' && m.success === true)) {
+    throw new Error(`expected codex typed proof command, got ${JSON.stringify(codexProductive.structuralSummary.proofMarkers)}`);
+  }
+  if (codexProductive.semanticClassification.label !== 'structural-progress') {
+    throw new Error(`expected codex productive semantic classification structural-progress, got ${JSON.stringify(codexProductive.semanticClassification)}`);
+  }
+  if (!codexExploration.structuralSummary.contextReloads.repeatedCommands.some((r) => r.command === 'rg -n token scripts' && r.count === 4)) {
+    throw new Error(`expected codex repeated command x4, got ${JSON.stringify(codexExploration.structuralSummary.contextReloads)}`);
+  }
+  if (codexExploration.semanticClassification.label !== 'repeated-exploration') {
+    throw new Error(`expected codex exploration semantic classification repeated-exploration, got ${JSON.stringify(codexExploration.semanticClassification)}`);
+  }
 
   console.log(JSON.stringify({
     ok: true,
@@ -510,6 +670,8 @@ function selfTest() {
     codexNegativeThrash: codexNeg.thrash,
     productiveStructuralSummary: productive.structuralSummary,
     explorationStructuralSummary: exploration.structuralSummary,
+    codexProductiveStructuralSummary: codexProductive.structuralSummary,
+    codexExplorationStructuralSummary: codexExploration.structuralSummary,
   }, null, 2));
 }
 
