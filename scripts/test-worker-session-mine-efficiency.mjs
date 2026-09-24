@@ -352,11 +352,67 @@ try {
     check('tickets-send-no-labels', created.every((payload) => (payload.labelIds ?? []).length === 0), `expected no labelIds, got ${JSON.stringify(created[0]?.labelIds)}`);
   }
 
+  {
+    const dir = freshRoot('tickets-prefix');
+    const searchOut = join(dir, 'search.json');
+    writeFileSync(searchOut, JSON.stringify({
+      issues: [{
+        id: 'issue-2',
+        identifier: 'INV-3',
+        title: 'Forks start at a median 562K copied context',
+        description: 'Motivation: token-pattern:fork-copies-562k\n',
+        state: { type: 'started' },
+      }],
+    }));
+    const createdLog = join(dir, 'created.jsonl');
+    writeFileSync(createdLog, '');
+    const findings = join(dir, 'findings.json');
+    writeFileSync(findings, JSON.stringify({
+      findings: [
+        {
+          slug: 'fork',
+          title: 'Forks are spawned for work one session could finish',
+          goal: 'Stop forking for trivial work',
+          motivation: 'Most forks never diverge from their parent',
+          safetyInvariant: 'Analysis only',
+          verify: 'node scripts/test-worker-session-mine-efficiency.mjs',
+          repo: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+          suggestedFix: 'Fork only past a context threshold',
+          evidence: '61 forks, median 562K copied context',
+        },
+      ],
+    }));
+
+    const result = spawnSync('node', [TICKETS, '--findings', findings], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        INVOKER_LINEAR_SEARCH_CMD: `cat ${searchOut}`,
+        INVOKER_LINEAR_CREATE_CMD: `cat >> ${createdLog}; printf '\\n' >> ${createdLog}; echo '{"id":"new","identifier":"INV-4"}'`,
+        INVOKER_LINEAR_LABEL_NAMES: '',
+      },
+    });
+    const out = `${result.stdout || ''}${result.stderr || ''}`;
+    check('tickets-prefix-exit-0', result.status === 0, `exit=${result.status}\n${out}`);
+    const created = readFileSync(createdLog, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    check(
+      'tickets-prefix-slug-still-filed',
+      created.length === 1,
+      `a slug that is a prefix of another open marker must still be filed, got ${created.length}\n${out}`,
+    );
+    check(
+      'tickets-prefix-carries-own-marker',
+      /token-pattern:fork(?![a-z0-9-])/.test(created[0]?.description ?? ''),
+      `expected the new ticket to carry token-pattern:fork, got:\n${JSON.stringify(created[0])}`,
+    );
+  }
+
   if (failures.length > 0) {
     for (const failure of failures) console.error(`FAIL ${failure}`);
     process.exit(1);
   }
-  console.log(JSON.stringify({ ok: true, checks: 25 }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks: 28 }, null, 2));
 } finally {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 }

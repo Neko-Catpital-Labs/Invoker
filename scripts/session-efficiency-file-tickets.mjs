@@ -10,6 +10,7 @@ const REPO_ROOT = resolve(__dirname, '..');
 const CREATE_SCRIPT = join(REPO_ROOT, 'scripts', 'linear-issue-create.mjs');
 const LABEL_READY = 'invoker-ready';
 const MARKER_PREFIX = 'token-pattern:';
+const MARKER_CHAR = /[a-z0-9-]/;
 const CLOSED_STATE_TYPES = new Set(['completed', 'canceled', 'cancelled']);
 const DEFAULT_REPO = 'https://github.com/Neko-Catpital-Labs/Invoker.git';
 const SEARCH_TIMEOUT_MS = Number(process.env.INVOKER_LINEAR_SEARCH_TIMEOUT_MS ?? '120000');
@@ -80,11 +81,24 @@ async function fetchOpenIssues() {
   return data?.issues?.nodes ?? [];
 }
 
+function containsMarker(text, marker) {
+  const haystack = String(text ?? '');
+  for (let from = 0; from <= haystack.length; ) {
+    const at = haystack.indexOf(marker, from);
+    if (at < 0) return false;
+    const before = haystack[at - 1] ?? '';
+    const after = haystack[at + marker.length] ?? '';
+    if (!MARKER_CHAR.test(before) && !MARKER_CHAR.test(after)) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
 function findOpenIssueWithMarker(issues, marker) {
   return issues.find((issue) => {
     const stateType = String(issue?.state?.type ?? '').toLowerCase();
     if (CLOSED_STATE_TYPES.has(stateType)) return false;
-    return `${issue?.title ?? ''}\n${issue?.description ?? ''}`.includes(marker);
+    return containsMarker(`${issue?.title ?? ''}\n${issue?.description ?? ''}`, marker);
   }) ?? null;
 }
 
