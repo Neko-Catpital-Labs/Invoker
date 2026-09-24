@@ -237,6 +237,8 @@ describe('planning terminal drives the running invoker', () => {
     await vi.waitFor(
       () => {
         expect(output).toMatch(/delete-all \w+ by live owner/);
+        expect(output).toContain('delete-all queued by live owner (not yet applied; re-read with invoker-cli query to confirm).');
+        expect(output).not.toContain('accepted');
       },
       { timeout: 20_000, interval: 250 },
     );
