@@ -35,3 +35,10 @@ already been written, so nothing in the recorded pair was tuned from those resul
 The pairs used different tasks, graders, harnesses, and treatments. They are not repeats of one
 experiment and must not be pooled. The only pair this directory's `verify-recorded` vouches for
 is `pilot-001` (edit-task-pool).
+
+## What attempt `g4.t16.a-a6490ed2f` did
+
+It ran no new trial and wrote no new evaluator code. It cherry-picked `g3.t15`'s three commits
+unchanged onto base `2107253a6`, then re-ran `self-test` (68 passed, 0 failed), `verify-recorded`
+(OK, exit 0), and `pilot` (refused, exit 2). The `pilot-001` ledger still has 8 events, the same as
+before this attempt. The outputs are in `g4-*-output.txt`. This attempt made no model calls.
