@@ -51,3 +51,7 @@ __pycache__/
 /bazel-*
 /.bazelrc.user
 user.bazelrc
+
+# PR Body diff metadata (scripts/fetch-pr-diff-metadata.sh)
+/changed-files.txt
+/pr.diff
