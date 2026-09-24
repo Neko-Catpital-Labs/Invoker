@@ -416,10 +416,25 @@ export async function runRepoLocalPrBodyChecker(args: {
   }
 }
 
-function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
+type AssistantBodyPredicate = (body: string) => boolean;
+
+function extractAssistantBody(
+  driver: SessionDriver | undefined,
+  sessionId: string,
+  fallback: string,
+  isUsableBody?: AssistantBodyPredicate,
+): string {
   const rawSession = driver?.loadSession(sessionId);
   if (rawSession && driver) {
     const messages = driver.parseSession(rawSession);
+    if (isUsableBody) {
+      for (let idx = messages.length - 1; idx >= 0; idx--) {
+        const message = messages[idx];
+        if (message?.role !== 'assistant' || !message.content.trim()) continue;
+        const body = message.content.trim();
+        if (isUsableBody(body)) return body;
+      }
+    }
     for (let idx = messages.length - 1; idx >= 0; idx--) {
       const message = messages[idx];
       if (message?.role === 'assistant' && message.content.trim()) {
@@ -1037,6 +1052,7 @@ export function spawnAgentPrAuthorViaRegistry(
   agent: ExecutionAgent,
   driver?: SessionDriver,
   extraEnv: NodeJS.ProcessEnv = {},
+  isUsableBody?: AssistantBodyPredicate,
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
@@ -1104,7 +1120,7 @@ export function spawnAgentPrAuthorViaRegistry(
           const effectiveSessionId = realId ?? sessionId;
           const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
           if (code === 0) {
-            const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
+            const body = extractAssistantBody(driver, effectiveSessionId, displayStdout, isUsableBody);
             resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
             return;
           }

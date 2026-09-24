@@ -17,6 +17,7 @@ import {
   validateReviewStackPrBody,
 } from '../pr-authoring.js';
 import type { ExecutionAgent } from '../agent.js';
+import type { SessionDriver } from '../session-driver.js';
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -647,6 +648,53 @@ describe('resolveSkillPathViaAgent', () => {
 // ── spawnAgentPrAuthorViaRegistry ───────────────────────
 
 describe('spawnAgentPrAuthorViaRegistry', () => {
+  it('uses the latest assistant message that satisfies the supplied body predicate', async () => {
+    const tmpDir = createTempDir();
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const agent: ExecutionAgent = {
+      name: 'claude',
+      stdinMode: 'ignore',
+      buildCommand: () => ({
+        cmd: process.execPath,
+        args: ['-e', 'process.stdout.write("session complete")'],
+        sessionId: 'session-with-stop-hook',
+      }),
+      buildResumeArgs: () => ({ cmd: process.execPath, args: ['-e', ''] }),
+    };
+    const driver: SessionDriver = {
+      processOutput: (_sessionId, rawStdout) => rawStdout,
+      loadSession: () => 'session',
+      parseSession: () => [
+        { role: 'assistant', content: payload, timestamp: '2026-09-24T23:28:40.000Z' },
+        {
+          role: 'assistant',
+          content: 'The output is complete. The JSON was my final answer.',
+          timestamp: '2026-09-24T23:29:26.000Z',
+        },
+      ],
+      inspectSession: () => ({ state: 'finished' }),
+    };
+
+    const result = await spawnAgentPrAuthorViaRegistry(
+      'publish stack',
+      tmpDir,
+      agent,
+      driver,
+      {},
+      (body) => {
+        try {
+          parseMakePrStackPublishResult(body);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    );
+
+    expect(result.body).toBe(payload);
+    expect(parseMakePrStackPublishResult(result.body)[0]?.id).toBe('a');
+  });
+
   it('times out and rejects when the PR-authoring agent never exits', async () => {
     const tmpDir = createTempDir();
     const previousTimeout = process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS;
