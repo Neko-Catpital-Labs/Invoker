@@ -186,6 +186,10 @@ export function handleCompletedImpl(
   return started;
 }
 
+function isAgentTask(task: TaskState): boolean {
+  return typeof task.config.prompt === 'string' && task.config.prompt.length > 0;
+}
+
 /**
  * Marks a task as failed, writes to DB atomically (task + attempt), logs event,
  * publishes delta, checks for newly ready tasks, and returns newly started tasks.
@@ -212,7 +216,8 @@ export function finalizeFailedTaskImpl(
 
   const failureClass = executionFields.failureClass
     ?? FailureClassifier.classifyError(executionFields.error)
-    ?? FailureClassifier.classifyWorkFailure(executionFields.error);
+    ?? FailureClassifier.classifyWorkFailure(executionFields.error)
+    ?? (isAgentTask(existing) ? FailureClassifier.classifyAgentQuotaRefusal(executionFields.error) : undefined);
 
   const changes: TaskStateChanges = {
     status: 'failed',
