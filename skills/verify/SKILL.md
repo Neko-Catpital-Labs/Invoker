@@ -59,7 +59,7 @@ testids:
 Body uses the four headings: Sub-features, How to get to it (user POV), Driving
 it with control-invoker, Gotchas.
 
-Maintain drift with `skills/maintain-verify/SKILL.md` and `catalog --check`.
+Maintain drift with `catalog --check`.
 
 ## Efficacy fixtures
 
