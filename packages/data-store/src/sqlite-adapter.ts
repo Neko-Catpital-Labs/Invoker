@@ -308,6 +308,24 @@ export interface ExecutionResourceLease {
   metadata?: unknown;
 }
 
+interface QueueHistoryEvent {
+  eventType: string;
+  workflowId?: string | null;
+  taskId?: string | null;
+  attemptId?: string | null;
+  dispatchId?: number | null;
+  resourceKey?: string | null;
+  resourceType?: string | null;
+  holderId?: string | null;
+  fromState?: string | null;
+  toState?: string | null;
+  queuePosition?: number | null;
+  queueSize?: number | null;
+  payload?: Record<string, unknown>;
+  unknownFields?: string[];
+  recordedAt?: string;
+}
+
 type SQLiteParams = unknown[] | Record<string, unknown>;
 
 function normalizeParams(params: SQLiteParams = []): unknown[] | Record<string, unknown> {
@@ -1282,6 +1300,72 @@ export class SQLiteAdapter implements PersistenceAdapter {
          ON terminal_sessions(target_key)
          WHERE status = 'running'`,
     );
+  }
+
+  private appendQueueHistory(event: QueueHistoryEvent): void {
+    this.execRun(
+      `INSERT INTO queue_history (
+          recorded_at, event_type, workflow_id, task_id, attempt_id, dispatch_id,
+          resource_key, resource_type, holder_id, from_state, to_state,
+          queue_position, queue_size, payload_json, unknown_fields
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        event.recordedAt ?? new Date().toISOString(),
+        event.eventType,
+        event.workflowId ?? null,
+        event.taskId ?? null,
+        event.attemptId ?? null,
+        event.dispatchId ?? null,
+        event.resourceKey ?? null,
+        event.resourceType ?? null,
+        event.holderId ?? null,
+        event.fromState ?? null,
+        event.toState ?? 'unknown',
+        event.queuePosition ?? null,
+        event.queueSize ?? null,
+        JSON.stringify(event.payload ?? {}),
+        JSON.stringify(event.unknownFields ?? []),
+      ],
+    );
+  }
+
+  private appendQueueSnapshot(workflowId: string, cause: string): void {
+    const rows = this.queryAll(
+      `SELECT id, task_id, attempt_id, priority
+         FROM task_launch_dispatch
+        WHERE workflow_id = ?
+          AND state = 'enqueued'
+        ORDER BY CAST(priority AS INTEGER) ASC, id ASC`,
+      [workflowId],
+    );
+    if (rows.length === 0) {
+      this.appendQueueHistory({
+        eventType: 'queue_snapshot',
+        workflowId,
+        toState: 'empty',
+        queueSize: 0,
+        payload: { cause },
+        unknownFields: ['task_id', 'attempt_id', 'dispatch_id', 'queue_position'],
+      });
+      return;
+    }
+    const queueSize = rows.length;
+    rows.forEach((row, index) => {
+      this.appendQueueHistory({
+        eventType: 'queue_snapshot',
+        workflowId,
+        taskId: String(row.task_id),
+        attemptId: String(row.attempt_id),
+        dispatchId: Number(row.id),
+        toState: 'enqueued',
+        queuePosition: index + 1,
+        queueSize,
+        payload: {
+          cause,
+          priority: Number(row.priority ?? 2),
+        },
+      });
+    });
   }
 
   // ── Workflows ─────────────────────────────────────────
@@ -4029,10 +4113,34 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const leaseExpiresAt = new Date(now.getTime() + (options.leaseMs ?? EXECUTION_RESOURCE_LEASE_MS)).toISOString();
     const maxHolders = Math.max(1, Math.floor(options.maxHolders ?? 1));
     return this.runTransaction(() => {
+      const expiredRows = this.queryAll(
+        `SELECT resource_key, resource_type, holder_id, task_id
+           FROM execution_resource_leases
+          WHERE resource_key = ?
+            AND lease_expires_at <= ?
+          ORDER BY holder_id ASC`,
+        [options.resourceKey, nowIso],
+      );
       this.execRun(
         'DELETE FROM execution_resource_leases WHERE resource_key = ? AND lease_expires_at <= ?',
         [options.resourceKey, nowIso],
       );
+      for (const row of expiredRows) {
+        this.appendQueueHistory({
+          eventType: 'executor_settlement',
+          taskId: row.task_id ? String(row.task_id) : null,
+          resourceKey: String(row.resource_key),
+          resourceType: row.resource_type ? String(row.resource_type) : null,
+          holderId: String(row.holder_id),
+          fromState: 'leased',
+          toState: 'expired',
+          payload: { source: 'claimExecutionResourceLease' },
+          unknownFields: [
+            ...(row.task_id ? [] : ['task_id']),
+            ...(row.resource_type ? [] : ['resource_type']),
+          ],
+        });
+      }
       const existingForHolder = this.queryOne(
         `SELECT holder_id FROM execution_resource_leases
          WHERE resource_key = ?
@@ -4071,6 +4179,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
           options.metadata === undefined ? null : JSON.stringify(options.metadata),
         ],
       );
+      this.appendQueueHistory({
+        eventType: 'executor_admission',
+        taskId: options.taskId ?? null,
+        resourceKey: options.resourceKey,
+        resourceType: options.resourceType,
+        holderId: options.holderId,
+        fromState: existingForHolder ? 'leased' : null,
+        toState: 'leased',
+        payload: {
+          poolId: options.poolId ?? null,
+          poolMemberId: options.poolMemberId ?? null,
+          maxHolders,
+        },
+        unknownFields: [
+          ...(options.taskId ? [] : ['task_id']),
+          ...(existingForHolder ? [] : ['from_state']),
+        ],
+      });
       return true;
     });
   }
@@ -4132,10 +4258,35 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   releaseExecutionResourceLease(resourceKey: string, holderId: string): void {
-    this.execRun(
-      'DELETE FROM execution_resource_leases WHERE resource_key = ? AND holder_id = ?',
-      [resourceKey, holderId],
-    );
+    this.runTransaction(() => {
+      const row = this.queryOne(
+        `SELECT resource_key, resource_type, holder_id, task_id
+           FROM execution_resource_leases
+          WHERE resource_key = ?
+            AND holder_id = ?`,
+        [resourceKey, holderId],
+      );
+      this.execRun(
+        'DELETE FROM execution_resource_leases WHERE resource_key = ? AND holder_id = ?',
+        [resourceKey, holderId],
+      );
+      this.appendQueueHistory({
+        eventType: 'executor_settlement',
+        taskId: row?.task_id ? String(row.task_id) : null,
+        resourceKey,
+        resourceType: row?.resource_type ? String(row.resource_type) : null,
+        holderId,
+        fromState: row ? 'leased' : null,
+        toState: row ? 'released' : 'unknown',
+        payload: { source: 'releaseExecutionResourceLease' },
+        unknownFields: row
+          ? [
+              ...(row.task_id ? [] : ['task_id']),
+              ...(row.resource_type ? [] : ['resource_type']),
+            ]
+          : ['task_id', 'resource_type', 'from_state', 'to_state'],
+      });
+    });
   }
 
   /**
@@ -4150,11 +4301,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
    */
   releaseExpiredExecutionResourceLeases(nowIso?: string): number {
     const cutoff = nowIso ?? new Date().toISOString();
-    this.execRun(
-      'DELETE FROM execution_resource_leases WHERE lease_expires_at <= ?',
-      [cutoff],
-    );
-    return (this.db.getRowsModified?.() ?? 0) as number;
+    return this.runTransaction(() => {
+      const rows = this.queryAll(
+        `SELECT resource_key, resource_type, holder_id, task_id
+           FROM execution_resource_leases
+          WHERE lease_expires_at <= ?
+          ORDER BY resource_key ASC, holder_id ASC`,
+        [cutoff],
+      );
+      this.execRun(
+        'DELETE FROM execution_resource_leases WHERE lease_expires_at <= ?',
+        [cutoff],
+      );
+      const released = (this.db.getRowsModified?.() ?? 0) as number;
+      for (const row of rows) {
+        this.appendQueueHistory({
+          eventType: 'executor_settlement',
+          taskId: row.task_id ? String(row.task_id) : null,
+          resourceKey: String(row.resource_key),
+          resourceType: row.resource_type ? String(row.resource_type) : null,
+          holderId: String(row.holder_id),
+          fromState: 'leased',
+          toState: 'expired',
+          payload: { source: 'releaseExpiredExecutionResourceLeases' },
+          unknownFields: [
+            ...(row.task_id ? [] : ['task_id']),
+            ...(row.resource_type ? [] : ['resource_type']),
+          ],
+        });
+      }
+      return released;
+    });
   }
 
   /**
@@ -4249,6 +4426,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ids,
       );
 
+      for (const row of rows) {
+        this.appendQueueHistory({
+          eventType: 'executor_settlement',
+          taskId: row.task_id ? String(row.task_id) : undefined,
+          resourceKey: String(row.resource_key),
+          resourceType: String(row.resource_type),
+          holderId: String(row.holder_id),
+          fromState: 'leased',
+          toState: 'released',
+          payload: { source: 'releaseExecutionResourceLeasesForTasks' },
+          unknownFields: row.task_id ? [] : ['task_id'],
+        });
+      }
+
       return rows.map((row) => ({
         resourceKey: String(row.resource_key),
         resourceType: String(row.resource_type),
@@ -4290,6 +4481,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
       }
       this.dirty = true;
       const dispatch = this.rowToTaskLaunchDispatch(inserted);
+      this.appendQueueHistory({
+        eventType: 'dispatch_state_transition',
+        workflowId: input.workflowId,
+        taskId: input.taskId,
+        attemptId: input.attemptId,
+        dispatchId: dispatch.id,
+        fromState: null,
+        toState: 'enqueued',
+        payload: {
+          source: 'enqueueLaunchDispatch',
+          generation: input.generation,
+          priority,
+        },
+        unknownFields: ['from_state'],
+      });
+      this.appendQueueSnapshot(input.workflowId, 'enqueueLaunchDispatch');
       if (!input.suppressEvent) {
         this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
           dispatchId: dispatch.id,
@@ -4412,6 +4619,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
                AND state = 'enqueued'`,
             [now, staleReason, candidateId],
           );
+          this.appendQueueHistory({
+            eventType: 'dispatch_state_transition',
+            workflowId: String(candidate.workflow_id),
+            taskId: String(candidate.task_id),
+            attemptId: String(candidate.attempt_id),
+            dispatchId: candidateId,
+            fromState: 'enqueued',
+            toState: 'abandoned',
+            payload: {
+              source: 'claimLaunchDispatchAtomic',
+              reason: staleReason,
+              abandonReason: 'stale-claim',
+            },
+          });
+          this.appendQueueSnapshot(String(candidate.workflow_id), 'staleLaunchDispatchClaim');
           continue;
         }
 
@@ -4434,6 +4656,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
         );
         if (!row) return undefined;
         const dispatch = this.rowToTaskLaunchDispatch(row);
+        this.appendQueueHistory({
+          eventType: 'dispatch_state_transition',
+          workflowId: dispatch.workflowId,
+          taskId: dispatch.taskId,
+          attemptId: dispatch.attemptId,
+          dispatchId: dispatch.id,
+          fromState: 'enqueued',
+          toState: 'leased',
+          payload: {
+            source: 'claimLaunchDispatchAtomic',
+            ownerId: options.ownerId,
+            generation: dispatch.generation,
+            fencedUntil: dispatch.fencedUntil ?? null,
+          },
+        });
+        this.appendQueueSnapshot(dispatch.workflowId, 'claimLaunchDispatchAtomic');
         this.logEvent(dispatch.taskId, 'task.launch_dispatch_claimed', {
           dispatchId: dispatch.id,
           ownerId: options.ownerId,
@@ -4449,15 +4687,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   markLaunchDispatchCompleted(id: number, nowIso?: string): boolean {
     const now = nowIso ?? new Date().toISOString();
-    this.execRun(
-      `UPDATE task_launch_dispatch
-         SET state = 'completed',
-             completed_at = ?
-       WHERE id = ?
-         AND state NOT IN ('completed', 'abandoned')`,
-      [now, id],
-    );
-    return (this.db.getRowsModified?.() ?? 0) > 0;
+    return this.runTransaction(() => {
+      const before = this.queryOne('SELECT * FROM task_launch_dispatch WHERE id = ?', [id]);
+      this.execRun(
+        `UPDATE task_launch_dispatch
+           SET state = 'completed',
+               completed_at = ?
+         WHERE id = ?
+           AND state NOT IN ('completed', 'abandoned')`,
+        [now, id],
+      );
+      const changed = (this.db.getRowsModified?.() ?? 0) > 0;
+      if (changed && before) {
+        this.appendQueueHistory({
+          eventType: 'dispatch_state_transition',
+          workflowId: String(before.workflow_id),
+          taskId: String(before.task_id),
+          attemptId: String(before.attempt_id),
+          dispatchId: id,
+          fromState: String(before.state),
+          toState: 'completed',
+          payload: { source: 'markLaunchDispatchCompleted' },
+        });
+      }
+      return changed;
+    });
   }
 
   /**
@@ -4474,14 +4728,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
    */
   markLaunchDispatchAccepted(id: number, nowIso?: string): boolean {
     const now = nowIso ?? new Date().toISOString();
-    this.execRun(
-      `UPDATE task_launch_dispatch
-         SET acknowledged_at = COALESCE(acknowledged_at, ?)
-       WHERE id = ?
-         AND state = 'leased'`,
-      [now, id],
-    );
-    return (this.db.getRowsModified?.() ?? 0) > 0;
+    return this.runTransaction(() => {
+      const before = this.queryOne('SELECT * FROM task_launch_dispatch WHERE id = ?', [id]);
+      this.execRun(
+        `UPDATE task_launch_dispatch
+           SET acknowledged_at = COALESCE(acknowledged_at, ?)
+         WHERE id = ?
+           AND state = 'leased'`,
+        [now, id],
+      );
+      const changed = (this.db.getRowsModified?.() ?? 0) > 0;
+      if (changed && before && before.acknowledged_at == null) {
+        this.appendQueueHistory({
+          eventType: 'executor_admission',
+          workflowId: String(before.workflow_id),
+          taskId: String(before.task_id),
+          attemptId: String(before.attempt_id),
+          dispatchId: id,
+          fromState: String(before.state),
+          toState: 'accepted',
+          payload: { source: 'markLaunchDispatchAccepted' },
+        });
+      }
+      return changed;
+    });
   }
 
   /** Guarded by `acknowledged_at IS NULL`: an accepted row must not be silently re-enqueued after a failure. */
@@ -4490,18 +4760,36 @@ export class SQLiteAdapter implements PersistenceAdapter {
     errorMessage: string,
     _nowIso?: string,
   ): boolean {
-    this.execRun(
-      `UPDATE task_launch_dispatch
-         SET state = 'enqueued',
-             last_error = ?,
-             dispatch_owner = NULL,
-             fenced_until = NULL
-       WHERE id = ?
-         AND state NOT IN ('completed', 'abandoned')
-         AND acknowledged_at IS NULL`,
-      [errorMessage, id],
-    );
-    return (this.db.getRowsModified?.() ?? 0) > 0;
+    return this.runTransaction(() => {
+      const before = this.queryOne('SELECT * FROM task_launch_dispatch WHERE id = ?', [id]);
+      this.execRun(
+        `UPDATE task_launch_dispatch
+           SET state = 'enqueued',
+               last_error = ?,
+               dispatch_owner = NULL,
+               fenced_until = NULL
+         WHERE id = ?
+           AND state NOT IN ('completed', 'abandoned')
+           AND acknowledged_at IS NULL`,
+        [errorMessage, id],
+      );
+      const changed = (this.db.getRowsModified?.() ?? 0) > 0;
+      if (changed && before) {
+        const workflowId = String(before.workflow_id);
+        this.appendQueueHistory({
+          eventType: 'dispatch_state_transition',
+          workflowId,
+          taskId: String(before.task_id),
+          attemptId: String(before.attempt_id),
+          dispatchId: id,
+          fromState: String(before.state),
+          toState: 'enqueued',
+          payload: { source: 'markLaunchDispatchFailed', errorMessage },
+        });
+        this.appendQueueSnapshot(workflowId, 'markLaunchDispatchFailed');
+      }
+      return changed;
+    });
   }
 
   listAbandonableLaunchDispatchLeases(options: {
@@ -4542,19 +4830,41 @@ export class SQLiteAdapter implements PersistenceAdapter {
     abandonReason?: string,
   ): boolean {
     const now = nowIso ?? new Date().toISOString();
-    this.execRun(
-      `UPDATE task_launch_dispatch
-         SET state = 'abandoned',
-             completed_at = ?,
-             last_error = ?,
-             dispatch_owner = NULL,
-             fenced_until = NULL,
-             abandon_reason = COALESCE(?, abandon_reason)
-       WHERE id = ?
-         AND state NOT IN ('completed', 'abandoned')`,
-      [now, errorMessage, abandonReason ?? null, id],
-    );
-    return (this.db.getRowsModified?.() ?? 0) > 0;
+    return this.runTransaction(() => {
+      const before = this.queryOne('SELECT * FROM task_launch_dispatch WHERE id = ?', [id]);
+      this.execRun(
+        `UPDATE task_launch_dispatch
+           SET state = 'abandoned',
+               completed_at = ?,
+               last_error = ?,
+               dispatch_owner = NULL,
+               fenced_until = NULL,
+               abandon_reason = COALESCE(?, abandon_reason)
+         WHERE id = ?
+           AND state NOT IN ('completed', 'abandoned')`,
+        [now, errorMessage, abandonReason ?? null, id],
+      );
+      const changed = (this.db.getRowsModified?.() ?? 0) > 0;
+      if (changed && before) {
+        const workflowId = String(before.workflow_id);
+        this.appendQueueHistory({
+          eventType: 'dispatch_state_transition',
+          workflowId,
+          taskId: String(before.task_id),
+          attemptId: String(before.attempt_id),
+          dispatchId: id,
+          fromState: String(before.state),
+          toState: 'abandoned',
+          payload: {
+            source: 'markLaunchDispatchAbandoned',
+            errorMessage,
+            abandonReason: abandonReason ?? null,
+          },
+        });
+        this.appendQueueSnapshot(workflowId, 'markLaunchDispatchAbandoned');
+      }
+      return changed;
+    });
   }
 
   abandonLaunchDispatchesForTasks(
@@ -4592,6 +4902,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
             AND state IN ('enqueued', 'leased')`,
         [now, reason, ...rowIds],
       );
+      for (const row of rows) {
+        this.appendQueueHistory({
+          eventType: 'dispatch_state_transition',
+          workflowId: String(row.workflow_id),
+          taskId: String(row.task_id),
+          attemptId: String(row.attempt_id),
+          dispatchId: Number(row.id),
+          fromState: String(row.state),
+          toState: 'abandoned',
+          payload: {
+            source: 'abandonLaunchDispatchesForTasks',
+            reason,
+            abandonReason: 'lifecycle-reset',
+          },
+        });
+      }
+      for (const workflowId of new Set(rows.map((row) => String(row.workflow_id)))) {
+        this.appendQueueSnapshot(workflowId, 'abandonLaunchDispatchesForTasks');
+      }
 
       return rows.map((row) => ({
         id: Number(row.id),
@@ -4638,10 +4967,23 @@ export class SQLiteAdapter implements PersistenceAdapter {
            AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
-      return expired.map((row) => {
-        const reset = { ...row, state: 'enqueued', dispatch_owner: null, fenced_until: null };
-        return this.rowToTaskLaunchDispatch(reset);
-      });
+      for (const row of expired) {
+        this.appendQueueHistory({
+          eventType: 'dispatch_state_transition',
+          workflowId: String(row.workflow_id),
+          taskId: String(row.task_id),
+          attemptId: String(row.attempt_id),
+          dispatchId: Number(row.id),
+          fromState: String(row.state),
+          toState: 'enqueued',
+          payload: { source: 'reapExpiredLaunchDispatchLeases' },
+        });
+      }
+      for (const workflowId of new Set(expired.map((row) => String(row.workflow_id)))) {
+        this.appendQueueSnapshot(workflowId, 'reapExpiredLaunchDispatchLeases');
+      }
+      return expired.map((row) =>
+        this.rowToTaskLaunchDispatch({ ...row, state: 'enqueued', dispatch_owner: null, fenced_until: null }));
     });
   }
 
