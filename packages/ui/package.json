@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "NODE_OPTIONS='--max-old-space-size=4096' vite build && tsup src/lib/workflow-core-activity.ts --format esm --out-dir dist/lib --clean false",
-    "test": "node scripts/run-vitest.mjs"
+    "test": "node scripts/run-vitest.mjs",
+    "typecheck": "node scripts/typecheck-baseline.mjs"
   },
   "dependencies": {
     "@invoker/contracts": "workspace:*",
