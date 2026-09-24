@@ -570,6 +570,17 @@ describe('make-pr stack publish body contract', () => {
     expect(parsed[0]?.id).toBe('a');
   });
 
+  it('unwraps a successful agent result envelope before validating artifact JSON', () => {
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const raw = JSON.stringify({
+      type: 'task_complete',
+      last_agent_message: payload,
+    });
+    const parsed = parseMakePrStackPublishResult(raw);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.id).toBe('a');
+  });
+
   it('still throws "must output JSON" for genuinely non-JSON output', () => {
     expect(() => parseMakePrStackPublishResult('I could not publish the PR stack.')).toThrow(
       'make-pr stack publisher must output JSON',

@@ -576,6 +576,28 @@ function extractJsonPayload(raw: string): string {
   return lastValid ?? trimmed;
 }
 
+function tryParseJson(raw: string): unknown | undefined {
+  try {
+    return JSON.parse(raw.trim());
+  } catch {
+    try {
+      return JSON.parse(extractJsonPayload(raw));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function agentResultMessage(parsed: unknown): string | undefined {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const record = parsed as Record<string, unknown>;
+  for (const key of ['last_agent_message', 'result']) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
 export function extractAgentReportedError(stdout: string): string | undefined {
   if (!stdout) return undefined;
   for (const match of stdout.matchAll(/"error"\s*:\s*\{/g)) {
@@ -594,15 +616,30 @@ export function extractAgentReportedError(stdout: string): string | undefined {
 }
 
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch {
-    try {
-      parsed = JSON.parse(extractJsonPayload(raw));
-    } catch {
-      throw new Error('make-pr stack publisher must output JSON');
+  let parsed: unknown | undefined;
+  const candidates = [raw.trim()];
+  const seen = new Set(candidates);
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const candidateParsed = tryParseJson(candidate);
+    if (candidateParsed === undefined) continue;
+
+    const nested = agentResultMessage(candidateParsed);
+    if (nested && !seen.has(nested)) {
+      seen.add(nested);
+      candidates.push(nested);
+      continue;
     }
+
+    parsed = candidateParsed;
+    const artifacts = !parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      ? undefined
+      : (parsed as { artifacts?: unknown }).artifacts;
+    if (Array.isArray(artifacts)) break;
+  }
+
+  if (parsed === undefined) {
+    throw new Error('make-pr stack publisher must output JSON');
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
