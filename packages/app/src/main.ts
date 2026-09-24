@@ -127,6 +127,7 @@ import {
   loadDefaultExecutionAgent,
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
+  resolveAgentLoginWatchWorkerConfig,
   resolveConfigFileState,
   resolveE2eAutoFixWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
@@ -513,6 +514,14 @@ function buildRegisteredOwnerWorkerDeps(
       repoUrl: invokerConfig.catstackDeploy?.repoUrl,
       localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
       remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+      remoteTargets: remoteTargets.map((target) => ({
+        name: target.name,
+        connection: target.connection,
+      })),
+    },
+    agentLoginWatch: {
+      ...resolveAgentLoginWatchWorkerConfig(invokerConfig),
+      enabled: true,
       remoteTargets: remoteTargets.map((target) => ({
         name: target.name,
         connection: target.connection,
