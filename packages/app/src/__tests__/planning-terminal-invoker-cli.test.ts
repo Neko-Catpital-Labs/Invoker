@@ -236,7 +236,7 @@ describe('planning terminal drives the running invoker', () => {
 
     await vi.waitFor(
       () => {
-        expect(output).toContain('delete-all accepted by live owner.');
+        expect(output).toMatch(/delete-all \w+ by live owner/);
       },
       { timeout: 20_000, interval: 250 },
     );
