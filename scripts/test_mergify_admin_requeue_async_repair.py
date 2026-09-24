@@ -376,7 +376,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertNotIn("id: normalize", plan.yaml_text)
         self.assertNotIn("mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
         self.assertNotIn("pr_worker_safe_push.py", plan.yaml_text)
-        self.assertIn("git push origin HEAD:", plan.yaml_text)
+        self.assertIn("git push --force-with-lease=refs/heads/'stack/2647':", plan.yaml_text)
         self.assertIn(HEAD, plan.yaml_text)
 
     def test_foreign_rebase_and_bot_thread_plans_omit_invoker_safe_push(self):
@@ -391,7 +391,16 @@ class AsyncRepairPlanTests(unittest.TestCase):
         for plan in (rebase_plan, bot_thread_plan):
             with self.subTest(plan=plan.plan_name):
                 self.assertNotIn("pr_worker_safe_push.py", plan.yaml_text)
-                self.assertIn("git push origin HEAD:", plan.yaml_text)
+                self.assertIn("git push --force-with-lease=refs/heads/'stack/2647':", plan.yaml_text)
+                self.assertNotIn("git push origin HEAD:", plan.yaml_text)
+
+    def test_foreign_rebase_safe_push_uses_force_with_lease(self):
+        rebase_plan = async_repair.build_rebase_onto_master_plan(
+            pr(), "GitHub reports merge conflict", repo="some-org/catstack",
+            start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"), foreign=True,
+        )
+        self.assertIn(f"--force-with-lease=refs/heads/'stack/2647':'{HEAD}'", rebase_plan.yaml_text)
+        self.assertNotIn("git push origin HEAD:", rebase_plan.yaml_text)
 
     def test_non_foreign_repair_check_plan_still_includes_invoker_helpers(self):
         # Default (foreign=False) behavior must stay exactly as it was before
