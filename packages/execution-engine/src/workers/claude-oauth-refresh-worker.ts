@@ -19,7 +19,7 @@ import {
   resolveCodexAuthPath,
 } from '../codex-oauth-refresh.js';
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
-import { execRemoteCapture } from '../ssh-git-exec.js';
+import { base64Encode, execRemoteCapture } from '../ssh-git-exec.js';
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
 import type { SshTargetConnection } from '../ssh-transport-options.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -112,6 +112,18 @@ function defaultWriteCredentials(path: string, contents: string): void {
   renameSync(tmpPath, path);
 }
 
+function buildPortableBase64DecodeFunction(functionName = 'invoker_base64_decode'): string {
+  return `${functionName}() {
+  if base64 --decode </dev/null >/dev/null 2>&1; then
+    base64 --decode
+  elif base64 -d </dev/null >/dev/null 2>&1; then
+    base64 -d
+  else
+    base64 -D
+  fi
+}`;
+}
+
 function remotePathAssignment(remotePath: string): string {
   if (remotePath === '~') return 'REMOTE_PATH="$HOME"';
   if (remotePath.startsWith('~/')) return `REMOTE_PATH="$HOME/${remotePath.slice(2)}"`;
@@ -121,6 +133,18 @@ function remotePathAssignment(remotePath: string): string {
 export function buildReadCredentialsScript(remotePath: string): string {
   return `${remotePathAssignment(remotePath)}
 cat "$REMOTE_PATH" 2>/dev/null || true`;
+}
+
+export function buildDistributeCredentialsScript(remotePath: string, credentialsJson: string): string {
+  const contentB64 = base64Encode(credentialsJson);
+  return `set -euo pipefail
+${buildPortableBase64DecodeFunction()}
+${remotePathAssignment(remotePath)}
+mkdir -p "$(dirname "$REMOTE_PATH")"
+TMP_PATH="$REMOTE_PATH.tmp-$$"
+printf '%s' '${contentB64}' | invoker_base64_decode > "$TMP_PATH"
+chmod 600 "$TMP_PATH"
+mv "$TMP_PATH" "$REMOTE_PATH"`;
 }
 
 async function defaultReadRemoteFile(target: ClaudeOauthRefreshTarget, remotePath: string, phase: string): Promise<string | null> {

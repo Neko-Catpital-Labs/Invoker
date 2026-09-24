@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  buildDistributeCredentialsScript,
+  buildReadCredentialsScript,
   createClaudeOauthRefreshWorker,
   runClaudeAndCodexOauthRefreshCheck,
   runClaudeOauthRefreshCheck,
@@ -498,6 +501,48 @@ describe('runClaudeAndCodexOauthRefreshCheck', () => {
     expect(statuses).toContain('local:completed');
     expect(statuses).not.toContain('do1:completed');
     expect(statuses.some((s) => s.startsWith('codex:'))).toBe(false);
+  });
+});
+
+describe('buildDistributeCredentialsScript', () => {
+  it('writes the credentials to a temp path and renames atomically into place', () => {
+    const script = buildDistributeCredentialsScript('~/.claude/.credentials.json', '{"a":1}');
+    expect(script).toContain('mv "$TMP_PATH" "$REMOTE_PATH"');
+    expect(script).toContain('chmod 600 "$TMP_PATH"');
+  });
+
+  it('writes to and reads from the real home-relative credentials file when run by bash', () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-oauth-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'invoker-oauth-cwd-'));
+    const runBash = (script: string) => spawnSync('bash', ['-s'], {
+      input: script,
+      cwd,
+      env: { ...process.env, HOME: home },
+      encoding: 'utf8',
+    });
+    try {
+      mkdirSync(join(home, '.claude'));
+      writeFileSync(join(home, '.claude', '.credentials.json'), '{"claudeAiOauth":{"accessToken":""}}');
+
+      const read = runBash(buildReadCredentialsScript('~/.claude/.credentials.json'));
+      expect(read.status).toBe(0);
+      expect(read.stdout).toBe('{"claudeAiOauth":{"accessToken":""}}');
+
+      const write = runBash(buildDistributeCredentialsScript('~/.claude/.credentials.json', '{"a":1}'));
+      expect(write.status).toBe(0);
+      expect(readFileSync(join(home, '.claude', '.credentials.json'), 'utf8')).toBe('{"a":1}');
+      expect(existsSync(join(cwd, '~'))).toBe(false);
+      expect(existsSync(join(home, '~'))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('base64-encodes the content so JSON quoting/special characters never break the remote shell', () => {
+    const script = buildDistributeCredentialsScript('/x', '{"token":"a\'b$(rm -rf /)"}');
+    expect(script).not.toContain('rm -rf /');
+    expect(script).toMatch(/printf '%s' '[A-Za-z0-9+/=]+' \| invoker_base64_decode/);
   });
 });
 
