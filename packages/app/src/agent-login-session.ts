@@ -21,6 +21,7 @@ import {
   buildReadCredentialsScript,
   buildSshConnectionArgs,
   execRemoteCapture,
+  shellPosixSingleQuote,
 } from '@invoker/execution-engine';
 
 import type { PtyForkOptionsLike, PtyLike, PtySpawnFn } from './embedded-terminal-manager.js';
@@ -50,6 +51,7 @@ export interface AgentLoginSessionStatusView {
 export type AgentLoginRemoteTarget = ClaudeOauthRefreshTarget;
 
 interface ChildProcessLike {
+  stdin?: { write(chunk: string): void; end(): void } | null;
   stdout?: { on(event: 'data', cb: (chunk: Buffer | string) => void): void } | null;
   stderr?: { on(event: 'data', cb: (chunk: Buffer | string) => void): void } | null;
   once(event: 'exit', cb: (code: number | null) => void): void;
@@ -80,6 +82,10 @@ export interface AgentLoginSessionDependencies {
   rmDirFn?: (path: string) => void;
 }
 
+export interface AgentLoginStartOptions {
+  host?: string;
+}
+
 export const DEFAULT_AGENT_LOGIN_SESSION_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_PARSE_TIMEOUT_MS = 30_000;
 const DEFAULT_CODEX_REMOTE_AUTH_PATH = '~/.codex/auth.json';
@@ -88,6 +94,7 @@ const ANSI_PATTERN = /\x1b(?:\[[0-9;]*[a-zA-Z]|\][^\x07\x1b]*(?:\x07|\x1b\\))/g;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/;
 const DEVICE_CODE_PATTERN = /\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/;
 const CLAUDE_OAUTH_TOKEN_PATTERN = /\b(sk-ant-oat\d{2}-[A-Za-z0-9_-]{10,})\b/;
+const REMOTE_CODEX_HOME_PATTERN = /\bINVOKER_CODEX_HOME=([^\s]+)/;
 
 export function stripAnsiColorCodes(text: string): string {
   return text.replace(ANSI_PATTERN, '');
@@ -104,6 +111,11 @@ export function parseCodexDeviceAuthOutput(rawOutput: string): { url: string; co
   const codeMatch = text.match(DEVICE_CODE_PATTERN);
   if (!urlMatch || !codeMatch) return null;
   return { url: urlMatch[0], code: codeMatch[1] };
+}
+
+function parseRemoteCodexHome(rawOutput: string): string | null {
+  const match = stripAnsiColorCodes(rawOutput).match(REMOTE_CODEX_HOME_PATTERN);
+  return match ? match[1] : null;
 }
 
 export function parseClaudeOauthToken(rawOutput: string): string | null {
@@ -311,6 +323,93 @@ async function defaultProbeCodex(codexHome: string, deps: AgentLoginSessionDepen
   });
 }
 
+function requireRemoteTarget(host: string, deps: AgentLoginSessionDependencies): AgentLoginRemoteTarget {
+  const target = (deps.remoteTargets ?? []).find((candidate) => candidate.name === host);
+  if (!target) {
+    throw new Error(`Unknown agent-login host "${host}".`);
+  }
+  return target;
+}
+
+function buildRemoteCodexLoginScript(): string {
+  return `set -euo pipefail
+CODEX_HOME="$(mktemp -d)"
+printf 'INVOKER_CODEX_HOME=%s\\n' "$CODEX_HOME"
+export CODEX_HOME
+codex login --device-auth`;
+}
+
+function buildRemoteCodexProbeInstallScript(codexHome: string): string {
+  const quotedCodexHome = shellPosixSingleQuote(codexHome);
+  return `set -euo pipefail
+CODEX_HOME=${quotedCodexHome} codex exec --skip-git-repo-check 'Reply with just the word ok' >/dev/null
+test -s ${quotedCodexHome}/auth.json
+mkdir -p "$HOME/.codex"
+TMP_PATH="$HOME/.codex/auth.json.incoming-$$"
+cp ${quotedCodexHome}/auth.json "$TMP_PATH"
+chmod 600 "$TMP_PATH"
+mv "$TMP_PATH" "$HOME/.codex/auth.json"`;
+}
+
+function buildRemoteCleanupScript(path: string): string {
+  return `rm -rf -- ${shellPosixSingleQuote(path)}`;
+}
+
+function spawnRemoteBash(
+  target: AgentLoginRemoteTarget,
+  script: string,
+  deps: AgentLoginSessionDependencies,
+): ChildProcessLike {
+  const spawnFn = deps.spawnFn ?? (nodeSpawn as unknown as AgentLoginSpawnFn);
+  const child = spawnFn('ssh', [...buildSshConnectionArgs(target.connection, { batchMode: true }), 'bash', '-s'], {
+    env: { ...process.env },
+    stdio: 'pipe',
+  });
+  if (!child.stdin) {
+    throw new Error('ssh process did not expose stdin');
+  }
+  child.stdin.write(script);
+  child.stdin.end();
+  return child;
+}
+
+async function cleanupRemoteCodexTempDir(
+  target: AgentLoginRemoteTarget,
+  tempDir: string | undefined,
+  deps: AgentLoginSessionDependencies,
+): Promise<void> {
+  if (!tempDir) return;
+  try {
+    await execRemoteCapture({
+      sshArgs: buildSshConnectionArgs(target.connection, { batchMode: true }),
+      script: buildRemoteCleanupScript(tempDir),
+      phase: `agent-login-cleanup:${target.name}`,
+    });
+  } catch (error) {
+    deps.logger?.warn('agent-login-session: failed to remove remote temp login dir', {
+      provider: 'codex',
+      target: target.name,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function probeAndInstallRemoteCodex(
+  target: AgentLoginRemoteTarget,
+  codexHome: string,
+): Promise<boolean> {
+  try {
+    await execRemoteCapture({
+      sshArgs: buildSshConnectionArgs(target.connection, { batchMode: true }),
+      script: buildRemoteCodexProbeInstallScript(codexHome),
+      phase: `agent-login-probe-install:${target.name}`,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function defaultProbeClaude(token: string, deps: AgentLoginSessionDependencies): Promise<boolean> {
   const spawnFn = deps.spawnFn ?? (nodeSpawn as unknown as AgentLoginSpawnFn);
   return new Promise((resolve) => {
@@ -465,6 +564,114 @@ async function beginCodexLogin(state: AgentLoginInternalState, deps: AgentLoginS
   })();
 }
 
+async function beginRemoteCodexLogin(
+  state: AgentLoginInternalState,
+  deps: AgentLoginSessionDependencies,
+  host: string,
+): Promise<void> {
+  let target: AgentLoginRemoteTarget;
+  try {
+    target = requireRemoteTarget(host, deps);
+  } catch (error) {
+    finalizeFailure(state, error instanceof Error ? error.message : String(error), deps, deps.now?.() ?? Date.now());
+    return;
+  }
+
+  const parseTimeoutMs = deps.parseTimeoutMs ?? DEFAULT_PARSE_TIMEOUT_MS;
+  let child: ChildProcessLike;
+  try {
+    child = spawnRemoteBash(target, buildRemoteCodexLoginScript(), deps);
+  } catch (error) {
+    finalizeFailure(state, error instanceof Error ? error.message : String(error), deps, deps.now?.() ?? Date.now());
+    return;
+  }
+
+  const parsed = createDeferred<{ url: string; code: string; tempDir: string }>();
+  let buffer = '';
+  let remoteTempDir: string | undefined;
+  const onData = (chunk: Buffer | string): void => {
+    buffer += chunk.toString();
+    remoteTempDir = parseRemoteCodexHome(buffer) ?? remoteTempDir;
+    const found = parseCodexDeviceAuthOutput(buffer);
+    if (found && remoteTempDir) parsed.resolve({ ...found, tempDir: remoteTempDir });
+  };
+  child.stdout?.on('data', onData);
+  child.stderr?.on('data', onData);
+
+  const exitPromise = new Promise<number | null>((resolve, reject) => {
+    child.once('exit', (code) => resolve(code));
+    child.once('error', (err) => reject(err));
+  });
+  exitPromise.catch((error) => parsed.reject(error));
+
+  let found: { url: string; code: string; tempDir: string };
+  try {
+    found = await withTimeout(
+      parsed.promise,
+      parseTimeoutMs,
+      'remote codex login did not print a device URL, code, and temp CODEX_HOME in time',
+    );
+  } catch (error) {
+    try {
+      child.kill();
+    } catch (killError) {
+      deps.logger?.debug('agent-login-session: remote codex login process kill failed (already exited)', {
+        sessionId: state.sessionId,
+        target: target.name,
+        reason: killError instanceof Error ? killError.message : String(killError),
+      });
+    }
+    await cleanupRemoteCodexTempDir(target, remoteTempDir, deps);
+    finalizeFailure(state, error instanceof Error ? error.message : String(error), deps, deps.now?.() ?? Date.now());
+    return;
+  }
+
+  state.loginUrl = found.url;
+  state.code = found.code;
+  transition(state, 'awaiting_user', deps.now?.() ?? Date.now());
+
+  void (async () => {
+    let exitCode: number | null;
+    try {
+      exitCode = await exitPromise;
+    } catch (error) {
+      await cleanupRemoteCodexTempDir(target, found.tempDir, deps);
+      finalizeFailure(
+        state,
+        `remote codex login process error: ${error instanceof Error ? error.message : String(error)}`,
+        deps,
+        deps.now?.() ?? Date.now(),
+      );
+      return;
+    }
+    if (exitCode !== 0) {
+      await cleanupRemoteCodexTempDir(target, found.tempDir, deps);
+      finalizeFailure(
+        state,
+        `remote codex login exited with code ${exitCode ?? 'null'}`,
+        deps,
+        deps.now?.() ?? Date.now(),
+      );
+      return;
+    }
+
+    transition(state, 'verifying', deps.now?.() ?? Date.now());
+    const probeOk = await probeAndInstallRemoteCodex(target, found.tempDir);
+    await cleanupRemoteCodexTempDir(target, found.tempDir, deps);
+    if (!probeOk) {
+      finalizeFailure(
+        state,
+        'Remote Codex login probe failed; the live Codex login was left untouched.',
+        deps,
+        deps.now?.() ?? Date.now(),
+      );
+      return;
+    }
+
+    finalizeSuccess(state, deps, deps.now?.() ?? Date.now());
+  })();
+}
+
 function loadNodePtySpawn(): PtySpawnFn {
   try {
     const nodeRequire = createRequire(__filename);
@@ -549,10 +756,15 @@ async function beginClaudeLogin(state: AgentLoginInternalState, deps: AgentLogin
 export async function startAgentLogin(
   provider: AgentLoginProvider,
   deps: AgentLoginSessionDependencies = {},
+  options: AgentLoginStartOptions = {},
 ): Promise<AgentLoginSessionStatusView> {
   const state = createSession(provider, deps);
   if (provider === 'codex') {
-    await beginCodexLogin(state, deps);
+    if (options.host) {
+      await beginRemoteCodexLogin(state, deps, options.host);
+    } else {
+      await beginCodexLogin(state, deps);
+    }
   } else {
     await beginClaudeLogin(state, deps);
   }
