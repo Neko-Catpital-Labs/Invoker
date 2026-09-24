@@ -556,7 +556,14 @@ function makeFinding(kind, filePath, line, source) {
 
 export function collectDiffAtomicityFindings(options = {}) {
   const { diffText, source = 'diff', reviewLane } = options;
-  const files = Array.isArray(options.files) ? options.files : parseUnifiedDiff(diffText, source);
+  const hasFiles = Array.isArray(options.files);
+  if (!hasFiles && typeof diffText !== 'string') {
+    throw new TypeError(
+      'collectDiffAtomicityFindings requires options.diffText (string) or options.files (array); '
+      + 'returning no findings for an unreadable argument would report a dirty diff as clean.',
+    );
+  }
+  const files = hasFiles ? options.files : parseUnifiedDiff(diffText, source);
   const findings = [];
 
   if (reviewLane === 'refactor') {
