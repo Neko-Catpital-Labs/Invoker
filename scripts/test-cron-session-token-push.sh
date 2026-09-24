@@ -85,6 +85,19 @@ written_count="$(echo "$written_paths" | wc -l | tr -d ' ')"
 python3 -c "import json; json.load(open('$REMOTE_FS/.invoker/session-rollups/${HOST_LABEL}.json'))" \
   || fail "the pushed remote file must be valid JSON"
 
+mktemp_suffix_pattern='mktemp[^#]*X{3,}[.-]'
+if grep -nE "$mktemp_suffix_pattern" "$PUSH_SCRIPT" >/dev/null; then
+  fail "mktemp templates must end in X characters: BSD/macOS mktemp does not randomize a template with a trailing suffix, so a leftover file aborts the push under set -e"
+fi
+
+"$PUSH_SCRIPT" || fail "a second consecutive run must exit 0; the local temp report path must be unique per run"
+
+second_paths="$(find "$REMOTE_FS" -type f)"
+second_count="$(echo "$second_paths" | wc -l | tr -d ' ')"
+[[ "$second_count" -eq 1 ]] || fail "a second run must replace the single remote report, found: $second_paths"
+
+[[ ! -f "$REMOTE_FS/.invoker/session-rollups/${HOST_LABEL}.json.tmp" ]] || fail "the .tmp file must not remain after a second run"
+
 rm -f "$CALLS_LOG"
 
 set +e
