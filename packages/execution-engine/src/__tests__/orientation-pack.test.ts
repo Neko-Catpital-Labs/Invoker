@@ -36,6 +36,32 @@ function makeAiTaskRequest(prompt: string): WorkRequest {
   };
 }
 
+function makeRepairTaskRequest(prompt: string): WorkRequest {
+  return {
+    requestId: 'req-repair',
+    actionId: 'admin-bypass-repair-check-pr-12911-198ca85',
+    executionGeneration: 0,
+    actionType: 'ai_task',
+    inputs: {
+      description: 'Repair the PR Body check on pull request #12911',
+      prompt,
+    },
+    callbackUrl: '',
+    timestamps: {
+      createdAt: '2026-09-22T00:00:00.000Z',
+    },
+  };
+}
+
+const REPAIR_JOB_LOG_TAIL = [
+  'Job log (tail):',
+  'PR Body\tInstall validator deps\t2026-09-22T07:50:27.9Z  WARN  There are cyclic workspace'
+    + ' dependencies: /home/runner/work/Invoker/Invoker/packages/data-store,'
+    + ' /home/runner/work/Invoker/Invoker/packages/persistence',
+  'PR Body\tInstall validator deps\t2026-09-22T07:50:32.0Z  WARN  Failed to create bin at'
+    + ' /home/runner/work/Invoker/Invoker/packages/app/node_modules/.bin/invoker-cli',
+].join('\n');
+
 describe('worker orientation pack prompts', () => {
   it('prepends scoped orientation and does not inject class-search for default feature tasks', () => {
     const prompt = new PromptProbeExecutor().promptFor(makeAiTaskRequest([
@@ -47,5 +73,28 @@ describe('worker orientation pack prompts', () => {
     expect(prompt).toContain('Allowed files');
     expect(prompt).toContain('Do not start with an unscoped repository walk');
     expect(prompt).not.toMatch(/class[- ]search|git log --grep|git log -S|gh pr list --search/i);
+  });
+
+  it('does not scope a repair task to a package that only appears in the CI job log tail', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeRepairTaskRequest([
+      "This PR's CI check is failing. Diagnose why it is failing, then fix it.",
+      'Failed check: PR Body',
+      REPAIR_JOB_LOG_TAIL,
+    ].join('\n')));
+
+    expect(prompt).not.toContain('Owning package: packages/data-store');
+    expect(prompt).toContain(
+      'Owning package: not specified; infer the narrowest package from the named files before editing',
+    );
+  });
+
+  it('still scopes a repair task to a package named before the job log tail', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeRepairTaskRequest([
+      "This PR's CI check is failing. Diagnose why it is failing, then fix it.",
+      'Failed check: unit / packages/execution-engine',
+      REPAIR_JOB_LOG_TAIL,
+    ].join('\n')));
+
+    expect(prompt).toContain('Owning package: packages/execution-engine');
   });
 });
