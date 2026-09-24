@@ -1,0 +1,25 @@
+[pilot] running treatment (1/2) with claude claude-sonnet-5
+[pilot] running baseline (2/2) with claude claude-sonnet-5
+[pilot] grading baseline in a fresh evaluator copy
+[pilot] grading treatment in a fresh evaluator copy
+{
+  "pair_id": "pilot-001",
+  "order": [
+    "treatment",
+    "baseline"
+  ],
+  "outcomes": {
+    "baseline": {
+      "trial": "completed",
+      "graded_pass": true,
+      "reason": "passed"
+    },
+    "treatment": {
+      "trial": "completed",
+      "graded_pass": true,
+      "reason": "passed"
+    }
+  },
+  "validation_errors": []
+}
+exit=0

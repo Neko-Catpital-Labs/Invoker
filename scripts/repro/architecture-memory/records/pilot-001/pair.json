@@ -1,0 +1,3258 @@
+{
+  "arms": {
+    "baseline": {
+      "config_sha256": "4427f8361f8d9954f7abd3c874365995641807f2cbf36f40e1c0cb9fd56edb34",
+      "install": {
+        "exit": 0,
+        "mode": "offline",
+        "seconds": 12.9,
+        "tail": "+ tsup 8.5.1\n+ typescript 5.9.3\n+ yaml 2.8.2\n\nDone in 12.7s using pnpm v10.31.0"
+      },
+      "snapshot_commit": "1884a1391dc747e5f69bf0de4f616dd630773eb1",
+      "snapshot_tree": "ac518fa9c4ec1dcb15e5b7f405c94533f1d8cdd4"
+    },
+    "treatment": {
+      "config_sha256": "4427f8361f8d9954f7abd3c874365995641807f2cbf36f40e1c0cb9fd56edb34",
+      "install": {
+        "exit": 0,
+        "mode": "offline",
+        "seconds": 26.0,
+        "tail": "+ tsup 8.5.1\n+ typescript 5.9.3\n+ yaml 2.8.2\n\nDone in 25.7s using pnpm v10.31.0"
+      },
+      "snapshot_commit": "38b062bbc482fa2ed2785b6f94f3b1ea73668d52",
+      "snapshot_tree": "9cd6118e2b18c95e2f0403c62adfb756c1b8928e"
+    }
+  },
+  "configs": {
+    "baseline": {
+      "argv": [
+        "/Users/edbertchan/.local/share/claude/versions/2.1.281",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--settings",
+        "{\"autoMemoryEnabled\":false,\"disableAllHooks\":true}",
+        "--model",
+        "claude-sonnet-5",
+        "--effort",
+        "medium",
+        "--max-budget-usd",
+        "5.00",
+        "--tools",
+        "Bash,Read,Edit,Write,Glob,Grep",
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        "Bash(pnpm test:*)",
+        "Bash(pnpm exec vitest:*)",
+        "Bash(pnpm vitest:*)",
+        "Bash(npx vitest:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)",
+        "Bash(git log:*)",
+        "Bash(git show:*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(ls:*)",
+        "Bash(cat:*)",
+        "Bash(head:*)",
+        "Bash(tail:*)",
+        "Bash(wc:*)",
+        "Bash(grep:*)",
+        "Bash(rg:*)",
+        "Bash(find:*)",
+        "Bash(sed -n:*)",
+        "--",
+        "<PROMPT>"
+      ],
+      "cache_policy": "fresh pnpm --offline install per copy; no shared build or vitest cache between arms",
+      "env": {
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CONFIG_DIR": "/Users/edbertchan/.invoker/claude-worker"
+      },
+      "grader_sha256": "832da59b96e835076a623ccea9721fbe2e536326f999c86130923e920bb54ed8",
+      "harness": {
+        "binary": "/Users/edbertchan/.local/share/claude/versions/2.1.281",
+        "binary_sha256": "a922981f6f3b55a251ef9f9dbaa0621a5f99cbcb5ca67f8a797476ccfc83f626",
+        "budget_usd": 5.0,
+        "effort": "medium",
+        "harness": "claude",
+        "model": "claude-sonnet-5",
+        "telemetry": "claude-stream-json",
+        "timeout_seconds": 900,
+        "version": "2.1.281 (Claude Code)"
+      },
+      "isolation": {
+        "deny_exec": [
+          "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/git-credential-osxkeychain",
+          "/Users/edbertchan/.invoker/cli/invoker-cli-0.1.13-darwin-arm64/invoker-cli",
+          "/opt/homebrew/Cellar/gh/2.92.0/bin/gh",
+          "/opt/homebrew/bin/gh",
+          "/opt/homebrew/bin/invoker-cli",
+          "/opt/homebrew/bin/invoker-ui",
+          "/opt/homebrew/lib/node_modules/@neko-catpital-labs/invoker-ui/bin/invoker-ui.js"
+        ],
+        "deny_read_write": [
+          "/Users/edbertchan/.claude",
+          "/Users/edbertchan/.codex",
+          "/Users/edbertchan/.config/gh",
+          "/Users/edbertchan/.git-credentials",
+          "/Users/edbertchan/.invoker",
+          "/Users/edbertchan/.invoker/claude-worker/CLAUDE.md",
+          "/Users/edbertchan/.invoker/claude-worker/agents",
+          "/Users/edbertchan/.invoker/claude-worker/commands",
+          "/Users/edbertchan/.invoker/claude-worker/debug",
+          "/Users/edbertchan/.invoker/claude-worker/file-history",
+          "/Users/edbertchan/.invoker/claude-worker/history.jsonl",
+          "/Users/edbertchan/.invoker/claude-worker/hooks",
+          "/Users/edbertchan/.invoker/claude-worker/memory",
+          "/Users/edbertchan/.invoker/claude-worker/plans",
+          "/Users/edbertchan/.invoker/claude-worker/plugins",
+          "/Users/edbertchan/.invoker/claude-worker/projects",
+          "/Users/edbertchan/.invoker/claude-worker/shell-snapshots",
+          "/Users/edbertchan/.invoker/claude-worker/skills",
+          "/Users/edbertchan/.invoker/claude-worker/todos",
+          "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1789538353357-260-build-and-run-paired-pilot-g2.t14.a-a257cf03b-e5213e52",
+          "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1789538353357-260-build-and-run-paired-pilot-g2.t14.a-a257cf03b-e5213e52/scripts/repro/architecture-memory",
+          "/Users/edbertchan/.local/state/invoker-archmem",
+          "/Users/edbertchan/.ssh"
+        ],
+        "reallow_auth_dir": [
+          "/Users/edbertchan/.invoker/claude-worker"
+        ],
+        "trial_dir": "<TRIAL_DIR>",
+        "work_root": "/private/tmp/archmem"
+      },
+      "prompt_sha256": "e864877ad6cb21d5898ff070bb8d27e6288d269d8515aafbc03ffc503342a6ea",
+      "retries": 0,
+      "source_commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad"
+    },
+    "treatment": {
+      "argv": [
+        "/Users/edbertchan/.local/share/claude/versions/2.1.281",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--settings",
+        "{\"autoMemoryEnabled\":false,\"disableAllHooks\":true}",
+        "--model",
+        "claude-sonnet-5",
+        "--effort",
+        "medium",
+        "--max-budget-usd",
+        "5.00",
+        "--tools",
+        "Bash,Read,Edit,Write,Glob,Grep",
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        "Bash(pnpm test:*)",
+        "Bash(pnpm exec vitest:*)",
+        "Bash(pnpm vitest:*)",
+        "Bash(npx vitest:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)",
+        "Bash(git log:*)",
+        "Bash(git show:*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(ls:*)",
+        "Bash(cat:*)",
+        "Bash(head:*)",
+        "Bash(tail:*)",
+        "Bash(wc:*)",
+        "Bash(grep:*)",
+        "Bash(rg:*)",
+        "Bash(find:*)",
+        "Bash(sed -n:*)",
+        "--",
+        "<PROMPT>"
+      ],
+      "cache_policy": "fresh pnpm --offline install per copy; no shared build or vitest cache between arms",
+      "env": {
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CONFIG_DIR": "/Users/edbertchan/.invoker/claude-worker"
+      },
+      "grader_sha256": "832da59b96e835076a623ccea9721fbe2e536326f999c86130923e920bb54ed8",
+      "harness": {
+        "binary": "/Users/edbertchan/.local/share/claude/versions/2.1.281",
+        "binary_sha256": "a922981f6f3b55a251ef9f9dbaa0621a5f99cbcb5ca67f8a797476ccfc83f626",
+        "budget_usd": 5.0,
+        "effort": "medium",
+        "harness": "claude",
+        "model": "claude-sonnet-5",
+        "telemetry": "claude-stream-json",
+        "timeout_seconds": 900,
+        "version": "2.1.281 (Claude Code)"
+      },
+      "isolation": {
+        "deny_exec": [
+          "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/git-credential-osxkeychain",
+          "/Users/edbertchan/.invoker/cli/invoker-cli-0.1.13-darwin-arm64/invoker-cli",
+          "/opt/homebrew/Cellar/gh/2.92.0/bin/gh",
+          "/opt/homebrew/bin/gh",
+          "/opt/homebrew/bin/invoker-cli",
+          "/opt/homebrew/bin/invoker-ui",
+          "/opt/homebrew/lib/node_modules/@neko-catpital-labs/invoker-ui/bin/invoker-ui.js"
+        ],
+        "deny_read_write": [
+          "/Users/edbertchan/.claude",
+          "/Users/edbertchan/.codex",
+          "/Users/edbertchan/.config/gh",
+          "/Users/edbertchan/.git-credentials",
+          "/Users/edbertchan/.invoker",
+          "/Users/edbertchan/.invoker/claude-worker/CLAUDE.md",
+          "/Users/edbertchan/.invoker/claude-worker/agents",
+          "/Users/edbertchan/.invoker/claude-worker/commands",
+          "/Users/edbertchan/.invoker/claude-worker/debug",
+          "/Users/edbertchan/.invoker/claude-worker/file-history",
+          "/Users/edbertchan/.invoker/claude-worker/history.jsonl",
+          "/Users/edbertchan/.invoker/claude-worker/hooks",
+          "/Users/edbertchan/.invoker/claude-worker/memory",
+          "/Users/edbertchan/.invoker/claude-worker/plans",
+          "/Users/edbertchan/.invoker/claude-worker/plugins",
+          "/Users/edbertchan/.invoker/claude-worker/projects",
+          "/Users/edbertchan/.invoker/claude-worker/shell-snapshots",
+          "/Users/edbertchan/.invoker/claude-worker/skills",
+          "/Users/edbertchan/.invoker/claude-worker/todos",
+          "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1789538353357-260-build-and-run-paired-pilot-g2.t14.a-a257cf03b-e5213e52",
+          "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1789538353357-260-build-and-run-paired-pilot-g2.t14.a-a257cf03b-e5213e52/scripts/repro/architecture-memory",
+          "/Users/edbertchan/.local/state/invoker-archmem",
+          "/Users/edbertchan/.ssh"
+        ],
+        "reallow_auth_dir": [
+          "/Users/edbertchan/.invoker/claude-worker"
+        ],
+        "trial_dir": "<TRIAL_DIR>",
+        "work_root": "/private/tmp/archmem"
+      },
+      "prompt_sha256": "e864877ad6cb21d5898ff070bb8d27e6288d269d8515aafbc03ffc503342a6ea",
+      "retries": 0,
+      "source_commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad"
+    }
+  },
+  "costs": {
+    "dollar_efficiency_conclusion_allowed": false,
+    "dollar_telemetry_complete": true,
+    "measured_trials": {
+      "baseline": {
+        "cost_source": "claude CLI total_cost_usd (client-side estimate)",
+        "cost_usd": 0.3924794,
+        "usage": {
+          "cache_creation_input_tokens": 43461,
+          "cache_read_input_tokens": 805167,
+          "input_tokens": 46,
+          "output_tokens": 5751
+        }
+      },
+      "treatment": {
+        "cost_source": "claude CLI total_cost_usd (client-side estimate)",
+        "cost_usd": 0.22346820000000003,
+        "usage": {
+          "cache_creation_input_tokens": 26656,
+          "cache_read_input_tokens": 408991,
+          "input_tokens": 28,
+          "output_tokens": 3499
+        }
+      }
+    },
+    "note": "One pair cannot support an efficiency conclusion. Reported dollars are the harness's own client-side estimate; no prices were invented and token totals are not converted to dollars.",
+    "setup_costs": "no model calls outside the two trials; authoring-session cost is not measured here"
+  },
+  "created_at": "2026-09-24T02:04:58Z",
+  "expected_hidden_tests": 6,
+  "experiment_id": "architecture-memory-edit-task-pool-v1",
+  "grades": {
+    "baseline": {
+      "apply": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "arm": "baseline",
+      "finished_at": "2026-09-24T02:04:31Z",
+      "fresh_copy": true,
+      "hidden": {
+        "command": "pnpm exec vitest run src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+        "exit": 0,
+        "failed": 0,
+        "passed": 6,
+        "summary_lines": [
+          " \u2713 src/__tests__/archmem-hidden-edit-task-pool.test.ts (6 tests) 6ms",
+          " Test Files  1 passed (1)",
+          "      Tests  6 passed (6)"
+        ],
+        "tests": [
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing",
+            "status": "passed"
+          }
+        ]
+      },
+      "passed": true,
+      "patch_paths": [
+        "packages/app/src/__tests__/workflow-mutation-facade.test.ts",
+        "packages/app/src/workflow-mutation-facade.ts"
+      ],
+      "patch_sha256": "3dc35ff3f9da6f130884b725f4bd419bc38a83dd32bc31c820432d2c5e315333",
+      "protected_paths_touched": [],
+      "reason": "passed",
+      "regression": {
+        "command": "pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts src/__tests__/api-server.test.ts src/__tests__/parity-regression.test.ts",
+        "exit": 0,
+        "failed": 0,
+        "passed": 174,
+        "summary_lines": [
+          " \u2713 src/__tests__/api-server.test.ts (90 tests) 88ms",
+          " \u2713 src/__tests__/parity-regression.test.ts (56 tests) 154ms",
+          " \u2713 src/__tests__/workflow-mutation-facade.test.ts (28 tests) 26ms",
+          " Test Files  3 passed (3)",
+          "      Tests  174 passed (174)"
+        ],
+        "tests": [
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/health returns 200 with ok and uptime",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/status returns orchestrator workflow status",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks returns all tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks filters by status query param",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id returns task when found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id returns 404 when task not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows returns workflow list",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters returns filtered task summaries with pagination",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters rejects an invalid filter before reading tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters keeps plain q search on the existing path",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters rejects a non-numeric limit before reading tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters rejects a non-numeric offset before reading tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns 404 when workflow is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns an empty response when no merge node exists",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns current artifacts, linear stack links, and discarded artifacts separately",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns ready only when all required current artifacts are approved",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate synthesizes a scalar fallback artifact",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/queue returns queue status",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id/events returns event log page when limit is provided",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id/events rejects missing limit",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id/output returns task output",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/cancel cancels task via facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/cancel cancels workflow via facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "workflow HTTP mutation boundary delegates workflow mutations to the facade without route-level orchestrator dispatch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry retries task via facade retryTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry returns 400 on error",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry tops up globally ready tasks after scoped retry launch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry does not relaunch duplicate attempt from global top-up",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/restart returns 404 and does not route to retryTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream routes through facade recreateDownstream and returns concrete action",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream does not invoke recreateTask or retryTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream reports tasksStarted equal to dispatchable launches from facade result",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream returns 400 on domain failure surfaced by CommandService",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream maps task-not-found to HTTP 404",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve approves task via facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve leaves downstream merge-node launches to the dispatch outbox",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve routes post-fix merge nodes to publishAfterFix",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve returns 400 on error",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve Step 16: approve POST does not trigger retry/recreate/cancel routes",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/resolve-conflict tops up globally ready work after resolve-conflict",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject rejects task without reason",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject rejects task with reason",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject reverts conflict resolution when pendingFixError exists",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject Step 16: reject POST does not trigger retry/recreate/cancel routes (non-fix path)",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject Step 16: reject POST does not trigger retry/recreate/cancel routes (fix-flow path)",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/input provides input to task",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/input returns 400 when text is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit edits task command",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit returns 400 when command is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt edits task prompt and routes through orchestrator.editTaskPrompt",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt returns 400 when prompt is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt only dispatches running tasks returned by editTaskPrompt",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt does not call editTaskCommand when editing prompt",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-type rejects direct executor changes",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-agent edits task agent and routes through orchestrator.editTaskAgent",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-agent returns 400 when agent is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/gate-policy updates gate policy and executes started tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/gate-policy returns 400 when updates are missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/gate-policy Step 15: gate-policy POST does not trigger retry/recreate routes",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate recreates workflow via facade recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate handles concurrent recreate requests independently",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate returns 404 when workflow not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate tops up globally ready tasks after workflow recreate launch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/restart returns 404 and does not route to recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-retry normalizes merge-node targets to the owning workflow before fresh-base retry",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/fork forks the workflow via facade and returns both ids",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/fork returns an error status when forkWorkflow throws",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate queues rebase-recreate through the workflow mutation coordinator when available",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate recreates workflow from fresh base",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate keeps cross-workflow started tasks out of the scoped rebase-recreate runnable result",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate old rebase-and-retry route is gone",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate returns 404 when workflow not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/tasks/:id deletes task via facade and returns concrete action",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/tasks/:id maps task-not-found to HTTP 404",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/workflows/:id deletes workflow via deleteWorkflow callback",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/workflows/:id returns 404 when workflow not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/detach detaches workflow from one upstream workflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/detach returns 400 when upstreamWorkflowId is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/merge-mode sets merge mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/merge-mode returns 400 when mode is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/merge-mode returns 400 on invalid mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints updates workflow metadata through the facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints updates task metadata through the facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints rejects forbidden fields in normal mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints gates raw metadata repair mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "Unknown routes returns 404 for unknown path",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "Unknown routes returns 404 for wrong method on known path",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "API port selection by runtime profile packaged case retains the existing production port when no override is set",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "API port selection by runtime profile source case derives a port disjoint from the production default",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "API port selection by runtime profile an explicit synthetic override wins over the selected profile",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle retryTask: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle recreateTask: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle editTaskCommand: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle editTaskPrompt: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle editTaskAgent: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle selectExperiment: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle retryWorkflow: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle recreateWorkflow: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle all mutations filter non-running tasks from dispatch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle topup deduplicates tasks already dispatched in scoped phase",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle topup dispatches genuinely new tasks from global pool",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cancel mutations follow topup-only lifecycle cancelTask: kills running tasks, runs topup, returns CancelMutationResult",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cancel mutations follow topup-only lifecycle cancelWorkflow: kills running tasks, runs topup, returns CancelMutationResult",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/retry: routes through facade to retryTask, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/edit: routes through facade to editTaskCommand, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/edit-prompt: routes through facade to editTaskPrompt, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/edit-agent: routes through facade to editTaskAgent, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/cancel: routes through facade to cancelTask, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/workflows/:id/cancel: routes through facade to cancelWorkflow, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/workflows/:id/fork: routes through facade to forkWorkflow, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/approve routes through facade approveTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/reject routes through facade rejectTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/input routes through facade provideInput",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/workflows/:id/recreate routes through facade recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods removed legacy /restart API aliases return 404",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives approve: routes to orchestrator.approve and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives retryTask: routes to orchestrator.retryTask and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives recreateTask: routes to orchestrator.recreateTask and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives retryWorkflow: routes to orchestrator.retryWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives recreateWorkflow: routes to orchestrator.recreateWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives recreateWorkflowFromFreshBase: routes to orchestrator.recreateWorkflowFromFreshBase and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives cancelTask: routes to orchestrator.cancelTask and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives cancelWorkflow: routes to orchestrator.cancelWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives deleteWorkflow: routes to orchestrator.deleteWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives detachWorkflow: routes to orchestrator.detachWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskCommand: routes to orchestrator.editTaskCommand and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskPrompt: routes to orchestrator.editTaskPrompt and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskAgent: routes to orchestrator.editTaskAgent and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskMergeMode: routes to orchestrator.editTaskMergeMode and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives selectExperiment: routes to orchestrator.selectExperiment and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives setTaskExternalGatePolicies: routes to orchestrator.setTaskExternalGatePolicies and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives reject routes to orchestrator.reject when no pendingFixError",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives reject routes to revertFixSession when pendingFixError exists",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives all commands wrap OrchestratorError into { ok: false }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation retryTask does not trigger recreateTask or recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation recreateTask does not trigger retryTask or cancelTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation cancelTask does not trigger retryTask or recreateTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation forkWorkflow does not trigger retryWorkflow or recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation editTaskCommand does not trigger editTaskPrompt or editTaskAgent",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation editTaskPrompt does not trigger editTaskCommand or editTaskAgent",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation approveTask does not trigger reject, retry, or cancel",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation rejectTask does not trigger approve, retry, or cancel",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService serializes concurrent mutations serializes two mutations on the same workflow sequentially",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService serializes concurrent mutations allows mutations on different workflows to interleave",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: deleteWorkflow kills active tasks before delete facade deleteWorkflow kills running tasks then calls orchestrator.deleteWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: detachWorkflow passes through to orchestrator facade detachWorkflow calls orchestrator.detachWorkflow with both ids",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryTask calls orchestrator.retryTask and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryTask closes the workflow review before task-scoped invalidation",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateTask calls orchestrator.recreateTask and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateTask closes the workflow review before task-scoped recreate",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade deleteTask kills an active target and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskCommand calls orchestrator.editTaskCommand and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskPrompt calls orchestrator.editTaskPrompt and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskAgent calls orchestrator.editTaskAgent and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskPool calls commandService.editTaskPool and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskPool closes the workflow review before task-scoped pool edit",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade selectExperiment calls orchestrator.selectExperiment",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade cancelTask calls orchestrator.cancelTask and kills running cancellations",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade cancelWorkflow calls orchestrator.cancelWorkflow and kills running cancellations",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade deleteWorkflow kills active tasks then calls orchestrator.deleteWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade detachWorkflow calls orchestrator.detachWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade forkWorkflow forks and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade rejectTask calls orchestrator.reject with reason",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade rejectTask reverts conflict resolution when task has pendingFixError",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade provideInput calls orchestrator.provideInput",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade setTaskExternalGatePolicies calls orchestrator.setTaskExternalGatePolicies",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateWorkflow bumps generation and calls orchestrator.recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateWorkflow closes the workflow review before workflow-scoped recreate",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryWorkflow calls orchestrator.retryWorkflow and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryWorkflow can return after launch acceptance without waiting for task runtime",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryWorkflow closes the workflow review before workflow-scoped invalidation",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade workflow scoped dispatch keeps cross-workflow starts in topup for retry-class workflow mutations",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade workflow scoped dispatch keeps cross-workflow starts in topup for rebase-recreate",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade workflow scoped dispatch spawns a repair workflow and dispatches the spawned workflow scope",
+            "status": "passed"
+          }
+        ]
+      },
+      "snapshot": {
+        "commit": "1884a1391dc747e5f69bf0de4f616dd630773eb1",
+        "tree": "ac518fa9c4ec1dcb15e5b7f405c94533f1d8cdd4"
+      },
+      "started_at": "2026-09-24T02:04:24Z"
+    },
+    "treatment": {
+      "apply": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "arm": "treatment",
+      "finished_at": "2026-09-24T02:04:53Z",
+      "fresh_copy": true,
+      "hidden": {
+        "command": "pnpm exec vitest run src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+        "exit": 0,
+        "failed": 0,
+        "passed": 6,
+        "summary_lines": [
+          " \u2713 src/__tests__/archmem-hidden-edit-task-pool.test.ts (6 tests) 6ms",
+          " Test Files  1 passed (1)",
+          "      Tests  6 passed (6)"
+        ],
+        "tests": [
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/archmem-hidden-edit-task-pool.test.ts",
+            "name": "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing",
+            "status": "passed"
+          }
+        ]
+      },
+      "passed": true,
+      "patch_paths": [
+        "packages/app/src/__tests__/workflow-mutation-facade.test.ts",
+        "packages/app/src/workflow-mutation-facade.ts"
+      ],
+      "patch_sha256": "f80149a7e91f2a62e4a539ab0e929ec3aa19c00eb3de88e1ec668d0f14acde21",
+      "protected_paths_touched": [],
+      "reason": "passed",
+      "regression": {
+        "command": "pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts src/__tests__/api-server.test.ts src/__tests__/parity-regression.test.ts",
+        "exit": 0,
+        "failed": 0,
+        "passed": 174,
+        "summary_lines": [
+          " \u2713 src/__tests__/api-server.test.ts (90 tests) 90ms",
+          " \u2713 src/__tests__/parity-regression.test.ts (56 tests) 156ms",
+          " \u2713 src/__tests__/workflow-mutation-facade.test.ts (28 tests) 25ms",
+          " Test Files  3 passed (3)",
+          "      Tests  174 passed (174)"
+        ],
+        "tests": [
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/health returns 200 with ok and uptime",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/status returns orchestrator workflow status",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks returns all tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks filters by status query param",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id returns task when found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id returns 404 when task not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows returns workflow list",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters returns filtered task summaries with pagination",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters rejects an invalid filter before reading tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters keeps plain q search on the existing path",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters rejects a non-numeric limit before reading tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/search task filters rejects a non-numeric offset before reading tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns 404 when workflow is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns an empty response when no merge node exists",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns current artifacts, linear stack links, and discarded artifacts separately",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate returns ready only when all required current artifacts are approved",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/workflows/:id/review-gate synthesizes a scalar fallback artifact",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/queue returns queue status",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id/events returns event log page when limit is provided",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id/events rejects missing limit",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "GET /api/tasks/:id/output returns task output",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/cancel cancels task via facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/cancel cancels workflow via facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "workflow HTTP mutation boundary delegates workflow mutations to the facade without route-level orchestrator dispatch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry retries task via facade retryTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry returns 400 on error",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry tops up globally ready tasks after scoped retry launch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/retry does not relaunch duplicate attempt from global top-up",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/restart returns 404 and does not route to retryTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream routes through facade recreateDownstream and returns concrete action",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream does not invoke recreateTask or retryTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream reports tasksStarted equal to dispatchable launches from facade result",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream returns 400 on domain failure surfaced by CommandService",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/recreate-downstream maps task-not-found to HTTP 404",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve approves task via facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve leaves downstream merge-node launches to the dispatch outbox",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve routes post-fix merge nodes to publishAfterFix",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve returns 400 on error",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/approve Step 16: approve POST does not trigger retry/recreate/cancel routes",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/resolve-conflict tops up globally ready work after resolve-conflict",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject rejects task without reason",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject rejects task with reason",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject reverts conflict resolution when pendingFixError exists",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject Step 16: reject POST does not trigger retry/recreate/cancel routes (non-fix path)",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/reject Step 16: reject POST does not trigger retry/recreate/cancel routes (fix-flow path)",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/input provides input to task",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/input returns 400 when text is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit edits task command",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit returns 400 when command is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt edits task prompt and routes through orchestrator.editTaskPrompt",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt returns 400 when prompt is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt only dispatches running tasks returned by editTaskPrompt",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-prompt does not call editTaskCommand when editing prompt",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-type rejects direct executor changes",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-agent edits task agent and routes through orchestrator.editTaskAgent",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/edit-agent returns 400 when agent is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/gate-policy updates gate policy and executes started tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/gate-policy returns 400 when updates are missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/tasks/:id/gate-policy Step 15: gate-policy POST does not trigger retry/recreate routes",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate recreates workflow via facade recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate handles concurrent recreate requests independently",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate returns 404 when workflow not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/recreate tops up globally ready tasks after workflow recreate launch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/restart returns 404 and does not route to recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-retry normalizes merge-node targets to the owning workflow before fresh-base retry",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/fork forks the workflow via facade and returns both ids",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/fork returns an error status when forkWorkflow throws",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate queues rebase-recreate through the workflow mutation coordinator when available",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate recreates workflow from fresh base",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate keeps cross-workflow started tasks out of the scoped rebase-recreate runnable result",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate old rebase-and-retry route is gone",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/rebase-recreate returns 404 when workflow not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/tasks/:id deletes task via facade and returns concrete action",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/tasks/:id maps task-not-found to HTTP 404",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/workflows/:id deletes workflow via deleteWorkflow callback",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "DELETE /api/workflows/:id returns 404 when workflow not found",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/detach detaches workflow from one upstream workflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/detach returns 400 when upstreamWorkflowId is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/merge-mode sets merge mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/merge-mode returns 400 when mode is missing",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "POST /api/workflows/:id/merge-mode returns 400 on invalid mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints updates workflow metadata through the facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints updates task metadata through the facade",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints rejects forbidden fields in normal mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "PATCH metadata endpoints gates raw metadata repair mode",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "Unknown routes returns 404 for unknown path",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "Unknown routes returns 404 for wrong method on known path",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "API port selection by runtime profile packaged case retains the existing production port when no override is set",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "API port selection by runtime profile source case derives a port disjoint from the production default",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/api-server.test.ts",
+            "name": "API port selection by runtime profile an explicit synthetic override wins over the selected profile",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle retryTask: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle recreateTask: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle editTaskCommand: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle editTaskPrompt: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle editTaskAgent: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle selectExperiment: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle retryWorkflow: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle recreateWorkflow: follows dispatch+topup lifecycle and returns MutationResult shape",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle all mutations filter non-running tasks from dispatch",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle topup deduplicates tasks already dispatched in scoped phase",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: facade dispatch+topup lifecycle topup dispatches genuinely new tasks from global pool",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cancel mutations follow topup-only lifecycle cancelTask: kills running tasks, runs topup, returns CancelMutationResult",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cancel mutations follow topup-only lifecycle cancelWorkflow: kills running tasks, runs topup, returns CancelMutationResult",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/retry: routes through facade to retryTask, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/edit: routes through facade to editTaskCommand, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/edit-prompt: routes through facade to editTaskPrompt, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/edit-agent: routes through facade to editTaskAgent, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/cancel: routes through facade to cancelTask, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/workflows/:id/cancel: routes through facade to cancelWorkflow, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/workflows/:id/fork: routes through facade to forkWorkflow, triggers dispatch+topup",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/approve routes through facade approveTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/reject routes through facade rejectTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/tasks/:id/input routes through facade provideInput",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods POST /api/workflows/:id/recreate routes through facade recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: API endpoints wire to facade methods removed legacy /restart API aliases return 404",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives approve: routes to orchestrator.approve and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives retryTask: routes to orchestrator.retryTask and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives recreateTask: routes to orchestrator.recreateTask and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives retryWorkflow: routes to orchestrator.retryWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives recreateWorkflow: routes to orchestrator.recreateWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives recreateWorkflowFromFreshBase: routes to orchestrator.recreateWorkflowFromFreshBase and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives cancelTask: routes to orchestrator.cancelTask and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives cancelWorkflow: routes to orchestrator.cancelWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives deleteWorkflow: routes to orchestrator.deleteWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives detachWorkflow: routes to orchestrator.detachWorkflow and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskCommand: routes to orchestrator.editTaskCommand and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskPrompt: routes to orchestrator.editTaskPrompt and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskAgent: routes to orchestrator.editTaskAgent and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives editTaskMergeMode: routes to orchestrator.editTaskMergeMode and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives selectExperiment: routes to orchestrator.selectExperiment and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives setTaskExternalGatePolicies: routes to orchestrator.setTaskExternalGatePolicies and returns { ok: true }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives reject routes to orchestrator.reject when no pendingFixError",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives reject routes to revertFixSession when pendingFixError exists",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService routes to correct orchestrator primitives all commands wrap OrchestratorError into { ok: false }",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation retryTask does not trigger recreateTask or recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation recreateTask does not trigger retryTask or cancelTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation cancelTask does not trigger retryTask or recreateTask",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation forkWorkflow does not trigger retryWorkflow or recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation editTaskCommand does not trigger editTaskPrompt or editTaskAgent",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation editTaskPrompt does not trigger editTaskCommand or editTaskAgent",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation approveTask does not trigger reject, retry, or cancel",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: cross-surface mutation isolation rejectTask does not trigger approve, retry, or cancel",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService serializes concurrent mutations serializes two mutations on the same workflow sequentially",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: CommandService serializes concurrent mutations allows mutations on different workflows to interleave",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: deleteWorkflow kills active tasks before delete facade deleteWorkflow kills running tasks then calls orchestrator.deleteWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/parity-regression.test.ts",
+            "name": "Parity: detachWorkflow passes through to orchestrator facade detachWorkflow calls orchestrator.detachWorkflow with both ids",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryTask calls orchestrator.retryTask and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryTask closes the workflow review before task-scoped invalidation",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateTask calls orchestrator.recreateTask and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateTask closes the workflow review before task-scoped recreate",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskPool calls commandService.editTaskPool and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskPool closes the workflow review before task-scoped pool edit",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade deleteTask kills an active target and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskCommand calls orchestrator.editTaskCommand and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskPrompt calls orchestrator.editTaskPrompt and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade editTaskAgent calls orchestrator.editTaskAgent and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade selectExperiment calls orchestrator.selectExperiment",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade cancelTask calls orchestrator.cancelTask and kills running cancellations",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade cancelWorkflow calls orchestrator.cancelWorkflow and kills running cancellations",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade deleteWorkflow kills active tasks then calls orchestrator.deleteWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade detachWorkflow calls orchestrator.detachWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade forkWorkflow forks and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade rejectTask calls orchestrator.reject with reason",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade rejectTask reverts conflict resolution when task has pendingFixError",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade provideInput calls orchestrator.provideInput",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade setTaskExternalGatePolicies calls orchestrator.setTaskExternalGatePolicies",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateWorkflow bumps generation and calls orchestrator.recreateWorkflow",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade recreateWorkflow closes the workflow review before workflow-scoped recreate",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryWorkflow calls orchestrator.retryWorkflow and returns accepted runnable tasks",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryWorkflow can return after launch acceptance without waiting for task runtime",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade retryWorkflow closes the workflow review before workflow-scoped invalidation",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade workflow scoped dispatch keeps cross-workflow starts in topup for retry-class workflow mutations",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade workflow scoped dispatch keeps cross-workflow starts in topup for rebase-recreate",
+            "status": "passed"
+          },
+          {
+            "failure": "",
+            "file": "src/__tests__/workflow-mutation-facade.test.ts",
+            "name": "WorkflowMutationFacade workflow scoped dispatch spawns a repair workflow and dispatches the spawned workflow scope",
+            "status": "passed"
+          }
+        ]
+      },
+      "snapshot": {
+        "commit": "38b062bbc482fa2ed2785b6f94f3b1ea73668d52",
+        "tree": "9cd6118e2b18c95e2f0403c62adfb756c1b8928e"
+      },
+      "started_at": "2026-09-24T02:04:46Z"
+    }
+  },
+  "order": [
+    "treatment",
+    "baseline"
+  ],
+  "order_seed": "6fb57668321bd98f",
+  "pair_id": "pilot-001",
+  "pinned_inputs": {
+    "controls/baseline/bypass-command-service.patch": "c4597480d0566acdceb561e105f52e35a62959be1459186cd2266de61ec53470",
+    "controls/baseline/gold.patch": "34e74efe8eae26fa35f804d7238b4dcd02577ff11e830aac15a6622c319d3333",
+    "controls/baseline/noop-todo-test.patch": "abb2804aaa83af1d85a3c7a1015b5fae4c472c3b642442caf7157469d4f22e64",
+    "controls/baseline/skip-review-close.patch": "0eff04575fa896e9b036480475c04ad2aaf1f682690b9f65116b1d2dee769cbf",
+    "controls/baseline/stub-empty-result.patch": "9f4f43e4b38b2e987bbd18c96d33c3882f2cfa50e91633e8cd2832e7293d9ab3",
+    "controls/baseline/unscoped-dispatch.patch": "1d4b7a3ec7a6bd909c6bab32d0fda1d519b2d17427175ad21412d5306256ea17",
+    "controls/treatment/bypass-command-service.patch": "69e555748523c72970ab8ee043bec9e9e648b46c3301016583324d8e5728ef81",
+    "controls/treatment/gold.patch": "3e8b2f7160bf5086e1fd306d0c4a3c0f7eeca0a1a4029a9885c3079f67616bff",
+    "controls/treatment/noop-todo-test.patch": "abb2804aaa83af1d85a3c7a1015b5fae4c472c3b642442caf7157469d4f22e64",
+    "controls/treatment/skip-review-close.patch": "09195516dad0aef0fc106f0e972904e2e277231c851e92e4f9dae3d010f4032a",
+    "controls/treatment/stub-empty-result.patch": "f134749d636593428363fd7d4f096ecf333e0956180eb97f9118ddf32ca82776",
+    "controls/treatment/unscoped-dispatch.patch": "744f6356dab24300d5c6b2025b6d6759578cd6296ebc952ca3a94cbd63fb2cb8",
+    "fixture/treatment-structural-delta.patch": "5cc376401d7dcaa29338cd70be293c63f353e77d7680cd1ab0bea41711f1bd62",
+    "grader/hidden-edit-task-pool.test.ts": "832da59b96e835076a623ccea9721fbe2e536326f999c86130923e920bb54ed8",
+    "runners.json": "b3155ae03cc5a2e9f2f8856e10967f774381e8aba22dcc4ae09e00a00d9e994e",
+    "task/prompt.md": "e864877ad6cb21d5898ff070bb8d27e6288d269d8515aafbc03ffc503342a6ea"
+  },
+  "preflight": {
+    "access_denial": {
+      "mechanism": "sandbox-exec",
+      "ok": true,
+      "profile_normalized_sha256": "df1f3f576b84b86c0da4cbc63e38798dfae59f2bae341f02f9adcbf3b5d61c2b",
+      "rows": [
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "read hidden grader in evaluator repo",
+          "stderr": "cat: ~/.invoker/worktrees/64a63486912a/experiment-wf-1789538353357-260-build-and-run-paired-pilot-g2.t14.a-a257cf03b-e5213e52/scripts/repro/architecture-memory/grader/hidden-edit-task-pool.test.ts: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "read committed gold control",
+          "stderr": "cat: ~/.invoker/worktrees/64a63486912a/experiment-wf-1789538353357-260-build-and-run-paired-pilot-g2.t14.a-a257cf03b-e5213e52/scripts/repro/architecture-memory/controls/baseline/gold.patch: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "read evaluator private copy",
+          "stderr": "cat: /private/tmp/archmem/pilot-001-3dac9e/denial-fa951a05/private/gold.patch: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "read other arm's trial copy",
+          "stderr": "cat: /private/tmp/archmem/pilot-001-3dac9e/denial-fa951a05/trial-treatment/repo/other-arm.txt: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "list evaluator state/ledger dir",
+          "stderr": "ls: ~/.local/state/invoker-archmem: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "list personal ~/.claude",
+          "stderr": "ls: ~/.claude: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "read gh credentials dir",
+          "stderr": "ls: ~/.config/gh: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "list prior sessions in harness config",
+          "stderr": "ls: ~/.invoker/claude-worker/projects: Operation not permitted"
+        },
+        {
+          "exit": 1,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "read harness prompt history",
+          "stderr": "cat: ~/.invoker/claude-worker/history.jsonl: Operation not permitted"
+        },
+        {
+          "exit": 71,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "execute gh",
+          "stderr": "sandbox-exec: execvp() of '/opt/homebrew/bin/gh' failed: Operation not permitted"
+        },
+        {
+          "exit": 71,
+          "expect": "deny",
+          "observed": "deny",
+          "ok": true,
+          "probe": "execute invoker-cli",
+          "stderr": "sandbox-exec: execvp() of '/opt/homebrew/bin/invoker-cli' failed: Operation not permitted"
+        },
+        {
+          "exit": 0,
+          "expect": "allow",
+          "observed": "allow",
+          "ok": true,
+          "probe": "read own trial file",
+          "stderr": ""
+        },
+        {
+          "exit": 0,
+          "expect": "allow",
+          "observed": "allow",
+          "ok": true,
+          "probe": "write own trial file",
+          "stderr": ""
+        },
+        {
+          "exit": 0,
+          "expect": "allow",
+          "observed": "allow",
+          "ok": true,
+          "probe": "run node inside trial",
+          "stderr": ""
+        }
+      ]
+    },
+    "controls": {
+      "ok": true,
+      "rows": [
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "baseline",
+          "control": "bypass-command-service",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 4,
+          "hidden_passed": 2,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > closes the owning workflow review before the mutation runs",
+            "TypeError: expected value must be number or bigint, received \"undefined\"",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [ { \u2026(7) }, \u2026(3) ], \u2026(2) }\" instead of rejecting",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [ { \u2026(7) }, \u2026(3) ], \u2026(2) }\" instead of rejecting"
+          ],
+          "ok": true,
+          "patch_sha256": "c4597480d0566acdceb561e105f52e35a62959be1459186cd2266de61ec53470",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "pass",
+          "apply_exit": 0,
+          "arm": "baseline",
+          "control": "gold",
+          "expect": "pass",
+          "failing_hidden_tests": [],
+          "hidden_exit": 0,
+          "hidden_failed": 0,
+          "hidden_passed": 6,
+          "hidden_summary_lines": [
+            " \u2713 src/__tests__/archmem-hidden-edit-task-pool.test.ts (6 tests) 6ms",
+            " Test Files  1 passed (1)",
+            "      Tests  6 passed (6)"
+          ],
+          "ok": true,
+          "patch_sha256": "34e74efe8eae26fa35f804d7238b4dcd02577ff11e830aac15a6622c319d3333",
+          "reason": "passed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "baseline",
+          "control": "noop-todo-test",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 6,
+          "hidden_passed": 0,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function"
+          ],
+          "ok": true,
+          "patch_sha256": "abb2804aaa83af1d85a3c7a1015b5fae4c472c3b642442caf7157469d4f22e64",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "baseline",
+          "control": "skip-review-close",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 1,
+          "hidden_passed": 5,
+          "hidden_summary_lines": [
+            "   \u2713 archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing 1ms",
+            " Test Files  1 failed (1)",
+            "      Tests  1 failed | 5 passed (6)",
+            "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > closes the owning workflow review before the mutation runs",
+            "AssertionError: expected \"spy\" to be called with arguments: [ 'wf-1' ]"
+          ],
+          "ok": true,
+          "patch_sha256": "0eff04575fa896e9b036480475c04ad2aaf1f682690b9f65116b1d2dee769cbf",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "baseline",
+          "control": "stub-empty-result",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 5,
+          "hidden_passed": 1,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "AssertionError: expected [] to deeply equal [ 'task-a', 'task-b', 'task-z', \u2026(1) ]",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [], runnable: [], topup: [] }\" instead of rejecting",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [], runnable: [], topup: [] }\" instead of rejecting"
+          ],
+          "ok": true,
+          "patch_sha256": "9f4f43e4b38b2e987bbd18c96d33c3882f2cfa50e91633e8cd2832e7293d9ab3",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "baseline",
+          "control": "unedited-snapshot",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 6,
+          "hidden_passed": 0,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function"
+          ],
+          "ok": true,
+          "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "baseline",
+          "control": "unscoped-dispatch",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 1,
+          "hidden_passed": 5,
+          "hidden_summary_lines": [
+            "   \u2713 archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing 1ms",
+            " Test Files  1 failed (1)",
+            "      Tests  1 failed | 5 passed (6)",
+            "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "AssertionError: expected [ 'task-a', 'task-b', 'task-z' ] to deeply equal [ 'task-a' ]"
+          ],
+          "ok": true,
+          "patch_sha256": "1d4b7a3ec7a6bd909c6bab32d0fda1d519b2d17427175ad21412d5306256ea17",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "treatment",
+          "control": "bypass-command-service",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 4,
+          "hidden_passed": 2,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > closes the owning workflow review before the mutation runs",
+            "TypeError: expected value must be number or bigint, received \"undefined\"",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [ { \u2026(7) }, \u2026(3) ], \u2026(2) }\" instead of rejecting",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [ { \u2026(7) }, \u2026(3) ], \u2026(2) }\" instead of rejecting"
+          ],
+          "ok": true,
+          "patch_sha256": "69e555748523c72970ab8ee043bec9e9e648b46c3301016583324d8e5728ef81",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "pass",
+          "apply_exit": 0,
+          "arm": "treatment",
+          "control": "gold",
+          "expect": "pass",
+          "failing_hidden_tests": [],
+          "hidden_exit": 0,
+          "hidden_failed": 0,
+          "hidden_passed": 6,
+          "hidden_summary_lines": [
+            " \u2713 src/__tests__/archmem-hidden-edit-task-pool.test.ts (6 tests) 6ms",
+            " Test Files  1 passed (1)",
+            "      Tests  6 passed (6)"
+          ],
+          "ok": true,
+          "patch_sha256": "3e8b2f7160bf5086e1fd306d0c4a3c0f7eeca0a1a4029a9885c3079f67616bff",
+          "reason": "passed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "treatment",
+          "control": "noop-todo-test",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 6,
+          "hidden_passed": 0,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function"
+          ],
+          "ok": true,
+          "patch_sha256": "abb2804aaa83af1d85a3c7a1015b5fae4c472c3b642442caf7157469d4f22e64",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "treatment",
+          "control": "skip-review-close",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 1,
+          "hidden_passed": 5,
+          "hidden_summary_lines": [
+            "   \u2713 archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing 1ms",
+            " Test Files  1 failed (1)",
+            "      Tests  1 failed | 5 passed (6)",
+            "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > closes the owning workflow review before the mutation runs",
+            "AssertionError: expected \"spy\" to be called with arguments: [ 'wf-1' ]"
+          ],
+          "ok": true,
+          "patch_sha256": "09195516dad0aef0fc106f0e972904e2e277231c851e92e4f9dae3d010f4032a",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "treatment",
+          "control": "stub-empty-result",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 5,
+          "hidden_passed": 1,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "AssertionError: expected [] to deeply equal [ 'task-a', 'task-b', 'task-z', \u2026(1) ]",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [], runnable: [], topup: [] }\" instead of rejecting",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "AssertionError: promise resolved \"{ started: [], runnable: [], topup: [] }\" instead of rejecting"
+          ],
+          "ok": true,
+          "patch_sha256": "f134749d636593428363fd7d4f096ecf333e0956180eb97f9118ddf32ca82776",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "treatment",
+          "control": "unedited-snapshot",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 6,
+          "hidden_passed": 0,
+          "hidden_summary_lines": [
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > maps a known CommandService error code to OrchestratorError and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing",
+            "TypeError: facade.editTaskPool is not a function"
+          ],
+          "ok": true,
+          "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        },
+        {
+          "actual": "fail",
+          "apply_exit": 0,
+          "arm": "treatment",
+          "control": "unscoped-dispatch",
+          "expect": "fail",
+          "failing_hidden_tests": [
+            "archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest"
+          ],
+          "hidden_exit": 1,
+          "hidden_failed": 1,
+          "hidden_passed": 5,
+          "hidden_summary_lines": [
+            "   \u2713 archmem hidden: WorkflowMutationFacade.editTaskPool > surfaces an unknown CommandService failure message and dispatches nothing 1ms",
+            " Test Files  1 failed (1)",
+            "      Tests  1 failed | 5 passed (6)",
+            "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+            " FAIL  src/__tests__/archmem-hidden-edit-task-pool.test.ts > archmem hidden: WorkflowMutationFacade.editTaskPool > dispatches only the edited task as mutation-scoped work and tops up the rest",
+            "AssertionError: expected [ 'task-a', 'task-b', 'task-z' ] to deeply equal [ 'task-a' ]"
+          ],
+          "ok": true,
+          "patch_sha256": "744f6356dab24300d5c6b2025b6d6759578cd6296ebc952ca3a94cbd63fb2cb8",
+          "reason": "hidden_checks_failed",
+          "regression_exit": 0
+        }
+      ],
+      "unedited_fails_identically": true
+    },
+    "equivalence": {
+      "arms": {
+        "baseline": {
+          "command": "pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts src/__tests__/api-server.test.ts src/__tests__/parity-regression.test.ts",
+          "exit": 0,
+          "failed": 0,
+          "passed": 172,
+          "snapshot_tree": "ac518fa9c4ec1dcb15e5b7f405c94533f1d8cdd4",
+          "summary_lines": [
+            " \u2713 src/__tests__/api-server.test.ts (90 tests) 117ms",
+            " \u2713 src/__tests__/parity-regression.test.ts (56 tests) 171ms",
+            " \u2713 src/__tests__/workflow-mutation-facade.test.ts (26 tests) 83ms",
+            " Test Files  3 passed (3)",
+            "      Tests  172 passed (172)"
+          ]
+        },
+        "treatment": {
+          "command": "pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts src/__tests__/api-server.test.ts src/__tests__/parity-regression.test.ts",
+          "exit": 0,
+          "failed": 0,
+          "passed": 172,
+          "snapshot_tree": "9cd6118e2b18c95e2f0403c62adfb756c1b8928e",
+          "summary_lines": [
+            " \u2713 src/__tests__/api-server.test.ts (90 tests) 120ms",
+            " \u2713 src/__tests__/parity-regression.test.ts (56 tests) 166ms",
+            " \u2713 src/__tests__/workflow-mutation-facade.test.ts (26 tests) 42ms",
+            " Test Files  3 passed (3)",
+            "      Tests  172 passed (172)"
+          ]
+        }
+      },
+      "identical_test_outcomes": true,
+      "ok": true
+    },
+    "ok": true,
+    "source": {
+      "commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad",
+      "tree": "8248449ec6a6b2773fb4fd5eca9b20cc3d08eb00"
+    }
+  },
+  "selftest": false,
+  "source": {
+    "commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad",
+    "tree": "8248449ec6a6b2773fb4fd5eca9b20cc3d08eb00"
+  },
+  "task_id": "facade-edit-task-pool",
+  "trials": {
+    "baseline": {
+      "exit": 0,
+      "human_intervention": "none",
+      "invocations": 1,
+      "patch_file": "patches/baseline.patch",
+      "patch_paths": [
+        "packages/app/src/__tests__/workflow-mutation-facade.test.ts",
+        "packages/app/src/workflow-mutation-facade.ts"
+      ],
+      "patch_sha256": "3dc35ff3f9da6f130884b725f4bd419bc38a83dd32bc31c820432d2c5e315333",
+      "retries": 0,
+      "status": "completed",
+      "stderr_tail": "",
+      "telemetry": {
+        "cost_source": "claude CLI total_cost_usd (client-side estimate)",
+        "cost_usd": 0.3924794,
+        "duration_api_ms": 60535,
+        "final_message": "These failures involve git-merge/executor mechanics unrelated to the facade change \u2014 confirming the broad suite failures are pre-existing environment issues, not something introduced by my edit. The facade-specific tests (28/28) pass cleanly.\n\n## Summary\n\nAdded `editTaskPool(taskId, poolId): Promise<MutationResult>` to `WorkflowMutationFacade` (`packages/app/src/workflow-mutation-facade.ts:246`), following the same `closeReviewForTask` \u2192 `runViaCommandService(cs.editTaskPool)` \u2192 `finalizeWithTopup` pattern used by `retryTask`/`recreateTask`, so pool edits get the same review-close, mutex-serialized dispatch, and topup guarantees as other task-level mutations.\n\nAdded corresponding unit tests in `packages/app/src/__tests__/workflow-mutation-facade.test.ts` (mock wiring for `commandService.editTaskPool`/`orchestrator.editTaskPool`, plus two new test cases). Ran `pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts` \u2014 all 28 tests pass. A full `pnpm test` run shows many pre-existing failures unrelated to this change (EPERM on local config file, missing built `@invoker/surfaces` module, git-merge mechanics, timeouts); I spot-checked several and confirmed none relate to `editTaskPool`.",
+        "init_mcp_servers": [],
+        "init_model": "claude-sonnet-5",
+        "init_plugins": [
+          {
+            "name": "agents-md",
+            "path": "builtin",
+            "source": "agents-md@builtin"
+          },
+          {
+            "name": "telemetry",
+            "path": "builtin",
+            "source": "telemetry@builtin"
+          }
+        ],
+        "init_skills_count": 0,
+        "init_tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write"
+        ],
+        "is_error": false,
+        "model_usage": {
+          "claude-sonnet-5": {
+            "cacheCreationInputTokens": 43461,
+            "cacheReadInputTokens": 805167,
+            "canonicalModel": "claude-sonnet-5",
+            "contextWindow": 1000000,
+            "costBasis": "list",
+            "costUSD": 0.3924794,
+            "inputTokens": 46,
+            "maxOutputTokens": 64000,
+            "outputTokens": 5751,
+            "provider": "firstParty",
+            "thinkingTokens": 489,
+            "webSearchRequests": 0
+          }
+        },
+        "num_turns": 23,
+        "permission_denials": 5,
+        "result_event": true,
+        "subtype": "success",
+        "tool_uses": 22,
+        "usage": {
+          "cache_creation_input_tokens": 43461,
+          "cache_read_input_tokens": 805167,
+          "input_tokens": 46,
+          "output_tokens": 5751
+        }
+      },
+      "timed_out": false,
+      "wall_seconds": 468.2
+    },
+    "treatment": {
+      "exit": 0,
+      "human_intervention": "none",
+      "invocations": 1,
+      "patch_file": "patches/treatment.patch",
+      "patch_paths": [
+        "packages/app/src/__tests__/workflow-mutation-facade.test.ts",
+        "packages/app/src/workflow-mutation-facade.ts"
+      ],
+      "patch_sha256": "f80149a7e91f2a62e4a539ab0e929ec3aa19c00eb3de88e1ec668d0f14acde21",
+      "retries": 0,
+      "status": "completed",
+      "stderr_tail": "",
+      "telemetry": {
+        "cost_source": "claude CLI total_cost_usd (client-side estimate)",
+        "cost_usd": 0.22346820000000003,
+        "duration_api_ms": 34660,
+        "final_message": "Tests pass and confirm behavior; I'll skip the separate typecheck since it needs approval and isn't part of the required test run.\n\n## Summary\n\nAdded `WorkflowMutationFacade.editTaskPool(taskId, poolId)` in `packages/app/src/workflow-mutation-facade.ts`, implemented via the existing `runTaskCommand` helper (same lifecycle as `retryTask`/`recreateTask`: closes the workflow review, routes through `CommandService.editTaskPool`, then dispatches/tops up scoped to the task).\n\nUpdated `packages/app/src/__tests__/workflow-mutation-facade.test.ts` to mock `orchestrator.editTaskPool`/`commandService.editTaskPool` and added an `editTaskPool` describe block verifying the command dispatch and the review-close-before-mutation ordering. Ran `pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts` \u2014 28/28 tests pass.",
+        "init_mcp_servers": [],
+        "init_model": "claude-sonnet-5",
+        "init_plugins": [
+          {
+            "name": "agents-md",
+            "path": "builtin",
+            "source": "agents-md@builtin"
+          },
+          {
+            "name": "telemetry",
+            "path": "builtin",
+            "source": "telemetry@builtin"
+          }
+        ],
+        "init_skills_count": 0,
+        "init_tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write"
+        ],
+        "is_error": false,
+        "model_usage": {
+          "claude-sonnet-5": {
+            "cacheCreationInputTokens": 26656,
+            "cacheReadInputTokens": 408991,
+            "canonicalModel": "claude-sonnet-5",
+            "contextWindow": 1000000,
+            "costBasis": "list",
+            "costUSD": 0.22346820000000003,
+            "inputTokens": 28,
+            "maxOutputTokens": 64000,
+            "outputTokens": 3499,
+            "provider": "firstParty",
+            "thinkingTokens": 67,
+            "webSearchRequests": 0
+          }
+        },
+        "num_turns": 14,
+        "permission_denials": 2,
+        "result_event": true,
+        "subtype": "success",
+        "tool_uses": 13,
+        "usage": {
+          "cache_creation_input_tokens": 26656,
+          "cache_read_input_tokens": 408991,
+          "input_tokens": 28,
+          "output_tokens": 3499
+        }
+      },
+      "timed_out": false,
+      "wall_seconds": 48.1
+    }
+  },
+  "validation_errors": []
+}
