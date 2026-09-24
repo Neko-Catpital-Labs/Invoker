@@ -890,25 +890,18 @@ export async function cleanupLocalInvokerHome(
 }
 
 /**
- * Eagerly reads `store` down to the tasks belonging to `poolMemberId` (the
- * same key task dispatch joins on — see selectedRemoteTargetId in
- * task-runner-pool.ts). Fetches happen here, outside of
- * computeProtectedLocalPaths/computeProtectedRepoHashes's own fail-safe
- * try/catch, so a real accessor error propagates to the caller instead of
- * being swallowed into an empty (i.e. "protect nothing") result — remote
- * cleanup must fail closed, not fail open onto an unprotected wipe.
+ * Eagerly reads every workflow and task out of `store`, so a real accessor
+ * error propagates here instead of being swallowed into an empty ("protect
+ * nothing") result by computeProtectedLocalPaths/computeProtectedRepoHashes.
+ * Not narrowed to one pool member: several configured targets can name the
+ * same host and home (the owner host itself included), so a task launched
+ * through any of them owns folders every one of them would sweep.
  */
-function narrowStoreToPoolMemberOrThrow(
-  store: DiskHeadroomWorkerStore,
-  poolMemberId: string,
-): DiskHeadroomWorkerStore {
+function snapshotStoreOrThrow(store: DiskHeadroomWorkerStore): DiskHeadroomWorkerStore {
   const workflows = store.listWorkflows();
   const tasksByWorkflowId = new Map<string, TaskState[]>();
   for (const workflow of workflows) {
-    const tasks = store.loadTasks(workflow.id).filter(
-      (task) => (task.config as { poolMemberId?: string }).poolMemberId === poolMemberId,
-    );
-    tasksByWorkflowId.set(workflow.id, tasks);
+    tasksByWorkflowId.set(workflow.id, store.loadTasks(workflow.id));
   }
   return {
     listWorkflows: () => workflows,
@@ -916,27 +909,41 @@ function narrowStoreToPoolMemberOrThrow(
   };
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end -= 1;
+  return value.slice(0, end);
+}
+
+function relativeToRemoteHome(path: string, remoteHome: string): string | undefined {
+  if (remoteHome.startsWith('~/')) {
+    const marker = `/${trimTrailingSlashes(remoteHome.slice(2))}/`;
+    const index = path.indexOf(marker);
+    return index === -1 ? undefined : path.slice(index + marker.length) || undefined;
+  }
+  const homePrefix = `${resolve(remoteHome)}${sep}`;
+  return path.startsWith(homePrefix) ? path.slice(homePrefix.length) || undefined : undefined;
+}
+
 /**
- * This target's short preservation set, as paths relative to
- * `target.remotePath`: `repos/<hash>` for protected repo mirrors and
- * `worktrees/<hash>/<branch>` (etc.) for protected task workspaces. Throws
- * if `store` throws — callers must fail closed on that, not fall back to an
+ * The preservation set sent to one target, as paths relative to
+ * `target.remotePath`: `repos/<hash>` for every repo an in-flight task uses
+ * and `worktrees/<hash>/<branch>` (etc.) for every in-flight task workspace,
+ * from every pool member and the owner's local targets alike. Throws if
+ * `store` throws — callers must fail closed on that, not fall back to an
  * unprotected remote wipe.
  */
 function computeRemotePreservationPaths(
   store: DiskHeadroomWorkerStore,
   target: RemoteDiskTarget,
 ): string[] {
-  const narrowed = narrowStoreToPoolMemberOrThrow(store, target.name);
+  const snapshot = snapshotStoreOrThrow(store);
   const preserved = new Set<string>();
-  for (const hash of computeProtectedRepoHashes(narrowed)) {
+  for (const hash of computeProtectedRepoHashes(snapshot)) {
     preserved.add(`repos/${hash}`);
   }
-  const resolvedHome = resolve(target.remotePath);
-  const homePrefix = `${resolvedHome}${sep}`;
-  for (const path of computeProtectedLocalPaths(narrowed)) {
-    if (!path.startsWith(homePrefix)) continue;
-    const relative = path.slice(homePrefix.length);
+  for (const path of computeProtectedLocalPaths(snapshot)) {
+    const relative = relativeToRemoteHome(path, target.remotePath);
     if (relative) preserved.add(relative);
   }
   return [...preserved];
@@ -963,7 +970,12 @@ export async function cleanupRemoteInvokerHome(opts: {
   }
 
   let preservePaths: string[] = [];
-  if (mode === 'critical' && opts.store) {
+  if (mode === 'critical') {
+    if (!opts.store) {
+      const detail = 'no task store to read in-use paths from; refusing critical cleanup';
+      opts.logger?.error?.(`[disk-headroom-cleanup] remote ${detail} ${targetKey}`, { module: 'disk-headroom', targetKey });
+      return { targetKey, ok: false, reason: 'cleanup-error', detail, protectedSkipCount: 0, protectedSkipBytes: 0 };
+    }
     try {
       preservePaths = computeRemotePreservationPaths(opts.store, opts.target);
     } catch (err) {
