@@ -161,6 +161,44 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("Job log (tail):", plan.yaml_text)
         self.assertIn("(not available)", plan.yaml_text)
 
+    def _excerpt(self, text):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = Path(tmp_dir) / "job.log"
+            log_path.write_text(text, encoding="utf-8")
+            return async_repair._job_log_excerpt(str(log_path))
+
+    def test_job_log_excerpt_keeps_failure_lines_a_blind_tail_would_drop(self):
+        failure = (
+            "PR body validation failed:\n"
+            "- Review lane behavior cannot ship with docs files in the same PR.\n"
+            "##[error]Process completed with exit code 1.\n"
+        )
+        cleanup = "".join(
+            f"Post Checkout trusted base\t[command]/usr/bin/git config --local get-regexp core.sshCommand {i}\n"
+            for i in range(400)
+        )
+        log = ("Progress: resolved 1006, reused 999, added 386\n" * 400) + failure + cleanup
+        self.assertGreater(len(cleanup), async_repair._JOB_LOG_EXCERPT_MAX_CHARS)
+
+        excerpt = self._excerpt(log)
+
+        self.assertIn("##[error]Process completed with exit code 1.", excerpt)
+        self.assertIn("PR body validation failed:", excerpt)
+        self.assertLessEqual(len(excerpt), async_repair._JOB_LOG_EXCERPT_MAX_CHARS)
+        self.assertNotIn("##[error]", log[-async_repair._JOB_LOG_EXCERPT_MAX_CHARS:])
+
+    def test_job_log_excerpt_without_failure_signal_falls_back_to_raw_tail(self):
+        log = "".join(f"Progress: resolved {i}, reused {i}, downloaded 0, added {i}\n" for i in range(2000))
+        self.assertEqual(async_repair._extract_error_signal(log), "")
+
+        excerpt = self._excerpt(log)
+
+        self.assertEqual(excerpt, log[-async_repair._JOB_LOG_EXCERPT_MAX_CHARS:])
+
+    def test_job_log_excerpt_under_budget_is_returned_whole(self):
+        log = "one line of failure detail\n"
+        self.assertEqual(self._excerpt(log), log)
+
     def test_repair_check_plan_queue_only_appends_queue_pr_line(self):
         plan = async_repair.build_repair_check_plan(
             pr(checks={}),
