@@ -81,6 +81,19 @@ describe('agent-login argument validation', () => {
     });
   });
 
+  it('accepts a host for codex start', () => {
+    expect(parseAgentLoginCommand(['start', 'codex', '--host', 'do1'])).toEqual({
+      subcommand: 'start',
+      provider: 'codex',
+      host: 'do1',
+      output: 'text',
+    });
+  });
+
+  it('rejects a host for claude start', () => {
+    expect(() => parseAgentLoginCommand(['start', 'claude', '--host', 'do1'])).toThrow(/--host is only supported/);
+  });
+
   it('requires a session id and a code for the code subcommand', () => {
     expect(() => parseAgentLoginCommand(['code'])).toThrow(/requires a session id/);
     expect(() => parseAgentLoginCommand(['code', 'als-1'])).toThrow(/requires a login code/);
@@ -104,6 +117,7 @@ describe('agent-login argument validation', () => {
   it('rejects extra positional arguments and unknown options', () => {
     expect(() => parseAgentLoginCommand(['status', 'als-1', 'extra'])).toThrow(/too many arguments/);
     expect(() => parseAgentLoginCommand(['start', 'codex', '--force'])).toThrow(/Unknown agent-login option "--force"/);
+    expect(() => parseAgentLoginCommand(['start', 'codex', '--host'])).toThrow(/requires a host/);
     expect(() => parseAgentLoginCommand(['start', 'codex', '--output', 'yaml'])).toThrow(/Invalid --output format/);
   });
 });
@@ -130,6 +144,45 @@ describe('agent-login command execution', () => {
       'url',
       'userCode',
     ]);
+  });
+
+  it('start with --host resolves the named remote target and passes it to the session module', async () => {
+    const loginSessions = fakeModule();
+    const result = await runAgentLoginCommand(['start', 'codex', '--host', 'do1'], loginSessions, {
+      loadRemoteTargets: () => ({
+        do1: { host: '203.0.113.10', user: 'invoker', sshKeyPath: '/tmp/do1-key' },
+        do2: { host: '203.0.113.11', user: 'invoker', sshKeyPath: '/tmp/do2-key' },
+      }),
+    });
+
+    expect(loginSessions.startAgentLogin).toHaveBeenCalledWith('codex', {
+      remoteTargets: [
+        { name: 'do1', connection: { host: '203.0.113.10', user: 'invoker', sshKeyPath: '/tmp/do1-key' } },
+      ],
+    }, { host: 'do1' });
+    expect(result.status).toBe('awaiting_user');
+  });
+
+  it('start without --host keeps owner-local session startup', async () => {
+    const loginSessions = fakeModule();
+    await runAgentLoginCommand(['start', 'codex'], loginSessions, {
+      loadRemoteTargets: () => ({
+        do1: { host: '203.0.113.10', user: 'invoker', sshKeyPath: '/tmp/do1-key' },
+      }),
+    });
+
+    expect(loginSessions.startAgentLogin).toHaveBeenCalledWith('codex');
+  });
+
+  it('rejects an unknown host without starting a login', async () => {
+    const loginSessions = fakeModule();
+
+    await expect(runAgentLoginCommand(['start', 'codex', '--host', 'missing'], loginSessions, {
+      loadRemoteTargets: () => ({
+        do1: { host: '203.0.113.10', user: 'invoker', sshKeyPath: '/tmp/do1-key' },
+      }),
+    })).rejects.toThrow(/Unknown agent-login host "missing"/);
+    expect(loginSessions.startAgentLogin).not.toHaveBeenCalled();
   });
 
   it('omits url and userCode when the session has neither', async () => {

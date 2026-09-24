@@ -38,6 +38,7 @@ import {
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
+  loadConfig,
   resolveAgentLoginWatchWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
   resolveSpendCircuitBreakerWorkerConfig,
@@ -274,7 +275,9 @@ async function headlessInstallSkills(
 
 async function headlessAgentLogin(args: string[]): Promise<AgentLoginCommandResult> {
   const { output } = parseAgentLoginCommand(args);
-  const result = await runAgentLoginCommand(args);
+  const result = await runAgentLoginCommand(args, undefined, {
+    loadRemoteTargets: () => loadConfig().remoteTargets ?? {},
+  });
   process.stdout.write(`${formatAgentLoginCommandResult(result, output)}\n`);
   return result;
 }

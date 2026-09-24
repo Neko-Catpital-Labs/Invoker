@@ -1,5 +1,7 @@
 import type {
   AgentLoginProvider,
+  AgentLoginRemoteTarget,
+  AgentLoginStartOptions,
   AgentLoginSessionDependencies,
   AgentLoginSessionStatus,
   AgentLoginSessionStatusView,
@@ -99,7 +101,7 @@ export interface AgentLoginCommandResult {
 }
 
 export type AgentLoginCommandRequest =
-  | { subcommand: 'start'; provider: AgentLoginProvider; output: AgentLoginOutputFormat }
+  | { subcommand: 'start'; provider: AgentLoginProvider; output: AgentLoginOutputFormat; host?: string }
   | { subcommand: 'code'; sessionId: string; code: string; output: AgentLoginOutputFormat }
   | { subcommand: 'status'; sessionId: string; output: AgentLoginOutputFormat };
 
@@ -107,6 +109,7 @@ export interface AgentLoginSessionModule {
   startAgentLogin(
     provider: AgentLoginProvider,
     deps?: AgentLoginSessionDependencies,
+    options?: AgentLoginStartOptions,
   ): Promise<AgentLoginSessionStatusView>;
   submitAgentLoginCode(
     sessionId: string,
@@ -117,6 +120,12 @@ export interface AgentLoginSessionModule {
     sessionId: string,
     deps?: AgentLoginSessionDependencies,
   ): AgentLoginSessionStatusView;
+}
+
+export type AgentLoginRemoteTargetsConfig = Record<string, AgentLoginRemoteTarget['connection']>;
+
+export interface AgentLoginCommandRuntime {
+  loadRemoteTargets?: () => AgentLoginRemoteTargetsConfig;
 }
 
 export class AgentLoginCommandError extends Error {
@@ -142,11 +151,21 @@ function parseAgentLoginOutput(args: string[]): AgentLoginOutputFormat {
   return value;
 }
 
+function parseAgentLoginHost(args: string[]): string | undefined {
+  const index = args.indexOf('--host');
+  if (index === -1) return undefined;
+  const value = args[index + 1]?.trim();
+  if (!value) {
+    throw new AgentLoginCommandError('agent-login start --host requires a host.');
+  }
+  return value;
+}
+
 function agentLoginPositionalArgs(args: string[]): string[] {
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === '--output') {
+    if (arg === '--output' || arg === '--host') {
       i += 1;
       continue;
     }
@@ -176,6 +195,7 @@ function requireAgentLoginArg(value: string | undefined, label: string): string 
 
 export function parseAgentLoginCommand(args: string[]): AgentLoginCommandRequest {
   const output = parseAgentLoginOutput(args);
+  const host = parseAgentLoginHost(args);
   const positional = agentLoginPositionalArgs(args);
   const subcommand = positional[0];
   if (!subcommand) {
@@ -199,7 +219,14 @@ export function parseAgentLoginCommand(args: string[]): AgentLoginCommandRequest
         `Unknown agent-login provider "${provider}". Must be claude|codex.`,
       );
     }
-    return { subcommand, provider, output };
+    if (host && provider !== 'codex') {
+      throw new AgentLoginCommandError('agent-login start --host is only supported for codex.');
+    }
+    return { subcommand, provider, output, ...(host ? { host } : {}) };
+  }
+
+  if (host) {
+    throw new AgentLoginCommandError('agent-login --host is only supported for start codex.');
   }
 
   const sessionId = requireAgentLoginArg(positional[1], 'session id');
@@ -257,6 +284,31 @@ async function loadAgentLoginSessionModule(): Promise<AgentLoginSessionModule> {
   return await import('./agent-login-session.js');
 }
 
+function resolveAgentLoginHostDeps(
+  host: string,
+  runtime: AgentLoginCommandRuntime | undefined,
+): AgentLoginSessionDependencies {
+  const remoteTargets = runtime?.loadRemoteTargets?.() ?? {};
+  const target = remoteTargets[host];
+  if (!target) {
+    const available = Object.keys(remoteTargets).sort();
+    throw new AgentLoginCommandError(
+      `Unknown agent-login host "${host}". Available: [${available.join(', ')}]`,
+    );
+  }
+  return {
+    remoteTargets: [{
+      name: host,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        ...(target.port !== undefined ? { port: target.port } : {}),
+      },
+    }],
+  };
+}
+
 function rejectAgentLoginCode(sessionId: string, status: AgentLoginSessionStatus): never {
   throw new AgentLoginCommandError(
     `Agent login session "${sessionId}" is not awaiting a code (status: ${status}).`,
@@ -266,11 +318,21 @@ function rejectAgentLoginCode(sessionId: string, status: AgentLoginSessionStatus
 export async function runAgentLoginCommand(
   args: string[],
   sessionModule?: AgentLoginSessionModule,
+  runtime?: AgentLoginCommandRuntime,
 ): Promise<AgentLoginCommandResult> {
   const request = parseAgentLoginCommand(args);
   const loginSessions = sessionModule ?? (await loadAgentLoginSessionModule());
 
   if (request.subcommand === 'start') {
+    if (request.host) {
+      return toAgentLoginCommandResult(
+        await loginSessions.startAgentLogin(
+          request.provider,
+          resolveAgentLoginHostDeps(request.host, runtime),
+          { host: request.host },
+        ),
+      );
+    }
     return toAgentLoginCommandResult(await loginSessions.startAgentLogin(request.provider));
   }
 
