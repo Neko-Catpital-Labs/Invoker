@@ -103,7 +103,7 @@ describe('plan-base-remote', () => {
     expect(resolved).toBe(originHead);
   });
 
-  it('resolvePlanBaseRevision falls back to origin/HEAD when the requested branch is missing', async () => {
+  it('resolvePlanBaseRevision resolves main to the master alternate when main is missing', async () => {
     const runGit = runGitFactory(mirror);
     const headCommit = (await runGit(['rev-parse', '--verify', 'origin/master^{commit}'])).trim();
 
