@@ -80,9 +80,12 @@ function buildWorkerOrientationPack(request: WorkRequest): string {
   ];
   if (headSha) {
     lines.push(
-      `- Head SHA ${headSha} is named in this task: run \`git rev-parse HEAD\` first and`
-      + ` \`git reset --hard ${headSha}\` if it differs, before reading or editing any file.`
+      `- Head SHA ${headSha} is named in this task: run \`git rev-parse HEAD\` first, and if it differs,`
+      + ' reconcile before reading or editing any file.'
       + ' A worktree can start on the default branch, where a file the task names does not exist yet.',
+      '- Reconcile without destroying work: a reused worktree can arrive with uncommitted changes, so run'
+      + ' `git status --porcelain` and, if it prints anything, `git stash push -u` to preserve that work'
+      + ` before \`git reset --hard ${headSha}\`. Never hard-reset over a dirty worktree you have not stashed.`,
     );
   }
   return lines.join('\n');

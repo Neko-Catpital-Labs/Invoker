@@ -102,6 +102,28 @@ describe('worker orientation pack prompts', () => {
     expect(prompt).toContain('git reset --hard 704f2db7bae560ed72a4d22a372eeff7a72864f1');
   });
 
+  it('tells a worker to stash uncommitted work before the hard reset', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeRepairTaskRequest([
+      'Address the unresolved review thread PRRT_kwDOT3uYWs6lYaDH.',
+      '',
+      'Head SHA: 704f2db7bae560ed72a4d22a372eeff7a72864f1',
+    ].join('\n')));
+
+    expect(prompt).toContain('git status --porcelain');
+    expect(prompt).toContain('git stash push -u');
+    expect(prompt.indexOf('git stash push -u')).toBeLessThan(
+      prompt.indexOf('git reset --hard 704f2db7bae560ed72a4d22a372eeff7a72864f1'),
+    );
+  });
+
+  it('stays silent about stashing when the task names no Head SHA', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeAiTaskRequest([
+      'Goal: Add a typed task summary field.',
+    ].join('\n')));
+
+    expect(prompt).not.toContain('git stash push -u');
+  });
+
   it('stays silent about HEAD when the task names no Head SHA', () => {
     const prompt = new PromptProbeExecutor().promptFor(makeAiTaskRequest([
       'Goal: Add a typed task summary field.',
