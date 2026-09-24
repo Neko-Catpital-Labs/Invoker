@@ -458,15 +458,15 @@ describe('invoker-cli fire-and-forget success line', () => {
     expect(output.stdout).not.toContain('accepted');
   });
 
-  it.fails('says retry-task was queued, not accepted', async () => {
+  it.fails('says retry-task was accepted, since it can be an idempotent no-op on a missing workflow', async () => {
     const output = captureProcessOutput();
     const bus = liveOwner();
     const code = await main(['retry-task', 'wf-1/task-1'], { createMessageBus: () => bus });
     output.restore();
 
     expect(code).toBe(0);
-    expect(output.stdout).toContain(`retry-task ${QUEUED}`);
-    expect(output.stdout).not.toContain('accepted');
+    expect(output.stdout).toContain('retry-task accepted by live owner (re-read with invoker-cli query to confirm).');
+    expect(output.stdout).not.toContain('queued');
   });
 
   it.fails('says set pool was queued, not accepted', async () => {
