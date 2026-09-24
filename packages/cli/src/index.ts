@@ -88,6 +88,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       || argv[0] === 'mcp'
       || argv[0] === 'spend-gate'
       || argv[0] === 'auto-approve-authors'
+      || argv[0] === 'agent-login'
       || argv[0] === 'owner'
       || argv[0] === 'worker'
       || argv[0] === 'run-worker'
