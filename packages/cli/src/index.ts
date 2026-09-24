@@ -9,7 +9,6 @@ export const CLI_SET_FIELDS: readonly string[] = [
   'executor',
   'agent',
   'model',
-  'task-pool',
   'fix-prompt',
   'fix-context',
   'gate-policy',

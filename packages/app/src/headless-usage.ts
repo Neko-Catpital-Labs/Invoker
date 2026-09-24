@@ -60,8 +60,8 @@ ${BOLD}Configure:${RESET}
   install-skills uninstall                            Remove bundled Invoker AI helpers
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
-  set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
-  set task-pool <taskId> <poolId>                     Change execution pool by poolId (from executionPools config)
+  set pool <taskId> <poolId>                          Change execution pool (a pool name from executionPools config)
+  set executor <taskId> <type> [poolMemberId]         Change runner type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)
   set model <taskId> <model|"">                       Change execution model (empty string clears the override)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
