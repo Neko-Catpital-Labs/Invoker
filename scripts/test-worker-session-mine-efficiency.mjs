@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -408,11 +408,100 @@ try {
     );
   }
 
+  {
+    const dir = freshRoot('cooldown-after-failed-collect');
+    mkdirSync(join(dir, 'home'), { recursive: true });
+    const rollups = join(dir, 'rollups');
+    const bin = makeFakeBin(dir, { remoteReport: makeReport('unused', isoDaysAgo(1), []) });
+    const env = {
+      INVOKER_SESSION_MINE_EFFICIENCY: '1',
+      INVOKER_SESSION_ROLLUPS_DIR: rollups,
+      INVOKER_REPO_CONFIG_PATH: join(dir, 'missing-config.json'),
+      INVOKER_SESSION_MINE_INVENTORY_JSON: EMPTY_INVENTORY,
+      INVOKER_SESSION_MINE_PYTHON: 'false',
+    };
+    const first = runMiner(dir, bin, env);
+    check('failed-collect-exits-0', first.status === 0, `exit=${first.status}\n${first.out}`);
+    check('failed-collect-names-the-failure', /retrying next tick/.test(first.out), `expected the failed sources to be reported, got:\n${first.out}`);
+    const second = runMiner(dir, bin, env);
+    check(
+      'failed-collect-starts-no-cooldown',
+      !/efficiency cooldown/.test(second.out) && /retrying next tick/.test(second.out),
+      `a failed collect must not start the 7-day cooldown, got:\n${second.out}`,
+    );
+  }
+
+  {
+    const dir = freshRoot('tickets-paged');
+    const portFile = join(dir, 'port');
+    const server = join(dir, 'fake-linear.mjs');
+    writeFileSync(server, `import { createServer } from 'node:http';
+import { writeFileSync } from 'node:fs';
+const pages = {
+  first: { nodes: [{ id: 'p1', identifier: 'INV-10', title: 'Unrelated', description: 'nothing here', state: { type: 'started' } }], pageInfo: { hasNextPage: true, endCursor: 'cursor-1' } },
+  second: { nodes: [{ id: 'p2', identifier: 'INV-11', title: 'Old pattern', description: 'Motivation: token-pattern:on-page-two', state: { type: 'started' } }], pageInfo: { hasNextPage: false, endCursor: 'cursor-2' } },
+};
+const server = createServer((req, res) => {
+  let body = '';
+  req.on('data', (chunk) => { body += chunk; });
+  req.on('end', () => {
+    const after = JSON.parse(body || '{}').variables?.after ?? null;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ data: { issues: after === 'cursor-1' ? pages.second : pages.first } }));
+  });
+});
+server.listen(0, '127.0.0.1', () => writeFileSync(${JSON.stringify(portFile)}, String(server.address().port)));
+`);
+    const child = spawn('node', [server], { stdio: 'ignore' });
+    try {
+      const waitUntil = Date.now() + 10_000;
+      const pause = new Int32Array(new SharedArrayBuffer(4));
+      while (!existsSync(portFile) && Date.now() < waitUntil) Atomics.wait(pause, 0, 0, 50);
+      const port = existsSync(portFile) ? readFileSync(portFile, 'utf8').trim() : '';
+      check('paged-fake-linear-started', port !== '', 'fake Linear server never reported a port');
+      const createdLog = join(dir, 'created.jsonl');
+      writeFileSync(createdLog, '');
+      const findings = join(dir, 'findings.json');
+      writeFileSync(findings, JSON.stringify({
+        findings: [{
+          slug: 'on-page-two',
+          title: 'A pattern already open on the second page of issues',
+          goal: 'Do not refile it',
+          motivation: 'open ticket sits past the first page',
+          safetyInvariant: 'Analysis only',
+          verify: 'node scripts/test-worker-session-mine-efficiency.mjs',
+          repo: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+          suggestedFix: 'none',
+          evidence: 'fixture',
+        }],
+      }));
+      const env = { ...process.env };
+      delete env.INVOKER_LINEAR_SEARCH_CMD;
+      const result = spawnSync('node', [TICKETS, '--findings', findings], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: {
+          ...env,
+          INVOKER_LINEAR_API_URL: `http://127.0.0.1:${port}/graphql`,
+          INVOKER_LINEAR_API_KEY: 'fixture-key',
+          INVOKER_LINEAR_CREATE_CMD: `cat >> ${createdLog}; printf '\\n' >> ${createdLog}; echo '{"id":"new","identifier":"INV-12"}'`,
+          INVOKER_LINEAR_LABEL_NAMES: '',
+        },
+      });
+      const out = `${result.stdout || ''}${result.stderr || ''}`;
+      check('paged-tickets-exit-0', result.status === 0, `exit=${result.status}\n${out}`);
+      const created = readFileSync(createdLog, 'utf8').split('\n').filter(Boolean);
+      check('paged-tickets-skip-marker-on-page-two', created.length === 0, `expected no create for a marker open on page two, got ${created.length}\n${out}`);
+    } finally {
+      child.kill();
+    }
+  }
+
   if (failures.length > 0) {
     for (const failure of failures) console.error(`FAIL ${failure}`);
     process.exit(1);
   }
-  console.log(JSON.stringify({ ok: true, checks: 28 }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks: 34 }, null, 2));
 } finally {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 }
