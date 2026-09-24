@@ -456,22 +456,26 @@ describe('invoker-cli fire-and-forget success line', () => {
     expect(output.stdout).not.toContain('accepted');
   });
 
-  it('says retry-task was accepted, since it can be an idempotent no-op on a missing workflow', async () => {
-    const output = captureProcessOutput();
-    const bus = liveOwner();
-    const code = await main(['retry-task', 'wf-1/task-1'], { createMessageBus: () => bus });
-    output.restore();
-
-    expect(code).toBe(0);
-    expect(output.stdout).toContain('retry-task accepted by live owner (re-read with invoker-cli query to confirm).');
-    expect(output.stdout).not.toContain('queued');
-  });
-
   it('says set pool was queued, not accepted', async () => {
     const result = await runSet(['pool', TASK_ID, 'ssh', 'remote-1'], ownerTask());
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(`set pool ${QUEUED}`);
     expect(result.stdout).not.toContain('accepted');
+  });
+
+  it.each([
+    ['retry-task', 'wf-1/task-1'],
+    ['retry', 'wf-1'],
+    ['delete', 'wf-1'],
+  ])('says %s was accepted, since it can be an idempotent no-op on a missing workflow', async (command, targetId) => {
+    const output = captureProcessOutput();
+    const bus = liveOwner();
+    const code = await main([command, targetId], { createMessageBus: () => bus });
+    output.restore();
+
+    expect(code).toBe(0);
+    expect(output.stdout).toContain(`${command} accepted by live owner (re-read with invoker-cli query to confirm).`);
+    expect(output.stdout).not.toContain('queued');
   });
 });
