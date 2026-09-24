@@ -176,7 +176,32 @@ mkdir -p "$(dirname "$CLONE")"
 # safe.directory "*" wildcard covers the check on $REPO/.git (the -c form and a
 # specific path do not), so set it in the remote global config before cloning.
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
-if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
+if [ ! -d "$CLONE/.git" ]; then
+  # $CLONE only appears via an atomic rename made under $LOCK, so no run ever fetches from a half-made clone.
+  LOCK="$CLONE.lock"
+  TMP_CLONE="$CLONE.tmp.$$"
+  WAITED=0
+  until mkdir "$LOCK" 2>/dev/null; do
+    if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+      rmdir "$LOCK" 2>/dev/null || true
+      continue
+    fi
+    if [ "$WAITED" -ge 900 ]; then
+      echo "ERROR: timed out after $WAITED seconds waiting for mirror clone lock $LOCK" >&2
+      exit 34
+    fi
+    sleep 1
+    WAITED=$((WAITED + 1))
+  done
+  trap 'rm -rf "$TMP_CLONE"; rmdir "$LOCK" 2>/dev/null || true' EXIT
+  if [ ! -d "$CLONE/.git" ]; then
+    git clone "$REPO" "$TMP_CLONE"
+    if [ -d "$CLONE" ]; then rmdir "$CLONE"; fi
+    mv "$TMP_CLONE" "$CLONE"
+  fi
+  rmdir "$LOCK"
+  trap - EXIT
+fi
 if ! git -C "$CLONE" fetch --all --prune; then
   echo "[WARNING] Git fetch failed for $CLONE" >&2
   echo "[WARNING] Continuing with existing refs. Tasks may use stale commits." >&2

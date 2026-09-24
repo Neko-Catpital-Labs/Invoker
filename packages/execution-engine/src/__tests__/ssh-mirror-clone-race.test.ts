@@ -72,7 +72,7 @@ describe('buildMirrorCloneScript concurrent mirror creation', () => {
     return { home, script };
   }
 
-  it.fails('succeeds for every concurrent run and leaves no lock or temp dirs', async () => {
+  it('succeeds for every concurrent run and leaves no lock or temp dirs', async () => {
     const { home, script } = setup();
     const reposDir = join(home, 'repos');
 
@@ -91,7 +91,7 @@ describe('buildMirrorCloneScript concurrent mirror creation', () => {
     expect(leftovers).toEqual([]);
   }, 120_000);
 
-  it.fails('breaks a stale lock older than ten minutes', async () => {
+  it('breaks a stale lock older than ten minutes', async () => {
     const { home, script } = setup();
     const lock = join(home, 'repos', 'racehash.lock');
     mkdirSync(lock, { recursive: true });
