@@ -193,6 +193,18 @@ function recordDecision(
   });
 }
 
+function clearFailedDecision(
+  store: WorkerDecisionStore | undefined,
+  externalKey: string,
+  summary: string,
+  payload: Record<string, unknown> = {},
+): void {
+  if (!store) return;
+  const existing = store.getWorkerAction?.(CLAUDE_OAUTH_REFRESH_WORKER_KIND, externalKey);
+  if (existing?.status !== 'failed') return;
+  recordDecision(store, externalKey, 'completed', summary, payload);
+}
+
 function hasClaudeAccessToken(credentialsJson: string): boolean {
   const accessToken = parseClaudeOauthBlob(credentialsJson)?.accessToken;
   return typeof accessToken === 'string' && accessToken.trim() !== '';
@@ -235,14 +247,18 @@ async function recordRemoteCredentialStates(
       remoteJson = null;
     }
     const staleReason = describe(remoteJson, now());
+    const subjectId = label === 'Codex' ? `codex:${target.name}` : target.name;
     if (staleReason === null) {
       options.logger.info(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] ${label} credentials on ${target.name} are still valid`, {
         module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,
         target: target.name,
       });
+      clearFailedDecision(options.store, subjectId, `${label} credentials on ${target.name} are valid again; no login needed`, {
+        target: target.name,
+        agent: label.toLowerCase(),
+      });
       continue;
     }
-    const subjectId = label === 'Codex' ? `codex:${target.name}` : target.name;
     const summary = `${label} credentials on ${target.name} need their own ${label} login: ${staleReason}`;
     options.logger.info(`[${CLAUDE_OAUTH_REFRESH_WORKER_KIND}] ${summary}`, {
       module: CLAUDE_OAUTH_REFRESH_WORKER_KIND,

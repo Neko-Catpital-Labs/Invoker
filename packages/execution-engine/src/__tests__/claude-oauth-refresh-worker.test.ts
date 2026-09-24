@@ -44,6 +44,20 @@ function makeStore(): { store: WorkerDecisionStore; rows: unknown[] } {
   };
 }
 
+function makeStatefulStore(): { store: WorkerDecisionStore; statusOf: (externalKey: string) => string | undefined } {
+  const byKey = new Map<string, { id: string; status: string }>();
+  return {
+    statusOf: (externalKey) => byKey.get(externalKey)?.status,
+    store: {
+      getWorkerAction: (_workerKind, externalKey) => byKey.get(externalKey) as never,
+      upsertWorkerAction: (action) => {
+        byKey.set(action.externalKey, action as never);
+        return action as never;
+      },
+    },
+  };
+}
+
 describe('runClaudeOauthRefreshCheck', () => {
   it('does nothing when the local token and every remote target are all healthy', async () => {
     const writeCredentials = vi.fn();
@@ -167,6 +181,33 @@ describe('runClaudeOauthRefreshCheck', () => {
     expect(infoLines.some((line) => line.includes('do2') && line.includes('still valid'))).toBe(true);
     const statuses = Object.fromEntries((rows as { subjectId: string; status: string }[]).map((r) => [r.subjectId, r.status]));
     expect(statuses).toEqual({ do1: 'failed' });
+  });
+
+  it('clears a failed decision once a remote target holds valid credentials again', async () => {
+    const now = 1_000_000_000_000;
+    const healthyLocal = credentialsJson(now + 7 * 60 * 60 * 1000);
+    const { store, statusOf } = makeStatefulStore();
+    let remoteExpiry = 0;
+
+    const tick = async () => {
+      await runClaudeOauthRefreshCheck({
+        logger: makeLogger(),
+        credentialsPath: '/home/invoker/.claude/.credentials.json',
+        remoteTargets: [makeTarget('do1')],
+        store,
+        readCredentials: () => healthyLocal,
+        readRemoteCredentials: async () => credentialsJson(remoteExpiry),
+        distributeFn: vi.fn(async () => undefined),
+        now: () => now,
+      });
+    };
+
+    await tick();
+    expect(statusOf('do1')).toBe('failed');
+
+    remoteExpiry = now + 7 * 60 * 60 * 1000;
+    await tick();
+    expect(statusOf('do1')).toBe('completed');
   });
 
   it('never writes to a remote target when the owner credential file holds no usable token', async () => {
