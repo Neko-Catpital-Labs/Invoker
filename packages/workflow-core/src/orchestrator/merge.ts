@@ -15,6 +15,7 @@
  */
 
 import type { TaskState, TaskDelta, TaskStateChanges, TaskStatus, Attempt } from '@invoker/workflow-graph';
+import { FailureClassifier } from '@invoker/workflow-graph';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Logger } from '@invoker/contracts';
 import { parseMergeConflictError } from '../merge-conflict-error.js';
@@ -364,6 +365,7 @@ function restoreFailedEntry(
   const displayError = fixError
     ? `[Fix with Agent failed] ${fixError}\n\n${normalizedSavedError}`
     : savedError;
+  const fixFailureClass = fixError ? FailureClassifier.classifyAgentQuotaRefusal(fixError) : undefined;
   const completedAt = new Date();
   const changes: TaskStateChanges = {
     status: 'failed',
@@ -374,6 +376,7 @@ function restoreFailedEntry(
       pendingFixError: undefined,
       fixSessionEntryStatus: undefined,
       completedAt,
+      ...(fixFailureClass ? { failureClass: fixFailureClass } : {}),
     },
   };
   const revertUpdated = host.writeAndSync(id, changes);
