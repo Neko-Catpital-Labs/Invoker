@@ -3,7 +3,7 @@
  */
 
 export { ClaudeExecutionAgent, resolveClaudeWorkerConfigDir, ensureClaudeWorkerConfigDir, type ClaudeExecutionAgentConfig } from './claude-execution-agent.js';
-export { CodexExecutionAgent, type CodexExecutionAgentConfig } from './codex-execution-agent.js';
+export { CodexExecutionAgent, CodexModelDiscoveryUnavailableError, type CodexExecutionAgentConfig } from './codex-execution-agent.js';
 export { OmpExecutionAgent, type OmpExecutionAgentConfig } from './omp-execution-agent.js';
 export { KimiExecutionAgent, type KimiExecutionAgentConfig } from './kimi-execution-agent.js';
 export { QwenExecutionAgent, type QwenExecutionAgentConfig } from './qwen-execution-agent.js';
