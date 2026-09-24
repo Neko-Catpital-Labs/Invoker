@@ -1,0 +1,37 @@
+# Real trials purchased by earlier attempts of this Invoker task
+
+The Invoker task `wf-1789538353357-260/build-and-run-paired-pilot` has been regenerated several
+times. Each attempt got a fresh worktree, and three of them ran their own real A/B pair with their
+own apparatus and their own task. Every one of those trials counts as a real trial outcome, so they
+are listed here rather than dropped.
+
+| Attempt branch (suffix) | Date (UTC) | Experiment task | Harness / model / effort | Baseline | Treatment | Record |
+| --- | --- | --- | --- | --- | --- | --- |
+| `g0.t1.a-abbac3a69` | 2026-09-16 | retry-qualified-task-review-close | codex / gpt-reserve / low | empty patch, hidden checks failed (1 of 2) | empty patch, hidden checks failed (1 of 2) | `records/pilot-record.json` on that branch |
+| `g1.t13.a-a40f8a775` | 2026-09-22 | close-idle-task | claude | passed | passed | `records/pair-pilot-001.json` on that branch |
+| `g2.t14.a-a257cf03b` | 2026-09-24 | facade-edit-task-pool | claude / claude-sonnet-5 / medium | passed | passed | `records/pilot-001/` (this directory) |
+
+Branches `g1.t2`, `g1.t9` (three attempts) and `g1.t10` contain no trial records.
+
+## What this attempt (`g3.t15.a-a7fec8d51`) did
+
+It ran no new trial. `g2.t14` had already committed a complete apparatus that satisfies this
+protocol: OS-level grader isolation, an idempotent ledger at
+`~/.local/state/invoker-archmem/architecture-memory-edit-task-pool-v1/pilot-001/ledger.jsonl`,
+and one recorded pair. A fourth pair from a retried task is exactly what that ledger exists to
+prevent. So this attempt cherry-picked `g2.t14`'s two commits unchanged, then re-ran `self-test`
+and `verify-recorded` independently. It also ran `pilot`, which refused as designed. Those outputs
+are in `g3-*-output.txt`.
+
+Before it found `g2.t14`, this attempt had started drafting a separate evaluator (a `replaceTask`
+task). It made no model calls for that draft beyond about seven `claude-haiku-4-5` sandbox smoke probes
+(each CLI-reported below $0.01; the exact total was not captured). That is development cost, not
+trial cost. It discarded the draft
+uncommitted. It read the `g2.t14` ledger outcome only after that draft's structural delta had
+already been written, so nothing in the recorded pair was tuned from those results.
+
+## How to read the set
+
+The pairs used different tasks, graders, harnesses, and treatments. They are not repeats of one
+experiment and must not be pooled. The only pair this directory's `verify-recorded` vouches for
+is `pilot-001` (edit-task-pool).
