@@ -99,7 +99,7 @@ export interface AgentLoginCommandResult {
 }
 
 export type AgentLoginCommandRequest =
-  | { subcommand: 'start'; provider: AgentLoginProvider; output: AgentLoginOutputFormat }
+  | { subcommand: 'start'; provider: AgentLoginProvider; output: AgentLoginOutputFormat; host?: string }
   | { subcommand: 'code'; sessionId: string; code: string; output: AgentLoginOutputFormat }
   | { subcommand: 'status'; sessionId: string; output: AgentLoginOutputFormat };
 
@@ -130,23 +130,33 @@ export function formatAgentLoginSubcommands(): string {
   return AGENT_LOGIN_SUBCOMMANDS.join('|');
 }
 
-function parseAgentLoginOutput(args: string[]): AgentLoginOutputFormat {
-  const index = args.indexOf('--output');
-  if (index === -1) return 'text';
-  const value = args[index + 1];
-  if (value !== 'text' && value !== 'json') {
-    throw new AgentLoginCommandError(
-      `Invalid --output format: "${value ?? ''}". Must be text|json.`,
-    );
-  }
-  return value;
-}
-
-function agentLoginPositionalArgs(args: string[]): string[] {
+function parseAgentLoginArgs(args: string[]): {
+  output: AgentLoginOutputFormat;
+  host?: string;
+  positional: string[];
+} {
+  let output: AgentLoginOutputFormat = 'text';
+  let host: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--output') {
+      const value = args[i + 1];
+      if (value !== 'text' && value !== 'json') {
+        throw new AgentLoginCommandError(
+          `Invalid --output format: "${value ?? ''}". Must be text|json.`,
+        );
+      }
+      output = value;
+      i += 1;
+      continue;
+    }
+    if (arg === '--host') {
+      const value = (args[i + 1] ?? '').trim();
+      if (!value) {
+        throw new AgentLoginCommandError('agent-login --host requires a host.');
+      }
+      host = value;
       i += 1;
       continue;
     }
@@ -155,7 +165,7 @@ function agentLoginPositionalArgs(args: string[]): string[] {
     }
     positional.push(arg);
   }
-  return positional;
+  return host === undefined ? { output, positional } : { output, host, positional };
 }
 
 function isAgentLoginSubcommand(value: string): value is AgentLoginSubcommand {
@@ -175,8 +185,7 @@ function requireAgentLoginArg(value: string | undefined, label: string): string 
 }
 
 export function parseAgentLoginCommand(args: string[]): AgentLoginCommandRequest {
-  const output = parseAgentLoginOutput(args);
-  const positional = agentLoginPositionalArgs(args);
+  const { output, host, positional } = parseAgentLoginArgs(args);
   const subcommand = positional[0];
   if (!subcommand) {
     throw new AgentLoginCommandError(
@@ -199,7 +208,14 @@ export function parseAgentLoginCommand(args: string[]): AgentLoginCommandRequest
         `Unknown agent-login provider "${provider}". Must be claude|codex.`,
       );
     }
-    return { subcommand, provider, output };
+    if (host && provider !== 'codex') {
+      throw new AgentLoginCommandError('agent-login --host is only supported for codex.');
+    }
+    return host === undefined ? { subcommand, provider, output } : { subcommand, provider, host, output };
+  }
+
+  if (host) {
+    throw new AgentLoginCommandError('agent-login --host is only supported for start.');
   }
 
   const sessionId = requireAgentLoginArg(positional[1], 'session id');
@@ -266,11 +282,17 @@ function rejectAgentLoginCode(sessionId: string, status: AgentLoginSessionStatus
 export async function runAgentLoginCommand(
   args: string[],
   sessionModule?: AgentLoginSessionModule,
+  sessionDeps?: AgentLoginSessionDependencies,
 ): Promise<AgentLoginCommandResult> {
   const request = parseAgentLoginCommand(args);
   const loginSessions = sessionModule ?? (await loadAgentLoginSessionModule());
 
   if (request.subcommand === 'start') {
+    if (request.host) {
+      return toAgentLoginCommandResult(
+        await loginSessions.startAgentLogin(request.provider, { ...(sessionDeps ?? {}), host: request.host }),
+      );
+    }
     return toAgentLoginCommandResult(await loginSessions.startAgentLogin(request.provider));
   }
 

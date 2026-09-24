@@ -52,6 +52,7 @@ import {
   parseAgentLoginCommand,
   runAgentLoginCommand,
 } from './headless-command-registry.js';
+import type { AgentLoginSessionDependencies } from './agent-login-session.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 
@@ -268,9 +269,25 @@ async function headlessInstallSkills(
   }
 }
 
-async function headlessAgentLogin(args: string[]): Promise<AgentLoginCommandResult> {
+function buildAgentLoginSessionDeps(args: string[], deps: HeadlessDeps): AgentLoginSessionDependencies | undefined {
+  const request = parseAgentLoginCommand(args);
+  if (request.subcommand !== 'start' || !request.host) return undefined;
+  return {
+    remoteTargets: Object.entries(deps.invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        ...(target.port !== undefined ? { port: target.port } : {}),
+      },
+    })),
+  };
+}
+
+async function headlessAgentLogin(args: string[], deps: HeadlessDeps): Promise<AgentLoginCommandResult> {
   const { output } = parseAgentLoginCommand(args);
-  const result = await runAgentLoginCommand(args);
+  const result = await runAgentLoginCommand(args, undefined, buildAgentLoginSessionDeps(args, deps));
   process.stdout.write(`${formatAgentLoginCommandResult(result, output)}\n`);
   return result;
 }
@@ -441,7 +458,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<u
       await headlessQuerySelect(args[1], deps);
       break;
     case 'agent-login':
-      return await headlessAgentLogin(args.slice(1));
+      return await headlessAgentLogin(args.slice(1), deps);
     case 'worker':
       await headlessWorker(args.slice(1), deps);
       break;

@@ -79,6 +79,12 @@ describe('agent-login argument validation', () => {
       provider: 'codex',
       output: 'json',
     });
+    expect(parseAgentLoginCommand(['start', 'codex', '--host', 'do-1'])).toEqual({
+      subcommand: 'start',
+      provider: 'codex',
+      host: 'do-1',
+      output: 'text',
+    });
   });
 
   it('requires a session id and a code for the code subcommand', () => {
@@ -105,6 +111,8 @@ describe('agent-login argument validation', () => {
     expect(() => parseAgentLoginCommand(['status', 'als-1', 'extra'])).toThrow(/too many arguments/);
     expect(() => parseAgentLoginCommand(['start', 'codex', '--force'])).toThrow(/Unknown agent-login option "--force"/);
     expect(() => parseAgentLoginCommand(['start', 'codex', '--output', 'yaml'])).toThrow(/Invalid --output format/);
+    expect(() => parseAgentLoginCommand(['start', 'codex', '--host'])).toThrow(/requires a host/);
+    expect(() => parseAgentLoginCommand(['start', 'claude', '--host', 'do-1'])).toThrow(/only supported for codex/);
   });
 });
 
@@ -130,6 +138,22 @@ describe('agent-login command execution', () => {
       'url',
       'userCode',
     ]);
+  });
+
+  it('start forwards a host-scoped codex login to the session module', async () => {
+    const loginSessions = fakeModule();
+    const remoteTargets = [
+      { name: 'do-1', connection: { host: 'remote-a', user: 'invoker', sshKeyPath: '/tmp/key-a' } },
+    ];
+    const result = await runAgentLoginCommand(['start', 'codex', '--host', 'do-1'], loginSessions, {
+      remoteTargets,
+    });
+
+    expect(loginSessions.startAgentLogin).toHaveBeenCalledWith('codex', {
+      host: 'do-1',
+      remoteTargets,
+    });
+    expect(result.status).toBe('awaiting_user');
   });
 
   it('omits url and userCode when the session has neither', async () => {
