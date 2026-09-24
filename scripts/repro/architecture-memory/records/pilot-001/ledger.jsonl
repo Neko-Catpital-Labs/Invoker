@@ -1,0 +1,8 @@
+{"at": "2026-09-24T01:54:21Z", "event": "preflight", "ok": true}
+{"at": "2026-09-24T01:54:21Z", "event": "order", "order": ["treatment", "baseline"], "pinned": {"binary": "/Users/edbertchan/.local/share/claude/versions/2.1.281", "binary_sha256": "a922981f6f3b55a251ef9f9dbaa0621a5f99cbcb5ca67f8a797476ccfc83f626", "budget_usd": 5.0, "effort": "medium", "harness": "claude", "model": "claude-sonnet-5", "timeout_seconds": 900, "version": "2.1.281 (Claude Code)"}, "seed": "6fb57668321bd98f"}
+{"arm": "treatment", "at": "2026-09-24T01:55:00Z", "config_sha256": "4427f8361f8d9954f7abd3c874365995641807f2cbf36f40e1c0cb9fd56edb34", "event": "trial_start", "snapshot_tree": "9cd6118e2b18c95e2f0403c62adfb756c1b8928e"}
+{"arm": "treatment", "at": "2026-09-24T01:55:48Z", "event": "trial_end", "exit": 0, "patch_sha256": "f80149a7e91f2a62e4a539ab0e929ec3aa19c00eb3de88e1ec668d0f14acde21", "status": "completed", "timed_out": false, "wall_seconds": 48.1}
+{"arm": "baseline", "at": "2026-09-24T01:56:25Z", "config_sha256": "4427f8361f8d9954f7abd3c874365995641807f2cbf36f40e1c0cb9fd56edb34", "event": "trial_start", "snapshot_tree": "ac518fa9c4ec1dcb15e5b7f405c94533f1d8cdd4"}
+{"arm": "baseline", "at": "2026-09-24T02:04:13Z", "event": "trial_end", "exit": 0, "patch_sha256": "3dc35ff3f9da6f130884b725f4bd419bc38a83dd32bc31c820432d2c5e315333", "status": "completed", "timed_out": false, "wall_seconds": 468.2}
+{"arm": "baseline", "at": "2026-09-24T02:04:36Z", "event": "graded", "passed": true, "reason": "passed"}
+{"arm": "treatment", "at": "2026-09-24T02:04:58Z", "event": "graded", "passed": true, "reason": "passed"}
