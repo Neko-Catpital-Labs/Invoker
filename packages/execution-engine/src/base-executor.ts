@@ -38,14 +38,15 @@ const FAILED_TASK_ERROR_LINE_PATTERNS = [
 
 const PACKAGE_PATH_RE = /\bpackages\/[A-Za-z0-9._-]+(?=\/|\b)/g;
 const EMBEDDED_JOB_LOG_RE = /^Job log \(tail\):[ \t]*$/m;
+const HEAD_SHA_RE = /^[ \t]*Head SHA:[ \t]*([0-9a-f]{7,40})[ \t]*$/im;
 
 function withoutEmbeddedJobLog(part: string): string {
   const marker = part.search(EMBEDDED_JOB_LOG_RE);
   return marker === -1 ? part : part.slice(0, marker);
 }
 
-function inferOwningPackage(request: WorkRequest): string {
-  const haystack = [
+function taskTextWithoutJobLogs(request: WorkRequest): string {
+  return [
     request.actionId,
     request.inputs.description,
     request.inputs.prompt,
@@ -54,20 +55,40 @@ function inferOwningPackage(request: WorkRequest): string {
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
     .map(withoutEmbeddedJobLog)
     .join('\n');
+}
+
+function inferOwningPackage(request: WorkRequest): string {
+  const haystack = taskTextWithoutJobLogs(request);
   const packages = [...new Set(haystack.match(PACKAGE_PATH_RE) ?? [])];
   if (packages.length === 1) return packages[0];
   if (packages.length > 1) return `${packages[0]} (plus explicitly named sibling paths)`;
   return 'not specified; infer the narrowest package from the named files before editing';
 }
 
+function inferNamedHeadSha(request: WorkRequest): string | undefined {
+  return HEAD_SHA_RE.exec(taskTextWithoutJobLogs(request))?.[1];
+}
+
 function buildWorkerOrientationPack(request: WorkRequest): string {
   const owningPackage = inferOwningPackage(request);
-  return [
+  const headSha = inferNamedHeadSha(request);
+  const lines = [
     'Worker orientation pack:',
     `- Owning package: ${owningPackage}`,
     '- Allowed files: stay inside the owning package and any task-named files unless the task explicitly widens scope.',
     '- Do not start with an unscoped repository walk; inspect the named package, files, and existing tests first.',
-  ].join('\n');
+  ];
+  if (headSha) {
+    lines.push(
+      `- Head SHA ${headSha} is named in this task: run \`git rev-parse HEAD\` first, and if it differs,`
+      + ' reconcile before reading or editing any file.'
+      + ' A worktree can start on the default branch, where a file the task names does not exist yet.',
+      '- Reconcile without destroying work: a reused worktree can arrive with uncommitted changes, so run'
+      + ' `git status --porcelain` and, if it prints anything, `git stash push -u` to preserve that work'
+      + ` before \`git reset --hard ${headSha}\`. Never hard-reset over a dirty worktree you have not stashed.`,
+    );
+  }
+  return lines.join('\n');
 }
 
 function failedTaskErrorTail(output: string): string | undefined {
