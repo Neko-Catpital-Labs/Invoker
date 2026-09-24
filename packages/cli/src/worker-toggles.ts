@@ -116,7 +116,7 @@ export const WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
   {
     id: 'session-token-push',
     label: 'Session token push',
-    description: 'Once a week, rolls up this machine\'s Claude session token usage and copies the report to the configured remote target so a machine that cannot be reached inbound still reports its numbers. Off by default; enable on the machine whose sessions you want counted.',
+    description: 'Once a week, rolls up this machine\'s Claude, Codex, and OMP session token usage and copies the report to the configured remote target so a machine that cannot be reached inbound still reports its numbers. Off by default; enable on the machine whose sessions you want counted.',
     workerKinds: [SESSION_TOKEN_PUSH_WORKER_KIND],
     includeInOnboarding: false,
   },
