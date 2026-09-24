@@ -23,6 +23,7 @@ const TASK_FILTER_COLUMNS: Record<TaskFilterKey, string> = {
   completed_at: 't.completed_at',
   last_heartbeat_at: 't.last_heartbeat_at',
 };
+const TASK_FILTER_TIME_KEYS = new Set<TaskFilterKey>(['created_at', 'started_at', 'completed_at', 'last_heartbeat_at']);
 
 function columnFor(key: string): string {
   if (!Object.hasOwn(TASK_FILTER_COLUMNS, key)) throw new Error(`Unknown task filter key: ${key}`);
@@ -64,6 +65,7 @@ function compileNode(node: TaskFilterNode, params: unknown[]): string {
       return `${column} LIKE ? ESCAPE '\\'`;
     }
     case 'time_range': {
+      if (!TASK_FILTER_TIME_KEYS.has(node.key)) throw new Error(`Unknown task filter time key: ${node.key}`);
       const column = columnFor(node.key);
       const clauses: string[] = [];
       if (node.start !== undefined) {
@@ -76,6 +78,8 @@ function compileNode(node: TaskFilterNode, params: unknown[]): string {
       }
       return clauses.length === 1 ? clauses[0] : `(${clauses.join(' AND ')})`;
     }
+    default:
+      throw new Error(`Unknown task filter operation: ${(node as { op?: unknown }).op}`);
   }
 }
 
