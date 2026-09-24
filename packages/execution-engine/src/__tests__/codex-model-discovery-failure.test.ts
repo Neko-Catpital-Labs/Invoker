@@ -139,7 +139,7 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     stubProbes(ok(LIVE_CATALOG));
     const agent = new CodexExecutionAgent();
 
-    expect(agent.supportedModels).toEqual(LIVE_MODELS);
+    expect(agent.supportedModels).toStrictEqual(LIVE_MODELS);
     expect(agent.supportedModelsProvenance).toBe('agent');
     expect(probeArgs()).toEqual([LIVE_ARGS]);
   });
@@ -303,7 +303,7 @@ describe('CodexExecutionAgent model discovery outcomes', () => {
     stubProbes(ok(LIVE_CATALOG));
     const agent = new CodexExecutionAgent();
 
-    expect(agent.supportedModels).toEqual(LIVE_MODELS);
+    expect(agent.supportedModels).toStrictEqual(LIVE_MODELS);
     expect(agent.supportsModel('gpt-5.6-luna')).toBe(true);
     expect(agent.supportedModelsProvenance).toBe('agent');
     expect(probeArgs()).toEqual([LIVE_ARGS]);
