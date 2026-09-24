@@ -204,9 +204,39 @@ export function classifyReviewUnitsForPath(filePath) {
   return [];
 }
 
+export const COUPLED_REVIEW_UNIT_FILES = [
+  {
+    files: [
+      'packages/contracts/src/headless-set-subcommands.ts',
+      'packages/app/src/headless.ts',
+      'packages/cli/src/index.ts',
+    ],
+    reason: 'HeadlessSetSubcommand is the union of the contract list; HEADLESS_SET_HANDLERS and the CLI field list must match it exactly',
+  },
+];
+
+function normalizeChangedPath(filePath) {
+  return String(filePath).replace(/\\/g, '/');
+}
+
+function coupledContractFiles(changedPaths) {
+  const changedSet = new Set(changedPaths);
+  const exempt = new Set();
+  for (const entry of COUPLED_REVIEW_UNIT_FILES) {
+    if (!entry.files.every((file) => changedSet.has(file))) continue;
+    for (const file of entry.files) {
+      if (classifyReviewUnitsForPath(file).includes('contract')) exempt.add(file);
+    }
+  }
+  return exempt;
+}
+
 export function reviewUnitsForChangedFiles(changedFiles = []) {
   const units = new Set();
-  for (const changedFile of changedFiles) {
+  const changedPaths = changedFiles.map(normalizeChangedPath);
+  const exemptFiles = coupledContractFiles(changedPaths);
+  for (const changedFile of changedPaths) {
+    if (exemptFiles.has(changedFile)) continue;
     for (const unit of classifyReviewUnitsForPath(changedFile)) {
       units.add(unit);
     }
