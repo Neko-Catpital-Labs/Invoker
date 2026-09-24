@@ -16,6 +16,7 @@ import type {
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { WorkerSessionMineWorkerConfig } from './workers/worker-session-mine-worker.js';
+import type { SessionTokenPushWorkerConfig } from './workers/session-token-push-worker.js';
 import type { WorkflowCleanupWorkerStore } from './workers/workflow-cleanup-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { ClaudeOauthRefreshWorkerConfig } from './workers/claude-oauth-refresh-worker.js';
@@ -106,6 +107,7 @@ export interface WorkerRuntimeDependencies {
   e2eAutoFix?: E2eAutoFixWorkerConfig;
   /** Worker session thrash miner (off by default; enable on DO1). */
   workerSessionMine?: WorkerSessionMineWorkerConfig;
+  sessionTokenPush?: SessionTokenPushWorkerConfig;
   slackBugScan?: SlackBugScanWorkerConfig;
   /** Cross-repo research worker configuration. */
   crossRepoResearch?: CrossRepoResearchWorkerConfig;
