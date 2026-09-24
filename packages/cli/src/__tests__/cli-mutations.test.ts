@@ -67,7 +67,6 @@ describe('invoker-cli mutations', () => {
 
     expect(code).toBe(0);
     expect(execHandler).toHaveBeenCalledTimes(1);
-    expect(output.stdout).toContain('delete-all accepted by live owner.');
     output.restore();
   });
 
@@ -290,7 +289,6 @@ describe('invoker-cli set', () => {
     });
     expect(result.execHandler).toHaveBeenCalledTimes(1);
     expect(result.execHandler).toHaveBeenCalledWith({ args: ['set', field, TASK_ID, ...values], noTrack: true });
-    expect(result.stdout).toContain(`set ${field} accepted by live owner.`);
   });
 
   it('allows an agent change on a merge node', async () => {
@@ -447,7 +445,7 @@ describe('invoker-cli fire-and-forget success line', () => {
     vi.restoreAllMocks();
   });
 
-  it.fails('says delete-all was queued, not accepted', async () => {
+  it('says delete-all was queued, not accepted', async () => {
     const output = captureProcessOutput();
     const bus = liveOwner();
     const code = await main(['delete-all'], { createMessageBus: () => bus });
@@ -458,7 +456,7 @@ describe('invoker-cli fire-and-forget success line', () => {
     expect(output.stdout).not.toContain('accepted');
   });
 
-  it.fails('says retry-task was queued, not accepted', async () => {
+  it('says retry-task was queued, not accepted', async () => {
     const output = captureProcessOutput();
     const bus = liveOwner();
     const code = await main(['retry-task', 'wf-1/task-1'], { createMessageBus: () => bus });
@@ -469,7 +467,7 @@ describe('invoker-cli fire-and-forget success line', () => {
     expect(output.stdout).not.toContain('accepted');
   });
 
-  it.fails('says set pool was queued, not accepted', async () => {
+  it('says set pool was queued, not accepted', async () => {
     const result = await runSet(['pool', TASK_ID, 'ssh', 'remote-1'], ownerTask());
 
     expect(result.code).toBe(0);
