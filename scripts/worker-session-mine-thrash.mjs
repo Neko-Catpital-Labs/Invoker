@@ -6,6 +6,11 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+export const FIXTURES_DIR = join(__dirname, 'fixtures', 'session-structural-summary');
 
 export const DEFAULT_THRESHOLDS = Object.freeze({
   minAssistantTurns: 40,
@@ -16,6 +21,130 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
 
 export function sessionHash(sessionId, workflowName = '') {
   return createHash('sha256').update(`${workflowName}\0${sessionId}`).digest('hex').slice(0, 16);
+}
+
+const CWD_WORKTREE_RE = /experiment-wf-\d+-\d+-(.+?)-g\d+\.t\d+\.a-/;
+const CWD_MERGE_RE = /merge-clones\//;
+const CWD_SCRATCH_RE = /invoker-scratch-/;
+const PHASE_MARKER_RE = /^\s*(?:#+\s*)?(?:phase|step|checkpoint)\s*[:#]?\s*\d+/i;
+const READONLY_BASH_RE = /^\s*(cat|head|tail|less|ls|pwd|git status|git diff|git log)\b/;
+const PROOF_BASH_RE = /(pnpm\s+(?:run\s+)?test|npm\s+test|npx\s+vitest|vitest\b|pytest\b|python3?\s+-m\s+unittest|--self-test|self-test)/i;
+
+export function summarizeSessionStructure(text) {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+
+  let taskClass = '';
+  const phaseMarkers = [];
+  let toolUseEdits = 0;
+  let toolResultSuccesses = 0;
+  let toolResultFailures = 0;
+  let finalResult = null;
+  const readPathCounts = new Map();
+  const readonlyCmdCounts = new Map();
+  const proofMarkers = [];
+  const checkpointCandidates = [];
+  const pendingBashById = new Map();
+  const parseErrors = [];
+  let index = -1;
+
+  for (const line of lines) {
+    index += 1;
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch (err) {
+      parseErrors.push({ index, error: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+
+    if (!taskClass && typeof row.cwd === 'string' && row.cwd) {
+      const m = CWD_WORKTREE_RE.exec(row.cwd);
+      if (m) taskClass = m[1];
+      else if (CWD_MERGE_RE.test(row.cwd)) taskClass = 'merge-clone';
+      else if (CWD_SCRATCH_RE.test(row.cwd)) taskClass = 'scratch';
+    }
+
+    if (row.type === 'result' && typeof row.subtype === 'string') {
+      finalResult = {
+        subtype: row.subtype,
+        isError: Boolean(row.is_error),
+        numTurns: typeof row.num_turns === 'number' ? row.num_turns : null,
+        durationMs: typeof row.duration_ms === 'number' ? row.duration_ms : null,
+      };
+    }
+
+    const msg = row.message ?? row;
+    const role = msg.role ?? row.type;
+
+    if (role === 'assistant' || row.type === 'assistant') {
+      const content = Array.isArray(msg.content) ? msg.content : [];
+      for (const block of content) {
+        if (block?.type === 'text' && typeof block.text === 'string') {
+          for (const textLine of block.text.split('\n')) {
+            if (PHASE_MARKER_RE.test(textLine)) phaseMarkers.push(textLine.trim().slice(0, 200));
+          }
+        }
+        if (block?.type !== 'tool_use') continue;
+        if (block.name === 'Edit' || block.name === 'Write') {
+          toolUseEdits += 1;
+          checkpointCandidates.push({ index, kind: 'edit', detail: String(block.input?.file_path ?? '').slice(0, 200) });
+        } else if (block.name === 'Read') {
+          const p = String(block.input?.file_path ?? '');
+          if (p) readPathCounts.set(p, (readPathCounts.get(p) ?? 0) + 1);
+        } else if (block.name === 'Bash' || block.name === 'bash') {
+          const cmd = String(block.input?.command ?? block.input?.cmd ?? '').trim();
+          if (cmd && block.id) pendingBashById.set(block.id, cmd);
+          if (READONLY_BASH_RE.test(cmd)) {
+            readonlyCmdCounts.set(cmd, (readonlyCmdCounts.get(cmd) ?? 0) + 1);
+          }
+        }
+      }
+    }
+
+    if (role === 'user' || row.type === 'user') {
+      const content = msg.content ?? row.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block?.type !== 'tool_result') continue;
+          const isError = Boolean(block.is_error);
+          if (isError) toolResultFailures += 1; else toolResultSuccesses += 1;
+          const cmd = pendingBashById.get(block.tool_use_id);
+          if (cmd && PROOF_BASH_RE.test(cmd)) {
+            const marker = { command: cmd.slice(0, 200), index, success: !isError };
+            proofMarkers.push(marker);
+            if (!isError) checkpointCandidates.push({ index, kind: 'proof', detail: marker.command });
+          }
+        }
+      }
+    }
+  }
+
+  for (const marker of phaseMarkers) {
+    checkpointCandidates.push({ index: -1, kind: 'phase-marker', detail: marker });
+  }
+
+  const repeatedReadPaths = [];
+  for (const [p, c] of readPathCounts) if (c > 1) repeatedReadPaths.push({ path: p, count: c });
+  const repeatedReadonlyCommands = [];
+  for (const [c, n] of readonlyCmdCounts) if (n > 1) repeatedReadonlyCommands.push({ command: c, count: n });
+
+  return {
+    taskClass: taskClass || 'unknown',
+    phaseMarkers: phaseMarkers.slice(0, 20),
+    progressSignals: {
+      toolUseEdits,
+      toolResultSuccesses,
+      toolResultFailures,
+      finalResult,
+    },
+    contextReloads: {
+      repeatedReadPaths: repeatedReadPaths.slice(0, 20),
+      repeatedReadonlyCommands: repeatedReadonlyCommands.slice(0, 20),
+    },
+    proofMarkers: proofMarkers.slice(0, 20),
+    checkpointCandidates: checkpointCandidates.slice(0, 20),
+    parseErrors: parseErrors.slice(0, 5),
+  };
 }
 
 function extractCodexExecCommandFromJsInput(input) {
@@ -162,12 +291,21 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     totalTokens,
     thrash: reasons.length > 0,
     reasons,
+    structuralSummary: summarizeSessionStructure(text),
   };
 }
 
 export function analyzeClaudeJsonlFile(path, thresholds = DEFAULT_THRESHOLDS) {
   if (!existsSync(path)) {
-    return { thrash: false, reasons: [`missing:${path}`], assistantTurns: 0, cacheReadTokens: 0, totalTokens: 0, maxSameBash: 0 };
+    return {
+      thrash: false,
+      reasons: [`missing:${path}`],
+      assistantTurns: 0,
+      cacheReadTokens: 0,
+      totalTokens: 0,
+      maxSameBash: 0,
+      structuralSummary: null,
+    };
   }
   return analyzeClaudeJsonl(readFileSync(path, 'utf8'), thresholds);
 }
@@ -330,6 +468,37 @@ function selfTest() {
   const codexNeg = analyzeClaudeJsonl(codexClean);
   if (codexNeg.thrash) throw new Error('expected clean codex fixture to stay silent');
 
+  const productive = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-productive-long.jsonl'));
+  const exploration = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-repeated-exploration.jsonl'));
+  if (productive.structuralSummary.taskClass !== 'fix-flaky-retry') {
+    throw new Error(`expected productive taskClass fix-flaky-retry, got ${productive.structuralSummary.taskClass}`);
+  }
+  if (productive.structuralSummary.progressSignals.toolUseEdits !== 4) {
+    throw new Error(`expected 4 productive edits, got ${productive.structuralSummary.progressSignals.toolUseEdits}`);
+  }
+  if (productive.structuralSummary.proofMarkers.length !== 1 || !productive.structuralSummary.proofMarkers[0].success) {
+    throw new Error(`expected one successful proof marker, got ${JSON.stringify(productive.structuralSummary.proofMarkers)}`);
+  }
+  if (productive.structuralSummary.phaseMarkers.length !== 2) {
+    throw new Error(`expected 2 phase markers, got ${JSON.stringify(productive.structuralSummary.phaseMarkers)}`);
+  }
+  if (productive.structuralSummary.contextReloads.repeatedReadonlyCommands.length !== 0) {
+    throw new Error('productive fixture must have no repeated readonly commands');
+  }
+  if (exploration.structuralSummary.progressSignals.toolUseEdits !== 0) {
+    throw new Error('exploration fixture must have zero edits');
+  }
+  if (exploration.structuralSummary.proofMarkers.length !== 0) {
+    throw new Error('exploration fixture must have zero proof markers');
+  }
+  const repeated = exploration.structuralSummary.contextReloads.repeatedReadonlyCommands;
+  if (repeated.length !== 2 || !repeated.some((r) => r.command === 'git log --oneline -20' && r.count === 5)) {
+    throw new Error(`expected repeated readonly commands to include git log x5, got ${JSON.stringify(repeated)}`);
+  }
+  if (productive.structuralSummary.checkpointCandidates.length <= exploration.structuralSummary.checkpointCandidates.length) {
+    throw new Error('expected productive session to surface more checkpoint candidates than repeated exploration');
+  }
+
   console.log(JSON.stringify({
     ok: true,
     positiveReasons: pos.reasons,
@@ -339,6 +508,8 @@ function selfTest() {
     codexJsReasons: codexJsPos.reasons,
     codexFnCallReasons: codexFnCallPos.reasons,
     codexNegativeThrash: codexNeg.thrash,
+    productiveStructuralSummary: productive.structuralSummary,
+    explorationStructuralSummary: exploration.structuralSummary,
   }, null, 2));
 }
 
