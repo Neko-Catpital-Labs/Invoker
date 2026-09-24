@@ -86,10 +86,61 @@ const CLAUDE_PROBE_FAILS_SCRIPT = [
   '',
 ].join('\n');
 
+const REMOTE_CODEX_SCRIPT = [
+  '#!/bin/bash',
+  'set -euo pipefail',
+  ': "${FAKE_CODEX_LOG:?}"',
+  'printf "cmd=%s args=%s CODEX_HOME=%s HOME=%s\\n" "${1:-}" "$*" "${CODEX_HOME:-}" "${HOME:-}" >> "$FAKE_CODEX_LOG"',
+  'if [ "$1" = "login" ] && [ "$2" = "--device-auth" ]; then',
+  '  test -n "${CODEX_HOME:-}"',
+  '  mkdir -p "$CODEX_HOME"',
+  '  echo "To authenticate, visit: https://example.test/remote-device"',
+  '  echo "Enter code: RMT1-2345"',
+  '  printf \'{"tokens":{"access_token":"remote-codex-token"}}\' > "$CODEX_HOME/auth.json"',
+  '  sleep 0.1',
+  '  exit 0',
+  'fi',
+  'if [ "$1" = "exec" ]; then',
+  '  test "$2" = "--skip-git-repo-check"',
+  '  test "$3" = "Reply with just the word ok"',
+  '  if [ "${FAKE_CODEX_EXEC_FAIL:-}" = "1" ]; then exit 1; fi',
+  '  test -s "$CODEX_HOME/auth.json"',
+  '  echo ok',
+  '  exit 0',
+  'fi',
+  'exit 1',
+  '',
+].join('\n');
+
+const FAKE_SSH_SCRIPT = [
+  '#!/bin/bash',
+  'set -euo pipefail',
+  ': "${FAKE_SSH_LOG:?}"',
+  ': "${FAKE_SSH_REMOTE_HOME:?}"',
+  ': "${FAKE_SSH_REMOTE_BIN:?}"',
+  'target=""',
+  'for arg in "$@"; do',
+  '  case "$arg" in *@*) target="$arg" ;; esac',
+  'done',
+  'printf "target=%s args=%s\\n" "$target" "$*" >> "$FAKE_SSH_LOG"',
+  'script_file="$(mktemp)"',
+  'cat > "$script_file"',
+  'HOME="$FAKE_SSH_REMOTE_HOME" PATH="$FAKE_SSH_REMOTE_BIN:$PATH" bash "$script_file"',
+  'status=$?',
+  'rm -f "$script_file"',
+  'exit "$status"',
+  '',
+].join('\n');
+
 function createFakeBin(name: 'codex' | 'claude', script: string): string {
   const dir = mkdtempSync(join(tmpdir(), `invoker-agent-login-test-bin-`));
   writeFileSync(join(dir, name), script, { mode: 0o755 });
   return dir;
+}
+
+function createFakeBinIn(dir: string, name: 'codex' | 'ssh', script: string): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), script, { mode: 0o755 });
 }
 
 function createSilentLogger() {
@@ -327,6 +378,110 @@ describe('agent-login-session codex flow (real fake-codex executable on PATH)', 
 
     const logged = allLoggedText(logger);
     expect(logged).not.toContain('should-never-be-installed');
+  }, 20_000);
+});
+
+describe('agent-login-session remote codex flow (real fake-ssh executable on PATH)', () => {
+  let fakeLocalBinDir: string;
+  let fakeRemoteBinDir: string;
+  let remoteHomeDir: string;
+  let originalPath: string | undefined;
+  let originalHome: string | undefined;
+  let sshLogPath: string;
+  let codexLogPath: string;
+
+  beforeEach(() => {
+    fakeLocalBinDir = mkdtempSync(join(tmpdir(), 'invoker-agent-login-local-bin-'));
+    fakeRemoteBinDir = mkdtempSync(join(tmpdir(), 'invoker-agent-login-remote-bin-'));
+    remoteHomeDir = mkdtempSync(join(tmpdir(), 'invoker-agent-login-remote-home-'));
+    sshLogPath = join(remoteHomeDir, 'ssh.log');
+    codexLogPath = join(remoteHomeDir, 'codex.log');
+    originalPath = process.env.PATH;
+    originalHome = process.env.HOME;
+    process.env.PATH = `${fakeLocalBinDir}:${originalPath}`;
+    process.env.FAKE_SSH_LOG = sshLogPath;
+    process.env.FAKE_SSH_REMOTE_HOME = remoteHomeDir;
+    process.env.FAKE_SSH_REMOTE_BIN = fakeRemoteBinDir;
+    process.env.FAKE_CODEX_LOG = codexLogPath;
+    createFakeBinIn(fakeLocalBinDir, 'ssh', FAKE_SSH_SCRIPT);
+    createFakeBinIn(fakeRemoteBinDir, 'codex', REMOTE_CODEX_SCRIPT);
+  });
+
+  afterEach(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    delete process.env.FAKE_SSH_LOG;
+    delete process.env.FAKE_SSH_REMOTE_HOME;
+    delete process.env.FAKE_SSH_REMOTE_BIN;
+    delete process.env.FAKE_CODEX_LOG;
+    delete process.env.FAKE_CODEX_EXEC_FAIL;
+    rmSync(fakeLocalBinDir, { recursive: true, force: true });
+    rmSync(fakeRemoteBinDir, { recursive: true, force: true });
+    rmSync(remoteHomeDir, { recursive: true, force: true });
+  });
+
+  it('runs the login and test call on the named host with a fresh remote CODEX_HOME, then installs only on that host', async () => {
+    const authDir = join(remoteHomeDir, '.codex');
+    mkdirSync(authDir, { recursive: true });
+    const authPath = join(authDir, 'auth.json');
+    writeFileSync(authPath, '{"tokens":{"access_token":"old-remote-token"}}');
+
+    const deps: AgentLoginSessionDependencies = {
+      remoteTargets: [
+        { name: 'do1', connection: { host: 'do1.example.test', user: 'invoker', sshKeyPath: '/tmp/do1-key' } },
+        { name: 'do2', connection: { host: 'do2.example.test', user: 'invoker', sshKeyPath: '/tmp/do2-key' } },
+      ],
+    };
+
+    const started = await startAgentLogin('codex', deps, 'do1');
+    expect(started.status).toBe('awaiting_user');
+    expect(started.loginUrl).toBe('https://example.test/remote-device');
+    expect(started.code).toBe('RMT1-2345');
+
+    await waitFor(() => getAgentLoginStatus(started.sessionId, deps).status === 'installed');
+    expect(readFileSync(authPath, 'utf8')).toBe('{"tokens":{"access_token":"remote-codex-token"}}');
+    expect(statSync(authPath).mode & 0o777).toBe(0o600);
+
+    const sshLog = readFileSync(sshLogPath, 'utf8');
+    expect(sshLog).toContain('target=invoker@do1.example.test');
+    expect(sshLog).not.toContain('do2.example.test');
+
+    const codexLog = readFileSync(codexLogPath, 'utf8');
+    expect(codexLog).toContain('cmd=login args=login --device-auth');
+    expect(codexLog).toContain('cmd=exec args=exec --skip-git-repo-check Reply with just the word ok');
+    const homes = [...codexLog.matchAll(/CODEX_HOME=([^ ]+)/g)].map((match) => match[1]);
+    expect(homes).toHaveLength(2);
+    expect(homes[0]).toBe(homes[1]);
+    expect(homes[0]).toContain('/tmp/');
+    expect(homes[0]).not.toBe(join(remoteHomeDir, '.codex'));
+  }, 20_000);
+
+  it('leaves the named host auth.json untouched when the remote test call fails', async () => {
+    process.env.FAKE_CODEX_EXEC_FAIL = '1';
+    const authDir = join(remoteHomeDir, '.codex');
+    mkdirSync(authDir, { recursive: true });
+    const authPath = join(authDir, 'auth.json');
+    writeFileSync(authPath, '{"tokens":{"access_token":"old-remote-token"}}');
+    const beforeHash = hashFile(authPath);
+
+    const deps: AgentLoginSessionDependencies = {
+      remoteTargets: [
+        { name: 'do1', connection: { host: 'do1.example.test', user: 'invoker', sshKeyPath: '/tmp/do1-key' } },
+        { name: 'do2', connection: { host: 'do2.example.test', user: 'invoker', sshKeyPath: '/tmp/do2-key' } },
+      ],
+    };
+
+    const started = await startAgentLogin('codex', deps, 'do1');
+    expect(started.status).toBe('awaiting_user');
+
+    await waitFor(() => getAgentLoginStatus(started.sessionId, deps).status === 'failed');
+    const final = getAgentLoginStatus(started.sessionId, deps);
+    expect(final.error).toMatch(/probe failed|exited with code/i);
+    expect(hashFile(authPath)).toBe(beforeHash);
+    expect(readdirSync(authDir).filter((name) => name.includes('.incoming'))).toHaveLength(0);
+    expect(readFileSync(sshLogPath, 'utf8')).not.toContain('do2.example.test');
   }, 20_000);
 });
 
