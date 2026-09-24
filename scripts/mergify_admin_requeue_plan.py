@@ -1776,7 +1776,7 @@ def repair_workflow_evidence_for_stack(
                 outcome_class=str(meta.get("outcomeClass")) if meta.get("outcomeClass") else None,
                 note=_repair_row_note(phase, dispatch_state, workflow_id, meta),
                 epoch=int(row.get("epoch", 0) or 0),
-                cap_attempts=count_code_repair_attempts(ledger, kind, pr_number, key),
+                cap_attempts=count_code_repair_attempts(ledger, kind, pr_number, head_sha, key),
                 cap_limit=max_repair_attempts,
             )
         )
@@ -1837,14 +1837,14 @@ def _report_cap_lines(plan: StackExecutionPlan, ledger: Ledger, max_repair_attem
             kind = str(blocker.get("kind") or "")
             key = str(blocker.get("key") or "")
             if kind == "failed_check":
-                attempts = count_code_repair_attempts(ledger, "repair-check", pr_number, key)
+                attempts = count_code_repair_attempts(ledger, "repair-check", pr_number, head_sha, key)
                 lines.append(f"repair-check PR #{pr_number} key={_json_value(key)} cap={attempts}/{max_repair_attempts}")
             elif kind == "conflict":
                 repair_key = f"rebase-onto-master:{pr_number}"
-                attempts = count_code_repair_attempts(ledger, "rebase-onto-master", pr_number, repair_key)
+                attempts = count_code_repair_attempts(ledger, "rebase-onto-master", pr_number, head_sha, repair_key)
                 lines.append(f"rebase-onto-master PR #{pr_number} key={_json_value(repair_key)} cap={attempts}/{max_repair_attempts}")
             elif kind == "bot_review_thread":
-                attempts = count_code_repair_attempts(ledger, "repair-bot-thread", pr_number, key)
+                attempts = count_code_repair_attempts(ledger, "repair-bot-thread", pr_number, head_sha, key)
                 lines.append(f"repair-bot-thread PR #{pr_number} key={_json_value(key)} cap={attempts}/{max_repair_attempts}")
         if plan.actions:
             for action in plan.actions:
@@ -1854,11 +1854,10 @@ def _report_cap_lines(plan: StackExecutionPlan, ledger: Ledger, max_repair_attem
                 action_kind, action_key = normalized
                 if action_kind == "rebase-onto-master":
                     action_key = f"rebase-onto-master:{pr_number}"
-                attempts = count_code_repair_attempts(ledger, action_kind, pr_number, action_key)
+                attempts = count_code_repair_attempts(ledger, action_kind, pr_number, head_sha, action_key)
                 line = f"{action_kind} PR #{pr_number} key={_json_value(action_key)} cap={attempts}/{max_repair_attempts}"
                 if line not in lines:
                     lines.append(line)
-        del head_sha
     return tuple(lines)
 
 
