@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -72,7 +72,7 @@ describe('buildMirrorCloneScript concurrent mirror creation', () => {
     return { home, script };
   }
 
-  it.fails('succeeds for every concurrent run and leaves no lock or temp dirs', async () => {
+  it('succeeds for every concurrent run and leaves no lock or temp dirs', async () => {
     const { home, script } = setup();
     const reposDir = join(home, 'repos');
 
@@ -89,9 +89,50 @@ describe('buildMirrorCloneScript concurrent mirror creation', () => {
       (entry) => entry === 'racehash.lock' || entry.startsWith('racehash.tmp.'),
     );
     expect(leftovers).toEqual([]);
+    const nested = readdirSync(join(reposDir, 'racehash')).filter((entry) => entry.startsWith('racehash.tmp.'));
+    expect(nested).toEqual([]);
   }, 120_000);
 
-  it.fails('breaks a stale lock older than ten minutes', async () => {
+  it('leaves a lock older than ten minutes alone while its clone is still running', async () => {
+    const { home, script } = setup();
+    const lock = join(home, 'repos', 'racehash.lock');
+    mkdirSync(lock, { recursive: true });
+    const holder = spawn('bash', ['-c', 'sleep 4']);
+    writeFileSync(join(lock, 'pid'), `${holder.pid}\n`);
+    writeFileSync(join(lock, 'heartbeat'), `${Math.floor(Date.now() / 1000) - 20 * 60}\n`);
+    const old = new Date(Date.now() - 20 * 60 * 1000);
+    utimesSync(lock, old, old);
+
+    const pending = runScript(script, home);
+    const holderExited = new Promise<void>((resolve) => holder.on('close', () => resolve()));
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    expect(existsSync(join(lock, 'pid'))).toBe(true);
+    expect(readFileSync(join(lock, 'pid'), 'utf8').trim()).toBe(String(holder.pid));
+    expect(existsSync(join(home, 'repos', 'racehash'))).toBe(false);
+
+    await holderExited;
+    const result = await pending;
+
+    expect(result, `stderr: ${result.stderr}`).toMatchObject({ code: 0 });
+    expect(result.stdout).toContain('__INVOKER_BASE_HEAD__=');
+    expect(existsSync(lock)).toBe(false);
+  }, 60_000);
+
+  it('refuses to publish into a surviving $CLONE instead of nesting the temporary clone inside it', async () => {
+    const { home, script } = setup();
+    const clone = join(home, 'repos', 'racehash');
+    mkdirSync(clone, { recursive: true });
+    writeFileSync(join(clone, 'stray.txt'), 'not a clone\n');
+
+    const result = await runScript(script, home);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('cannot publish mirror clone');
+    expect(readdirSync(clone).filter((entry) => entry.startsWith('racehash.tmp.'))).toEqual([]);
+  }, 60_000);
+
+  it('breaks a stale lock older than ten minutes', async () => {
     const { home, script } = setup();
     const lock = join(home, 'repos', 'racehash.lock');
     mkdirSync(lock, { recursive: true });
