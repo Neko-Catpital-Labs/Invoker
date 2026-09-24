@@ -433,6 +433,46 @@ describe('serializeTask', () => {
     expect(() => JSON.parse(json)).not.toThrow();
     expect(json).not.toContain('\x1b');
   });
+
+  it('reports the stored input prompt', () => {
+    const task = makeTask({
+      status: 'waiting_for_input',
+      execution: {
+        inputPrompt: 'Stale task specification blocked before agent execution: absent existing/do-not-create anchors',
+      } as TaskState['execution'],
+    });
+    const execution = serializeTask(task).execution as Record<string, unknown>;
+    expect(execution.inputPrompt).toBe(
+      'Stale task specification blocked before agent execution: absent existing/do-not-create anchors',
+    );
+  });
+
+  it('omits inputPrompt when no prompt is stored', () => {
+    const task = makeTask({
+      status: 'waiting_for_input',
+      execution: { branch: 'feature/test' } as TaskState['execution'],
+    });
+    const execution = serializeTask(task).execution as Record<string, unknown>;
+    expect(execution).not.toHaveProperty('inputPrompt');
+  });
+
+  it('leaves the serialized keys of a task without an input prompt unchanged', () => {
+    const task = makeTask({
+      id: 'wf-1/task-a',
+      execution: {
+        branch: 'feature/test',
+        commit: 'abc123',
+        exitCode: 0,
+      } as TaskState['execution'],
+    });
+    const result = serializeTask(task);
+    expect(Object.keys(result).sort()).toEqual(
+      ['config', 'createdAt', 'dependencies', 'description', 'execution', 'id', 'status'],
+    );
+    expect(Object.keys(result.execution as Record<string, unknown>).sort()).toEqual(
+      ['branch', 'commit', 'exitCode'],
+    );
+  });
 });
 
 // ── serializeEvent ──────────────────────────────────────────

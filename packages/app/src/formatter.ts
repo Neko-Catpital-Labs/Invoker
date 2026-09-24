@@ -464,6 +464,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.branch != null) execution.branch = task.execution.branch;
   if (task.execution.commit != null) execution.commit = task.execution.commit;
   if (task.execution.error != null) execution.error = task.execution.error;
+  if (task.execution.inputPrompt != null) execution.inputPrompt = task.execution.inputPrompt;
   if (task.execution.exitCode != null) execution.exitCode = task.execution.exitCode;
   if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
   if (task.execution.reviewId != null) execution.reviewId = task.execution.reviewId;
