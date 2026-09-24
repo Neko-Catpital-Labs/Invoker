@@ -802,7 +802,7 @@ async function runSimpleMutation(command: 'retry-task' | 'retry' | 'resume' | 'd
     bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
     await requireLiveOwnerForMutation(bus);
     await sendHeadlessExec(bus, [command, targetId]);
-    process.stdout.write(`${command} queued by live owner (not yet applied; re-read with invoker-cli query to confirm).\n`);
+    process.stdout.write(`${command} accepted by live owner (re-read with invoker-cli query to confirm).\n`);
     return 0;
   } finally {
     const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
