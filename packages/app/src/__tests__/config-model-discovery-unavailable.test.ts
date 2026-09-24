@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -44,9 +44,19 @@ function rejection(run: () => void): Error {
   throw new Error('expected the call to throw');
 }
 
+const CODEX_DISCOVERY_CACHE_MS = 5 * 60_000;
+
 describe('validateInvokerConfig with an unavailable Codex CLI', () => {
+  let clock = Date.UTC(2026, 0, 1);
+
   beforeEach(() => {
     spawnSyncMock.mockReset();
+    clock += CODEX_DISCOVERY_CACHE_MS * 2;
+    vi.spyOn(Date, 'now').mockReturnValue(clock);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('accepts a configured Codex model when every discovery probe fails', () => {
