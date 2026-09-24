@@ -121,6 +121,7 @@ import {
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
+import { resolveAgentLoginWatchWorkerConfig } from './config.js';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
@@ -513,6 +514,13 @@ function buildRegisteredOwnerWorkerDeps(
       repoUrl: invokerConfig.catstackDeploy?.repoUrl,
       localRepoPath: invokerConfig.catstackDeploy?.localRepoPath,
       remoteRepoPath: invokerConfig.catstackDeploy?.remoteRepoPath,
+      remoteTargets: remoteTargets.map((target) => ({
+        name: target.name,
+        connection: target.connection,
+      })),
+    },
+    agentLoginWatch: {
+      ...resolveAgentLoginWatchWorkerConfig(invokerConfig),
       remoteTargets: remoteTargets.map((target) => ({
         name: target.name,
         connection: target.connection,
