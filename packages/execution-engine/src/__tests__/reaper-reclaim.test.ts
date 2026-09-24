@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -243,6 +244,112 @@ describe('reapStaleWorktrees', () => {
     expect(script).toContain('git -C "$repo" worktree remove --force "$path"');
     expect(script).toContain('rm -rf "$path"');
     expect(script).toContain('git -C "$INVOKER_HOME/repos/$repo_hash" worktree prune');
+  });
+
+  function worktreeTaskStore(tasks: Array<{ status: string; workspacePath: string }>) {
+    return {
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: () => tasks.map((task, index) => ({
+        id: `t-${index}`,
+        status: task.status,
+        execution: { workspacePath: task.workspacePath },
+      })) as any,
+    };
+  }
+
+  function seedStaleWorktrees(home: string, repoHash: string, branches: string[]): string[] {
+    mkdirSync(join(home, 'repos', repoHash), { recursive: true });
+    return branches.map((branch) => {
+      const path = join(home, 'worktrees', repoHash, branch);
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, 'file.txt'), branch);
+      backdate(path, (STALE_WORKTREE_MIN_AGE_HOURS + 1) * 60 * 60 * 1000);
+      return path;
+    });
+  }
+
+  const removingLocalGit = () => vi.fn(async (argv: string[]) => {
+    if (argv[3] === 'remove') rmSync(argv[5]!, { recursive: true, force: true });
+  });
+
+  it.fails('keeps an old worktree an unfinished task still uses and removes an idle one', async () => {
+    const { root, home } = makeHome();
+    const [inUse, idle] = seedStaleWorktrees(home, 'repoabc123456', ['in-use', 'idle']);
+
+    const results = await reapStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit: removingLocalGit(),
+      taskStore: worktreeTaskStore([{ status: 'running', workspacePath: inUse! }]),
+    } as any);
+
+    expect(results[0]).toMatchObject({ ok: true, detail: 'removed 1' });
+    expect(existsSync(join(inUse!, 'file.txt'))).toBe(true);
+    expect(existsSync(idle!)).toBe(false);
+  });
+
+  it.fails('keeps an old worktree whose own in-use mark is fresh even when no local task names it', async () => {
+    const { root, home } = makeHome();
+    const [marked, idle] = seedStaleWorktrees(home, 'repoabc123456', ['marked', 'idle']);
+    mkdirSync(join(home, 'in-use', 'worktrees', 'repoabc123456'), { recursive: true });
+    writeFileSync(join(home, 'in-use', 'worktrees', 'repoabc123456', 'marked'), '');
+
+    await reapStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit: removingLocalGit(),
+      taskStore: worktreeTaskStore([]),
+    } as any);
+
+    expect(existsSync(join(marked!, 'file.txt'))).toBe(true);
+    expect(existsSync(idle!)).toBe(false);
+  });
+
+  it.fails('removes nothing locally or remotely and reports why when no task store is given', async () => {
+    const { root, home } = makeHome();
+    const [old] = seedStaleWorktrees(home, 'repoabc123456', ['old']);
+    const runRemoteScript = vi.fn(async () => '');
+
+    const results = await reapStaleWorktrees({
+      invokerHome: home,
+      userHome: root,
+      runLocalGit: removingLocalGit(),
+      remoteTargets: [{ name: 'remote-1', connection: { host: 'h', user: 'u', sshKeyPath: '/k' }, remotePath: '~/.invoker' }],
+      runRemoteScript,
+    });
+
+    expect(existsSync(old!)).toBe(true);
+    expect(runRemoteScript).not.toHaveBeenCalled();
+    expect(results.map((result) => result.reason)).toEqual(['no-task-store', 'no-task-store']);
+  });
+
+  it.fails('keeps in-use and freshly marked worktrees when the remote reap script runs for real', async () => {
+    const { root, home } = makeHome();
+    const [inUse, marked, idle] = seedStaleWorktrees(home, 'repoabc123456', ['in-use', 'marked', 'idle']);
+    mkdirSync(join(home, 'in-use', 'worktrees', 'repoabc123456'), { recursive: true });
+    writeFileSync(join(home, 'in-use', 'worktrees', 'repoabc123456', 'marked'), '');
+    const localGitCalls: string[][] = [];
+    const runRemoteScript = vi.fn(async (_target: RemoteDiskTarget, script: string) => {
+      const scriptPath = join(root, 'reap.sh');
+      writeFileSync(scriptPath, script);
+      const run = spawnSync('bash', [scriptPath], { encoding: 'utf8' });
+      expect(run.status).toBe(0);
+      return run.stdout;
+    });
+
+    await reapStaleWorktrees({
+      invokerHome: join(root, 'unused-local-home'),
+      userHome: root,
+      runLocalGit: vi.fn(async (argv: string[]) => { localGitCalls.push(argv); }),
+      remoteTargets: [{ name: 'owner-host', connection: { host: 'h', user: 'u', sshKeyPath: '/k' }, remotePath: home }],
+      runRemoteScript,
+      taskStore: worktreeTaskStore([{ status: 'running', workspacePath: inUse! }]),
+    } as any);
+
+    expect(runRemoteScript).toHaveBeenCalledTimes(1);
+    expect(existsSync(join(inUse!, 'file.txt'))).toBe(true);
+    expect(existsSync(join(marked!, 'file.txt'))).toBe(true);
+    expect(existsSync(idle!)).toBe(false);
   });
 
   it('does not include the orphan glob in the stale-worktree remote script', () => {
