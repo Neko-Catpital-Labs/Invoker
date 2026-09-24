@@ -42,6 +42,14 @@ describe('session-token-push worker', () => {
     expect(registry.get(SESSION_TOKEN_PUSH_WORKER_KIND)).toBeDefined();
   });
 
+  it('names every tool the pushed rollup covers, not just Claude', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+    const { note } = registry.get(SESSION_TOKEN_PUSH_WORKER_KIND)!;
+    expect(note).toContain('Claude');
+    expect(note).toContain('Codex');
+    expect(note).toContain('OMP');
+  });
+
   it('builds a stopped runtime from the built-in registry, so it is off until switched on', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
     const runtime = registry.get(SESSION_TOKEN_PUSH_WORKER_KIND)!.factory({

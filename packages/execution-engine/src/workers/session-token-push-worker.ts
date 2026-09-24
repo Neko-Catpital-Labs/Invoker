@@ -40,7 +40,7 @@ export function registerSessionTokenPushWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: SESSION_TOKEN_PUSH_WORKER_KIND,
-    note: 'Collects this machine\'s Claude session token rollup weekly and copies it to the configured remote target (off by default).',
+    note: 'Collects this machine\'s Claude, Codex, and OMP session token rollup weekly and copies it to the configured remote target (off by default).',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createSessionTokenPushWorker({
         logger: deps.logger,
