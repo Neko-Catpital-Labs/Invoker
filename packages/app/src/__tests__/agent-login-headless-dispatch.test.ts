@@ -69,6 +69,28 @@ describe('runHeadless agent-login dispatch', () => {
     expect(stdout.text).toContain('url: https://auth.openai.com/device');
   });
 
+  it('routes agent-login start --host with remote targets from config', async () => {
+    startAgentLogin.mockResolvedValue(view());
+    const stdout = captureStdout();
+    const result = await runHeadless(['agent-login', 'start', 'codex', '--host', 'do1'], {
+      invokerConfig: {
+        remoteTargets: {
+          do1: { host: '203.0.113.10', user: 'invoker', sshKeyPath: '/tmp/do1-key', port: 2222 },
+          do2: { host: '203.0.113.11', user: 'invoker', sshKeyPath: '/tmp/do2-key' },
+        },
+      },
+    } as HeadlessDeps);
+    stdout.restore();
+
+    expect(startAgentLogin).toHaveBeenCalledWith('codex', {
+      remoteTargets: [
+        { name: 'do1', connection: { host: '203.0.113.10', user: 'invoker', sshKeyPath: '/tmp/do1-key', port: 2222 } },
+        { name: 'do2', connection: { host: '203.0.113.11', user: 'invoker', sshKeyPath: '/tmp/do2-key', port: undefined } },
+      ],
+    }, 'do1');
+    expect(result.status).toBe('awaiting_user');
+  });
+
   it('routes agent-login code through the waiting session', async () => {
     getAgentLoginStatus.mockReturnValue(view({ status: 'awaiting_code' }));
     submitAgentLoginCode.mockResolvedValue(view({ status: 'installed', loginUrl: undefined, code: undefined }));
