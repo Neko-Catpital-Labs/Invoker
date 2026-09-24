@@ -1018,14 +1018,14 @@ function describeExecutorRoutingViolation(routing: ExecutorRouting): string | un
 function findExecutorRoutingRefusal(options: SetOptions, task: SetTargetTask): string | undefined {
   const { field, values } = options;
   const routingKey = field === 'task' ? values[0]?.match(ROUTING_CONFIG_FIELD_PATH)?.[1] : undefined;
-  const changesRouting = field === 'pool' || field === 'executor' || field === 'task-pool' || routingKey !== undefined;
+  const changesRouting = field === 'pool' || field === 'executor' || routingKey !== undefined;
   if (!changesRouting) {
     return undefined;
   }
   if (task.isMergeNode) {
     return 'merge nodes run on the merge executor and cannot take a pool, pool member, or executor change';
   }
-  if (field === 'pool' || field === 'executor') {
+  if (field === 'executor') {
     const [runnerKind, poolMemberId] = values;
     if (runnerKind === 'merge') {
       return 'the merge executor is reserved for merge nodes';
@@ -1035,7 +1035,7 @@ function findExecutorRoutingRefusal(options: SetOptions, task: SetTargetTask): s
     }
     return undefined;
   }
-  if (field === 'task-pool') {
+  if (field === 'pool') {
     const { runnerKind } = task.routing;
     return runnerKind && RUNNER_KINDS_FORBIDDING_POOL.has(runnerKind)
       ? `${runnerKind} tasks cannot take a pool`
@@ -1047,7 +1047,7 @@ function findExecutorRoutingRefusal(options: SetOptions, task: SetTargetTask): s
   const requested = optionalString(parseMetadataArg(values.slice(1).join(' ')));
   const violation = describeExecutorRoutingViolation({ ...task.routing, [routingKey]: requested });
   return violation
-    ? `${violation}; use \`invoker-cli set executor\` or \`invoker-cli set task-pool\` to change routing`
+    ? `${violation}; use \`invoker-cli set executor\` or \`invoker-cli set pool\` to change routing`
     : undefined;
 }
 

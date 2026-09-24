@@ -239,16 +239,17 @@ async function runSet(argv: string[], task: OwnerTask) {
 const POSITIVE_SET_CASES: Record<string, { task: OwnerTask; values: string[] }> = {
   command: { task: ownerTask(), values: ['pnpm', 'test'] },
   prompt: { task: ownerTask(), values: ['Fix the flaky assertion'] },
-  pool: { task: ownerTask(), values: ['ssh', 'remote-1'] },
+  pool: { task: ownerTask(), values: ['gpu-pool'] },
   executor: { task: ownerTask(), values: ['docker'] },
   agent: { task: ownerTask(), values: ['claude'] },
   model: { task: ownerTask(), values: ['claude-opus-5'] },
-  'task-pool': { task: ownerTask(), values: ['gpu-pool'] },
   'fix-prompt': { task: ownerTask({ status: 'failed' }), values: ['Retry with verbose logging'] },
   'fix-context': { task: ownerTask({ status: 'failed' }), values: ['Build log excerpt'] },
   'gate-policy': { task: ownerTask(), values: ['wf-upstream', 'review_ready'] },
   task: { task: ownerTask(), values: ['config.poolId', 'gpu-pool'] },
 };
+
+const REMOVED_POOL_FIELD = ['task', 'pool'].join('-');
 
 describe('invoker-cli set', () => {
   afterEach(() => {
@@ -335,8 +336,7 @@ describe('invoker-cli set', () => {
   });
 
   it.each([
-    ['task-pool', ['gpu-pool']],
-    ['pool', ['ssh', 'remote-1']],
+    ['pool', ['gpu-pool']],
     ['executor', ['worktree']],
     ['task', ['config.poolId', 'gpu-pool']],
   ])('refuses set %s on a merge node', async (field, values) => {
@@ -356,15 +356,15 @@ describe('invoker-cli set', () => {
   });
 
   it.each(['docker', 'scratch'])('refuses a pool member for the %s executor', async (runnerKind) => {
-    const result = await runSet(['pool', TASK_ID, runnerKind, 'remote-1'], ownerTask());
+    const result = await runSet(['executor', TASK_ID, runnerKind, 'remote-1'], ownerTask());
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain(`${runnerKind} tasks cannot take a pool member.`);
     expect(result.execHandler).not.toHaveBeenCalled();
   });
 
-  it('refuses a task-pool change on a docker task', async () => {
-    const result = await runSet(['task-pool', TASK_ID, 'gpu-pool'], dockerTask());
+  it('refuses a pool change on a docker task', async () => {
+    const result = await runSet(['pool', TASK_ID, 'gpu-pool'], dockerTask());
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('docker tasks cannot take a pool.');
@@ -376,6 +376,7 @@ describe('invoker-cli set', () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('docker tasks cannot have a pool or pool member; use `invoker-cli set executor`');
+    expect(result.stderr).toContain('or `invoker-cli set pool` to change routing');
     expect(result.execHandler).not.toHaveBeenCalled();
   });
 
@@ -393,6 +394,17 @@ describe('invoker-cli set', () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('worktree tasks require a non-empty pool');
     expect(result.execHandler).not.toHaveBeenCalled();
+  });
+
+  it('refuses the removed pool field alias as unknown without contacting the owner', async () => {
+    const createMessageBus = vi.fn(() => new LocalBus());
+    const output = captureProcessOutput();
+    const code = await main(['set', REMOVED_POOL_FIELD, TASK_ID, 'gpu-pool'], { createMessageBus });
+    output.restore();
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain(`Unknown set field: "${REMOVED_POOL_FIELD}". Task fields: ${CLI_SET_FIELDS.join(', ')}`);
+    expect(createMessageBus).not.toHaveBeenCalled();
   });
 
   it.each(
@@ -470,7 +482,7 @@ describe('invoker-cli fire-and-forget success line', () => {
   });
 
   it.fails('says set pool was queued, not accepted', async () => {
-    const result = await runSet(['pool', TASK_ID, 'ssh', 'remote-1'], ownerTask());
+    const result = await runSet(['pool', TASK_ID, 'gpu-pool'], ownerTask());
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(`set pool ${QUEUED}`);

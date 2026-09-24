@@ -145,11 +145,10 @@ type HeadlessSetHandler = (args: string[], deps: HeadlessDeps) => Promise<void>;
 const HEADLESS_SET_HANDLERS: Record<HeadlessSetSubcommand, HeadlessSetHandler> = {
   command: (args, deps) => headlessEdit(args[1], args.slice(2).join(' '), deps),
   prompt: (args, deps) => headlessEditPrompt(args[1], args.slice(2).join(' '), deps),
-  pool: (args, deps) => headlessEditExecutor(args[1], args[2], args[3], deps),
+  pool: (args, deps) => headlessEditPool(args[1], args[2], deps),
   executor: (args, deps) => headlessEditExecutor(args[1], args[2], args[3], deps),
   agent: (args, deps) => headlessEditAgent(args[1], args[2], deps),
   model: (args, deps) => headlessEditModel(args[1], args[2], deps),
-  'task-pool': (args, deps) => headlessEditTaskPool(args[1], args[2], deps),
   'merge-mode': (args, deps) => headlessSetMergeMode(args[1], args[2], deps),
   'fix-prompt': (args, deps) => headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps),
   'fix-context': (args, deps) => headlessSetFixContext(args[1], { fixContext: args.slice(2).join(' ') }, deps),
@@ -819,10 +818,10 @@ async function headlessEditExecutor(
 ): Promise<void> {
   if (!taskId || !runnerKind) {
     throw new Error(
-      'Missing arguments. Usage: --headless set pool <taskId> <runnerKind> [poolMemberId]',
+      'Missing arguments. Usage: --headless set executor <taskId> <runnerKind> [poolMemberId]',
     );
   }
-  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set pool');
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set executor');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
@@ -838,7 +837,7 @@ async function headlessEditExecutor(
   );
 
   if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: set pool accepted; exiting without tracking.\n');
+    process.stdout.write('[headless] --no-track enabled: set executor accepted; exiting without tracking.\n');
     return;
   }
   if (runnable.length === 0) {
@@ -909,9 +908,9 @@ async function headlessEditModel(taskId: string, modelArg: string | undefined, d
   });
 }
 
-async function headlessEditTaskPool(taskId: string, poolId: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !poolId) throw new Error('Missing arguments. Usage: --headless set task-pool <taskId> <poolId>');
-  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set task-pool');
+async function headlessEditPool(taskId: string, poolId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || !poolId) throw new Error('Missing arguments. Usage: --headless set pool <taskId> <poolId>');
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set pool');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
@@ -924,7 +923,7 @@ async function headlessEditTaskPool(taskId: string, poolId: string, deps: Headle
   process.stdout.write(`Edited task "${taskId}" pool → "${poolId}"\n`);
 
   if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: set task-pool accepted; exiting without tracking.\n');
+    process.stdout.write('[headless] --no-track enabled: set pool accepted; exiting without tracking.\n');
     return;
   }
   if (runnable.length === 0) {

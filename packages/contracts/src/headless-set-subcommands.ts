@@ -12,7 +12,6 @@ export const HEADLESS_SET_SUBCOMMANDS = [
   { name: 'executor', scope: 'task' },
   { name: 'agent', scope: 'task' },
   { name: 'model', scope: 'task' },
-  { name: 'task-pool', scope: 'task' },
   { name: 'merge-mode', scope: 'workflow' },
   { name: 'fix-prompt', scope: 'task' },
   { name: 'fix-context', scope: 'task' },
