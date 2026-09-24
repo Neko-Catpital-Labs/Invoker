@@ -26,11 +26,14 @@ except ImportError:
 parse_args = exec_impl.parse_args
 run_once = exec_impl.run_once
 run_loop = exec_impl.run_loop
+run_status = exec_impl.run_status
 REPO_ROOT = exec_impl.REPO_ROOT
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    if args.status:
+        return exec_impl.run_status(args)
     if args.report:
         return exec_impl.run_report(args)
     target_repos = [repo.strip() for repo in args.target_repos.split(",") if repo.strip()]

@@ -525,6 +525,147 @@ def run_once(
     return 0
 
 
+STATUS_STATE_FIELDS = ("outcomeClass", "workflowStatus", "dispatchState")
+
+
+def status_state(meta: object) -> str:
+    if not isinstance(meta, dict):
+        return "-"
+    for field in STATUS_STATE_FIELDS:
+        value = meta.get(field)
+        if value:
+            return str(value)
+    return "-"
+
+
+def fold_status_entries(
+    rows: Sequence[object],
+    pr_filter: Sequence[int] = (),
+) -> tuple[list[dict[str, object]], list[str]]:
+    # Returns (entries, unreadable): a row this fold cannot key by PR number is
+    # reported as unreadable rather than dropped, so a partial digest can never
+    # be mistaken for a complete one.
+    wanted = {int(number) for number in pr_filter}
+    latest: dict[tuple[str, int, str, str], dict[str, object]] = {}
+    unreadable: list[str] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            unreadable.append(f"row {index}: not a JSON object ({type(row).__name__})")
+            continue
+        try:
+            pr_number = int(row["pr"])
+        except (KeyError, TypeError, ValueError) as exc:
+            unreadable.append(f"row {index}: unusable pr field {row.get('pr')!r} ({exc.__class__.__name__}: {exc})")
+            continue
+        if wanted and pr_number not in wanted:
+            continue
+        repo = str(row.get("repo") or "")
+        kind = str(row.get("kind") or "")
+        key = str(row.get("key") or "")
+        try:
+            epoch = int(row.get("epoch", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            unreadable.append(
+                f"row {index} (PR #{pr_number} {kind}): unusable epoch {row.get('epoch')!r} "
+                f"({exc.__class__.__name__}: {exc}); folded as epoch 0"
+            )
+            epoch = 0
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else None
+        entry = {
+            "repo": repo or None,
+            "pr": pr_number,
+            "kind": kind,
+            "key": key,
+            "state": status_state(meta),
+            "headSha": str(row.get("headSha") or ""),
+            "epoch": epoch,
+            "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch)),
+            "meta": dict(meta) if meta else {},
+        }
+        fold_key = (repo, pr_number, kind, key)
+        previous = latest.get(fold_key)
+        if previous is None or epoch >= int(previous["epoch"]):
+            latest[fold_key] = entry
+    return [latest[fold_key] for fold_key in sorted(latest)], unreadable
+
+
+def group_status_entries(entries: Sequence[dict[str, object]]) -> list[tuple[str, int, list[dict[str, object]]]]:
+    groups: dict[tuple[str, int], list[dict[str, object]]] = {}
+    for entry in entries:
+        groups.setdefault((str(entry["repo"] or ""), int(entry["pr"])), []).append(entry)
+    return [(repo, pr_number, groups[(repo, pr_number)]) for repo, pr_number in sorted(groups)]
+
+
+def count_unparsable_ledger_lines(state_file: Path, parsed_rows: int) -> int:
+    # Ledger.__init__ drops any line it cannot decode into a dict. Counting the
+    # difference here keeps those lines visible in the digest instead of letting
+    # a silently shortened ledger read as a complete one.
+    if not state_file.exists():
+        return 0
+    try:
+        text = state_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"WARN: --status could not re-read {state_file} to count unparsable lines: {exc}", file=sys.stderr)
+        return 0
+    return max(0, sum(1 for line in text.splitlines() if line.strip()) - parsed_rows)
+
+
+def render_status(
+    state_file: Path,
+    row_count: int,
+    groups: Sequence[tuple[str, int, Sequence[dict[str, object]]]],
+    unreadable: Sequence[str] = (),
+    unparsable_lines: int = 0,
+) -> str:
+    header = f"ledger {state_file} rows={row_count} prs={len(groups)}"
+    if unreadable or unparsable_lines:
+        header += f" unreadable={len(unreadable) + unparsable_lines}"
+    lines = [header]
+    if not groups:
+        lines.append("no recorded state")
+    for repo, pr_number, entries in groups:
+        lines.append(f"PR #{pr_number}" + (f" ({repo})" if repo else ""))
+        for entry in entries:
+            lines.append(
+                f"  {entry['kind']} state={entry['state']} key={entry['key']!r} "
+                f"head={entry['headSha'] or '-'} at={entry['recordedAt']}"
+            )
+    return "\n".join(lines) + "\n"
+
+
+# Read-only by construction: loads the ledger file and returns before any
+# GhClient, subprocess, or Ledger.record() call path is reachable.
+def run_status(args: argparse.Namespace) -> int:
+    state_file = Path(args.state_file).expanduser()
+    ledger = Ledger(state_file)
+    entries, unreadable = fold_status_entries(ledger.rows, args.pr)
+    unparsable_lines = count_unparsable_ledger_lines(state_file, len(ledger.rows))
+    for note in unreadable:
+        print(f"WARN: --status skipped unreadable ledger {note}", file=sys.stderr)
+    if unparsable_lines:
+        print(
+            f"WARN: --status: {unparsable_lines} line(s) in {state_file} were not decodable as JSON objects "
+            f"and are absent from this digest",
+            file=sys.stderr,
+        )
+    groups = group_status_entries(entries)
+    if args.json:
+        for repo, pr_number, pr_entries in groups:
+            print(json.dumps(
+                {
+                    "stateFile": str(state_file),
+                    "repo": repo or None,
+                    "pr": pr_number,
+                    "entries": list(pr_entries),
+                    "unreadable": len(unreadable) + unparsable_lines,
+                },
+                sort_keys=True,
+            ))
+        return 0
+    print(render_status(state_file, len(ledger.rows), groups, unreadable, unparsable_lines), end="")
+    return 0
+
+
 def run_report(args: argparse.Namespace) -> int:
     gh = GhClient()
     try:
@@ -648,6 +789,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     mode.add_argument("--once", action="store_true", help="Run one scan/action cycle and exit. Cron uses this.")
     mode.add_argument("--loop", action="store_true", help="Poll until no actionable stack remains.")
     mode.add_argument("--report", action="store_true", help="Render a read-only stack, blocker, cap, and repair workflow report.")
+    mode.add_argument(
+        "--status",
+        action="store_true",
+        help="Print the latest recorded kind/state/key per PR from --state-file. Reads the ledger only: no GitHub access, no subprocess, no writes.",
+    )
     parser.add_argument("--poll-seconds", type=float, default=60, help="Seconds to wait between loop scans. Default: 60.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions; perform no GitHub mutations.")
     parser.add_argument("--repo", default="Neko-Catpital-Labs/Invoker", help="Default: Neko-Catpital-Labs/Invoker.")
