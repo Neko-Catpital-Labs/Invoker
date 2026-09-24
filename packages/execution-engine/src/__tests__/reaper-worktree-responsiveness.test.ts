@@ -62,6 +62,7 @@ describe('stale-worktree reaper responsiveness (real git)', { timeout: 30_000 },
       invokerHome: home,
       userHome: root,
       remoteTargets: [],
+      taskStore: { listWorkflows: () => [], loadTasks: () => [] },
     }).then((results) => {
       reapCompleted = true;
       return results;
