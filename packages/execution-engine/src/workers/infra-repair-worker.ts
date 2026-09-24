@@ -159,6 +159,15 @@ type ValidatedGenericSshInfraCandidate = InfraRepairScanCandidate & {
   readonly target: InfraRepairRemoteTargetConfig;
 };
 
+type ValidatedLocalOauthInfraCandidate = InfraRepairScanCandidate & {
+  readonly task: TaskState;
+  readonly reason: 'ssh-oauth-session-expired';
+};
+
+const LOCAL_OAUTH_ALERT_TARGET_KEY = 'local-agent-cli';
+
+const ALERT_COOLDOWN_DECISION_REASON = 'alert-cooldown';
+
 type TargetRepairResult =
   | { kind: 'success'; output: string }
   | { kind: 'reused-success'; action: WorkerActionRecord }
@@ -238,6 +247,15 @@ function isRecentTargetActionWithinCooldown(action: WorkerActionRecord, nowMs: n
 
 function isOpenOrCompletedTaskDecisionStatus(status: string): boolean {
   return status === 'queued' || status === 'running' || status === 'completed';
+}
+
+function isAlertCooldownSkipDecision(decision: WorkerActionRecord): boolean {
+  return decision.status === 'skipped'
+    && (decision.payload as { reason?: string } | null | undefined)?.reason === ALERT_COOLDOWN_DECISION_REASON;
+}
+
+function isSettledTaskDecision(decision: WorkerActionRecord): boolean {
+  return isOpenOrCompletedTaskDecisionStatus(decision.status) || isAlertCooldownSkipDecision(decision);
 }
 
 function recordTaskDecision(
@@ -405,6 +423,102 @@ function validateGenericSshInfraCandidate(
   if (!target) return undefined;
 
   return { ...candidate, task: latest, reason, targetId, target };
+}
+
+export function listLocalOauthInfraRepairScanCandidates(
+  store: Pick<InfraRepairWorkerStore, 'listWorkflows' | 'loadTasks'>,
+): InfraRepairScanCandidate[] {
+  const candidates: InfraRepairScanCandidate[] = [];
+  for (const workflow of store.listWorkflows()) {
+    for (const task of store.loadTasks(workflow.id)) {
+      if (task.status !== 'failed' || task.config.runnerKind === 'ssh') continue;
+      const failureClass = FailureClassifier.isSshInfra(task.execution.failureClass)
+        ? task.execution.failureClass
+        : classifyGenericSshInfraFailure(task.execution.error);
+      if (failureClass !== 'ssh-oauth-session-expired') continue;
+      const workflowId = workflowIdForTask(task);
+      if (!workflowId) continue;
+      candidates.push({
+        taskId: task.id,
+        workflowId,
+        generation: task.execution.generation ?? 0,
+        taskStateVersion: task.taskStateVersion ?? 0,
+        source: 'scan',
+      });
+    }
+  }
+  return candidates;
+}
+
+function validateLocalOauthInfraCandidate(
+  candidate: InfraRepairScanCandidate,
+  options: InfraRepairWorkerPolicyOptions,
+): ValidatedLocalOauthInfraCandidate | undefined {
+  const latest = loadLatestTask(candidate, options.store);
+  if (!latest) return undefined;
+  const snapshot = compareCandidateSnapshot(candidate, latest);
+  if (!snapshot.ok) return undefined;
+  if (latest.status !== 'failed') return undefined;
+  if (latest.config.runnerKind === 'ssh') return undefined;
+  if (isLivenessFailureTask(latest)) return undefined;
+
+  const reason = FailureClassifier.isSshInfra(latest.execution.failureClass)
+    ? latest.execution.failureClass
+    : classifyGenericSshInfraFailure(latest.execution.error);
+  if (reason !== 'ssh-oauth-session-expired') return undefined;
+
+  return { ...candidate, task: latest, reason };
+}
+
+async function handleLocalOauthSessionExpiredRecovery(
+  options: InfraRepairWorkerPolicyOptions,
+  candidate: ValidatedLocalOauthInfraCandidate,
+): Promise<void> {
+  const existingDecision = options.store.getWorkerAction?.(
+    INFRA_REPAIR_WORKER_KIND,
+    taskDecisionExternalKey(candidate, candidate.reason),
+  );
+  if (existingDecision && isSettledTaskDecision(existingDecision)) {
+    return;
+  }
+
+  const cooldownMs = options.repairCooldownMs ?? DEFAULT_INFRA_REPAIR_COOLDOWN_MS;
+  const existingAlert = options.store.getWorkerAction?.(
+    INFRA_REPAIR_WORKER_KIND,
+    targetRepairExternalKey(LOCAL_OAUTH_ALERT_TARGET_KEY, candidate.reason),
+  );
+  const nowMs = options.now?.() ?? Date.now();
+  if (existingAlert && isRecentTargetActionWithinCooldown(existingAlert, nowMs, cooldownMs)) {
+    recordTaskDecision(
+      options,
+      candidate,
+      candidate.reason,
+      'skipped',
+      `A local agent-CLI OAuth-session-expired alert already exists`,
+      { alertStatus: existingAlert.status },
+      ALERT_COOLDOWN_DECISION_REASON,
+    );
+    return;
+  }
+
+  recordTargetRepairAction(
+    options,
+    LOCAL_OAUTH_ALERT_TARGET_KEY,
+    candidate.reason,
+    'failed',
+    'The local agent-CLI OAuth session expired and cannot be refreshed automatically: an operator must re-authenticate the agent-CLI credential used by worktree/scratch-runner tasks',
+    {},
+    true,
+  );
+  recordTaskDecision(
+    options,
+    candidate,
+    candidate.reason,
+    'completed',
+    'Recorded a local agent-CLI OAuth-session-expired alert; this failure will not be acted on again until an operator refreshes credentials',
+    {},
+    'oauth-session-expired-alert',
+  );
 }
 
 export function buildRemoteProvisionRepairScript(options: {
@@ -1122,7 +1236,7 @@ async function handleOauthSessionExpiredRecovery(
         targetId: candidate.targetId,
         alertStatus: existing.status,
       },
-      'alert-cooldown',
+      ALERT_COOLDOWN_DECISION_REASON,
     );
     return;
   }
@@ -1157,7 +1271,7 @@ async function handleValidatedGenericSshInfraCandidate(
     INFRA_REPAIR_WORKER_KIND,
     taskDecisionExternalKey(candidate, candidate.reason),
   );
-  if (existingDecision && isOpenOrCompletedTaskDecisionStatus(existingDecision.status)) {
+  if (existingDecision && isSettledTaskDecision(existingDecision)) {
     return;
   }
 
@@ -1198,12 +1312,21 @@ export function createInfraRepairTick(options: InfraRepairWorkerPolicyOptions): 
     );
     const scanCandidates = ctx.reason === 'wake' && wakeupCandidates.length > 0
       ? wakeupCandidates
-      : listInfraRepairScanCandidates(options.store);
+      : [
+        ...listInfraRepairScanCandidates(options.store),
+        ...listLocalOauthInfraRepairScanCandidates(options.store),
+      ];
 
     for (const candidate of dedupeScanCandidates(scanCandidates)) {
       const validated = validateGenericSshInfraCandidate(candidate, options);
-      if (!validated) continue;
-      await handleValidatedGenericSshInfraCandidate(options, validated);
+      if (validated) {
+        await handleValidatedGenericSshInfraCandidate(options, validated);
+        continue;
+      }
+      const localOauthValidated = validateLocalOauthInfraCandidate(candidate, options);
+      if (localOauthValidated) {
+        await handleLocalOauthSessionExpiredRecovery(options, localOauthValidated);
+      }
     }
   };
 }
