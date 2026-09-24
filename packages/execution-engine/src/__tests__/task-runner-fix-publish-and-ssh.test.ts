@@ -3151,6 +3151,42 @@ describe('TaskRunner', () => {
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
+    it('forwards repoProvisionCommands into the selected SSH executor', () => {
+      const repoProvisionProvider = vi.fn()
+        .mockReturnValueOnce({ 'https://github.com/EdbertChan/catstack.git': 'npm ci' })
+        .mockReturnValueOnce({ 'https://github.com/EdbertChan/catstack.git': 'npm install' });
+
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'do-droplet': {
+            host: '1.2.3.4',
+            user: 'root',
+            sshKeyPath: '/old/key',
+            managedWorkspaces: true,
+            provisionCommand: 'target provision',
+          },
+        }),
+        executionPoolsProvider: sshFixturePool('do-droplet'),
+        repoProvisionCommandsProvider: repoProvisionProvider,
+      });
+
+      const task = makeTask({
+        id: 'ssh-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'do-droplet' },
+      });
+
+      const executor1 = executor.selectExecutor(task).executor as any;
+      expect(executor1.type).toBe('ssh');
+      expect(executor1.resolveProvisionCommand('git@github.com:EdbertChan/catstack.git')).toBe('npm ci');
+
+      const executor2 = executor.selectExecutor(task).executor as any;
+      expect(executor2).not.toBe(executor1);
+      expect(executor2.resolveProvisionCommand('git@github.com:EdbertChan/catstack.git')).toBe('npm install');
+    });
     it('resolves worktree provisioning from worktree targets', () => {
       const poolProvider = vi.fn()
         .mockReturnValueOnce({
