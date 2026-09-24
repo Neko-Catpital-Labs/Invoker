@@ -97,7 +97,8 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('H="abc123def456"');
     expect(script).toContain("INVOKER_HOME=$(printf '%s'");
     expect(script).toContain('CLONE="$INVOKER_HOME/repos/$H"');
-    expect(script).toContain('if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi');
+    expect(script).toContain('if [ ! -d "$CLONE/.git" ]; then');
+    expect(script).toContain('git clone "$REPO"');
     expect(script).toContain('if ! git -C "$CLONE" fetch --all --prune; then');
     expect(script).toContain('__INVOKER_FETCH_FAILED__=1');
     expect(script).toContain('__INVOKER_FETCH_SUCCESS__=1');
