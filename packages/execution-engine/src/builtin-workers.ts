@@ -4,6 +4,7 @@ import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js
 import type { WorkerRegistry } from './worker-registry.js';
 import { registerE2eAutoFixWorker } from './workers/e2e-autofix-worker.js';
 import { registerWorkerSessionMineWorker } from './workers/worker-session-mine-worker.js';
+import { registerSessionTokenPushWorker } from './workers/session-token-push-worker.js';
 import { registerIdleTaskCleanupWorker } from './workers/idle-task-cleanup-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
 import { registerClaudeOauthRefreshWorker } from './workers/claude-oauth-refresh-worker.js';
@@ -41,6 +42,7 @@ export function registerBuiltinWorkers(
   registerPrMaintenanceWorkers(registry);
   registerE2eAutoFixWorker(registry);
   registerWorkerSessionMineWorker(registry);
+  registerSessionTokenPushWorker(registry);
   registerSlackBugScanWorker(registry);
   registerIdleTaskCleanupWorker(registry);
   registerCrossRepoResearchWorker(registry);

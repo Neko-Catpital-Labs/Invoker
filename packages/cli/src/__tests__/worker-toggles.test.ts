@@ -49,6 +49,14 @@ describe('ONBOARDING_WORKER_TOGGLES', () => {
     expect(ONBOARDING_WORKER_TOGGLES.some((spec) => spec.id === 'worker-session-mine')).toBe(false);
   });
 
+  it('exposes session-token-push as an opt-in desired-state toggle outside onboarding', () => {
+    const push = findWorkerToggle('session-token-push')!;
+    expect(isDesiredStateWorkerToggle(push)).toBe(true);
+    expect(push.workerKinds).toEqual(['session-token-push']);
+    expect(push.defaultEnabled).toBeUndefined();
+    expect(ONBOARDING_WORKER_TOGGLES.some((spec) => spec.id === 'session-token-push')).toBe(false);
+  });
+
   it('exposes codex-spend-clamp as an opt-in desired-state toggle outside onboarding', () => {
     const clamp = findWorkerToggle('codex-spend-clamp')!;
     expect(isDesiredStateWorkerToggle(clamp)).toBe(true);

@@ -15,6 +15,7 @@ import {
   PR_DUPLICATE_CLOSE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  SESSION_TOKEN_PUSH_WORKER_KIND,
   SPEND_CIRCUIT_BREAKER_WORKER_KIND,
   WORKER_SESSION_MINE_WORKER_KIND,
 } from '@invoker/execution-engine';
@@ -110,6 +111,13 @@ export const WORKER_TOGGLES: readonly WorkerToggleSpec[] = [
     label: 'Worker session mine',
     description: 'Mines finished worker agent sessions (Claude, Codex, OMP) for thrash: 40+ turns, 10M+ cache-read or total tokens, or the same shell command 5+ times. Files one Invoker follow-up per session, capped at 1 per tick and 2 per day. Off by default; enable on the DO1 owner only.',
     workerKinds: [WORKER_SESSION_MINE_WORKER_KIND],
+    includeInOnboarding: false,
+  },
+  {
+    id: 'session-token-push',
+    label: 'Session token push',
+    description: 'Once every 7 days, rolls up this machine\'s local agent-session token usage and copies the report to the remote collection target by running scripts/cron-session-token-push.sh. Off by default; enable on each machine whose sessions you want counted.',
+    workerKinds: [SESSION_TOKEN_PUSH_WORKER_KIND],
     includeInOnboarding: false,
   },
   {
