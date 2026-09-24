@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  AGENT_LOGIN_WATCH_WORKER_KIND,
-  CATSTACK_DEPLOY_WORKER_KIND,
-  createWorkerRuntimeController,
-  BUILT_IN_WORKER_KINDS,
-} from '../worker-control.js';
+import { AGENT_LOGIN_WATCH_WORKER_KIND, CATSTACK_DEPLOY_WORKER_KIND } from '@invoker/execution-engine';
+
+import { createWorkerRuntimeController, BUILT_IN_WORKER_KINDS } from '../worker-control.js';
 
 describe('agent-login-watch worker control wiring', () => {
   it('is built in and remains off by default', () => {
