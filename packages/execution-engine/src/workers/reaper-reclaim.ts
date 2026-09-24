@@ -16,12 +16,13 @@ import { hourlySnapshotRetention, pruneHourlySnapshots, type Logger } from '@inv
 
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
 import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
-import { hasFreshInUseMark, IN_USE_MARK_DIR } from '../workspace-in-use-mark.js';
+import { hasFreshInUseMark, IN_USE_MARK_DIR, IN_USE_MARK_MAX_AGE_SECONDS } from '../workspace-in-use-mark.js';
 
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
 import { resolveDiskHeadroomThresholds } from './disk-headroom.js';
 import {
   computeProtectedLocalPaths,
+  computeRemotePreservationPaths,
   expandTildeHome,
   isDeletingOrphanName,
   isSafeInvokerHome,
@@ -253,8 +254,21 @@ function defaultRunLocalGit(args: string[], timeoutMs: number): Promise<void> {
   });
 }
 
+function hasFreshWorktreeMark(home: string, repoHash: string, branch: string, nowMs: number, logger?: Logger): boolean {
+  const markPath = join(home, IN_USE_MARK_DIR, 'worktrees', repoHash, branch);
+  try {
+    const stat = lstatSync(markPath);
+    return stat.isFile() && stat.mtimeMs >= nowMs - IN_USE_MARK_MAX_AGE_SECONDS * 1000;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    logger?.warn?.(`[reaper] kept worktree, in-use mark unreadable ${markPath}: ${errorDetail(err)}`, { module: 'reaper' });
+    return true;
+  }
+}
+
 export async function reapLocalStaleWorktrees(opts: {
   invokerHome: string;
+  inUsePaths: ReadonlySet<string>;
   logger?: Logger;
   userHome?: string;
   nowMs?: number;
@@ -297,6 +311,10 @@ export async function reapLocalStaleWorktrees(opts: {
       if (!isDirectory(path)) continue;
       const ageMs = entryAgeMs(path, nowMs);
       if (ageMs === null || ageMs < minAgeMs) continue;
+      if (overlapsInUsePath(path, opts.inUsePaths) || hasFreshWorktreeMark(home, repoHash, branch, nowMs, opts.logger)) {
+        opts.logger?.info?.(`[reaper] kept stale worktree still in use ${path}`, { module: 'reaper' });
+        continue;
+      }
       const paths = staleByRepoHash.get(repoHash) ?? [];
       paths.push(path);
       staleByRepoHash.set(repoHash, paths);
@@ -340,9 +358,15 @@ export async function reapLocalStaleWorktrees(opts: {
   return removed;
 }
 
-export function buildStaleWorktreeReapScript(invokerHome: string, minAgeHours: number): string {
+export function buildStaleWorktreeReapScript(
+  invokerHome: string,
+  minAgeHours: number,
+  preservePaths: readonly string[],
+): string {
   const homeQ = shellPosixSingleQuote(invokerHome);
   const minAgeMinutes = Math.floor(minAgeHours * 60);
+  const preserveArrayLiteral = preservePaths.map((p) => shellPosixSingleQuote(p)).join(' ');
+  const markMaxAgeMinutes = Math.ceil(IN_USE_MARK_MAX_AGE_SECONDS / 60);
   return `set +e
 INVOKER_HOME=${homeQ}
 ${bashNormalizeTildePath('INVOKER_HOME')}
@@ -352,6 +376,25 @@ case "$INVOKER_HOME" in
     exit 64
     ;;
 esac
+PRESERVE=(${preserveArrayLiteral})
+is_preserved() {
+  local rel="$1"
+  local p
+  for p in "\${PRESERVE[@]}"; do
+    case "$p" in
+      "$rel"|"$rel/"*) return 0 ;;
+    esac
+    case "$rel" in
+      "$p/"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+has_fresh_mark() {
+  local mark="$INVOKER_HOME/${IN_USE_MARK_DIR}/$1"
+  [ -f "$mark" ] || return 1
+  find "$mark" -mmin -${markMaxAgeMinutes} -print -quit 2>/dev/null | grep -q .
+}
 REPOS_SEEN=$(mktemp "\${TMPDIR:-/tmp}/invoker-stale-worktrees.XXXXXX") || exit 1
 trap 'rm -f "$REPOS_SEEN"' EXIT
 if [ -d "$INVOKER_HOME/worktrees" ]; then
@@ -364,6 +407,10 @@ if [ -d "$INVOKER_HOME/worktrees" ]; then
         continue
         ;;
     esac
+    if is_preserved "worktrees/$rel" || has_fresh_mark "worktrees/$rel"; then
+      echo "kept $path (in-use)"
+      continue
+    fi
     repo="$INVOKER_HOME/repos/$repo_hash"
     if git -C "$repo" worktree remove --force "$path" >/dev/null 2>&1 || rm -rf "$path" >/dev/null 2>&1; then
       if [ ! -e "$path" ]; then
@@ -385,6 +432,7 @@ exit 0
 
 export async function reapRemoteStaleWorktrees(opts: {
   target: RemoteDiskTarget;
+  preservePaths: readonly string[];
   logger?: Logger;
   runRemoteScript?: (target: RemoteDiskTarget, script: string) => Promise<string>;
 }): Promise<DiskCleanupResult> {
@@ -403,6 +451,7 @@ export async function reapRemoteStaleWorktrees(opts: {
   const script = buildStaleWorktreeReapScript(
     opts.target.remotePath,
     STALE_WORKTREE_MIN_AGE_HOURS,
+    opts.preservePaths,
   );
   const run = opts.runRemoteScript ?? defaultRunRemoteStaleWorktreeReap;
   try {
@@ -449,6 +498,7 @@ function defaultRunRemoteStaleWorktreeReap(
 
 export async function reapStaleWorktrees(opts: {
   invokerHome: string;
+  taskStore?: DiskHeadroomWorkerStore;
   remoteTargets?: RemoteDiskTarget[];
   logger?: Logger;
   userHome?: string;
@@ -458,6 +508,25 @@ export async function reapStaleWorktrees(opts: {
   gitTimeoutMs?: number;
 }): Promise<DiskCleanupResult[]> {
   const targetKey = `local ${opts.invokerHome}`;
+  const remoteTargets = opts.remoteTargets ?? [];
+  const refuseAll = (reason: string): DiskCleanupResult[] => [
+    targetKey,
+    ...remoteTargets.map((target) => `ssh:${target.name} ${target.remotePath}`),
+  ].map((key) => ({ targetKey: key, ok: false, reason, protectedSkipCount: 0, protectedSkipBytes: 0 }));
+
+  if (!opts.taskStore) {
+    opts.logger?.error?.('[reaper] skipped stale worktree reap, no task store to read in-use paths from', { module: 'reaper' });
+    return refuseAll('no-task-store');
+  }
+  let inUsePaths: Set<string>;
+  try {
+    inUsePaths = readInUseWorkspacePaths(opts.taskStore);
+  } catch (err) {
+    const detail = errorDetail(err);
+    opts.logger?.error?.(`[reaper] skipped stale worktree reap, task state unreadable: ${detail}`, { module: 'reaper' });
+    return refuseAll(`task-store-error: ${detail}`);
+  }
+
   const userHome = opts.userHome ?? homedir();
   const home = expandTildeHome(opts.invokerHome, userHome);
   const localResult: DiskCleanupResult = !isSafeInvokerHome(home, userHome)
@@ -473,16 +542,32 @@ export async function reapStaleWorktrees(opts: {
         targetKey,
         ok: true,
         reason: 'reap-worktrees',
-        detail: `removed ${(await reapLocalStaleWorktrees(opts)).length}`,
+        detail: `removed ${(await reapLocalStaleWorktrees({ ...opts, inUsePaths })).length}`,
         protectedSkipCount: 0,
         protectedSkipBytes: 0,
       };
 
   const results: DiskCleanupResult[] = [localResult];
-  for (const target of opts.remoteTargets ?? []) {
+  for (const target of remoteTargets) {
+    let preservePaths: string[];
+    try {
+      preservePaths = computeRemotePreservationPaths(opts.taskStore, target);
+    } catch (err) {
+      const detail = errorDetail(err);
+      opts.logger?.error?.(`[reaper] skipped remote stale worktree reap ${target.name}, task state unreadable: ${detail}`, { module: 'reaper' });
+      results.push({
+        targetKey: `ssh:${target.name} ${target.remotePath}`,
+        ok: false,
+        reason: `task-store-error: ${detail}`,
+        protectedSkipCount: 0,
+        protectedSkipBytes: 0,
+      });
+      continue;
+    }
     results.push(
       await reapRemoteStaleWorktrees({
         target,
+        preservePaths,
         logger: opts.logger,
         runRemoteScript: opts.runRemoteScript,
       }),

@@ -106,6 +106,7 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
       const logShardsPurged = purgeOldLogShards(expandTildeHome(options.invokerHome));
       const worktreeResults = await reapWorktrees({
         invokerHome: options.invokerHome,
+        taskStore: options.taskStore,
         remoteTargets: options.remoteTargets ?? [],
         logger: options.logger,
       });

@@ -933,7 +933,7 @@ function relativeToRemoteHome(path: string, remoteHome: string): string | undefi
  * `store` throws — callers must fail closed on that, not fall back to an
  * unprotected remote wipe.
  */
-function computeRemotePreservationPaths(
+export function computeRemotePreservationPaths(
   store: DiskHeadroomWorkerStore,
   target: RemoteDiskTarget,
 ): string[] {
