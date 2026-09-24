@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { WebClient } from '@slack/web-api';
+
 import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
 import { Channels, LocalBus } from '@invoker/transport';
 import { createAgentLoginWatchWorker } from '@invoker/execution-engine';
@@ -158,6 +160,7 @@ describe('agent-login-watch e2e (real worker, real login engine, real SlackSurfa
   let surface: SlackSurface;
   let unsubscribeForward: () => void;
   let unsubscribeCapture: () => void;
+  let apiCallSpy: ReturnType<typeof vi.spyOn>;
 
   const publishedAlerts: Array<{ alertKey: string; payload: unknown }> = [];
 
@@ -172,6 +175,7 @@ describe('agent-login-watch e2e (real worker, real login engine, real SlackSurfa
     originalHome = process.env.HOME;
     process.env.PATH = `${fakeBinDir}:${originalPath}`;
     process.env.HOME = homeDir;
+    apiCallSpy = vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true, user_id: 'UBOT123456' });
   });
 
   afterEach(async () => {
@@ -182,6 +186,7 @@ describe('agent-login-watch e2e (real worker, real login engine, real SlackSurfa
     unsubscribeForward?.();
     unsubscribeCapture?.();
     if (surface) await surface.stop();
+    apiCallSpy.mockRestore();
     rmSync(fakeBinDir, { recursive: true, force: true });
     rmSync(homeDir, { recursive: true, force: true });
   });
@@ -216,10 +221,6 @@ describe('agent-login-watch e2e (real worker, real login engine, real SlackSurfa
     const flush = async (): Promise<void> => {
       await pending;
     };
-
-    const app = surface.getApp() as any;
-    const messageHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'message')?.handler;
-    if (!messageHandler) throw new Error('message handler was not registered');
 
     return { messageBus, store, logger, flush, messageHandler };
   }
