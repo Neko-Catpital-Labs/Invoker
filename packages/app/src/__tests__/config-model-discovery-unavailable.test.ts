@@ -75,6 +75,37 @@ describe('validateInvokerConfig with an unavailable Codex CLI', () => {
     expect(() => validateInvokerConfig(config)).not.toThrow();
   });
 
+  it('logs the swallowed discovery error with the agent, model, and probe detail', () => {
+    spawnSyncMock.mockReturnValue(probeFailure());
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      validateInvokerConfig({
+        defaultExecution: { executionAgent: 'codex', executionModel: 'gpt-5.6-luna' },
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const logged = warnSpy.mock.calls[0].map(String).join(' ');
+      expect(logged).toContain('[config-validation]');
+      expect(logged).toContain('"codex"');
+      expect(logged).toContain('"gpt-5.6-luna"');
+      expect(logged).toContain('live probe failed to run (ENOENT)');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does not log when discovery succeeds', () => {
+    spawnSyncMock.mockReturnValue(probeCatalog(['gpt-5.6-luna', 'gpt-5.5']));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      validateInvokerConfig({
+        defaultExecution: { executionAgent: 'codex', executionModel: 'gpt-5.5' },
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('still rejects an invented Codex model when discovery succeeds', () => {
     spawnSyncMock.mockReturnValue(probeCatalog(['gpt-5.6-luna', 'gpt-5.5']));
     const config: InvokerConfig = {
