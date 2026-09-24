@@ -87,6 +87,7 @@ export * from './workers/catstack-deploy-worker.js';
 export * from './workers/self-deploy-worker.js';
 export * from './workers/mergify-queue-research-worker.js';
 export * from './workers/worker-session-mine-worker.js';
+export * from './workers/session-token-push-worker.js';
 export * from './workers/reaper-worker.js';
 export * from './workers/requeue-worker.js';
 export * from './workers/workflow-resume-worker.js';
