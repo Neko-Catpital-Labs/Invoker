@@ -67,7 +67,8 @@ describe('invoker-cli mutations', () => {
 
     expect(code).toBe(0);
     expect(execHandler).toHaveBeenCalledTimes(1);
-    expect(output.stdout).toContain('delete-all accepted by live owner.');
+    expect(output.stdout).toContain('delete-all queued by live owner (not yet applied; re-read with invoker-cli query to confirm).');
+    expect(output.stdout).not.toContain('accepted');
     output.restore();
   });
 
@@ -90,6 +91,8 @@ describe('invoker-cli mutations', () => {
 
     expect(code).toBe(0);
     expect(execHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toContain(`${command} queued by live owner (not yet applied; re-read with invoker-cli query to confirm).`);
+    expect(output.stdout).not.toContain('accepted');
     output.restore();
   });
 
@@ -290,7 +293,8 @@ describe('invoker-cli set', () => {
     });
     expect(result.execHandler).toHaveBeenCalledTimes(1);
     expect(result.execHandler).toHaveBeenCalledWith({ args: ['set', field, TASK_ID, ...values], noTrack: true });
-    expect(result.stdout).toContain(`set ${field} accepted by live owner.`);
+    expect(result.stdout).toContain(`set ${field} queued by live owner (not yet applied; re-read with invoker-cli query to confirm).`);
+    expect(result.stdout).not.toContain('accepted');
   });
 
   it('allows an agent change on a merge node', async () => {
