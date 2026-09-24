@@ -37,7 +37,11 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
-import { resolvePrMaintenanceWorkerConfig, resolveSpendCircuitBreakerWorkerConfig } from './config.js';
+import {
+  resolveAgentLoginWatchWorkerConfig,
+  resolvePrMaintenanceWorkerConfig,
+  resolveSpendCircuitBreakerWorkerConfig,
+} from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
 import {
   isDispatchableLaunch,
@@ -505,6 +509,24 @@ export function resolveHeadlessCatstackDeployConfig(
   };
 }
 
+export function resolveHeadlessAgentLoginWatchConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['agentLoginWatch']> {
+  return {
+    ...resolveAgentLoginWatchWorkerConfig(invokerConfig),
+    enabled: true,
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
+    })),
+  };
+}
+
 export function resolveHeadlessSelfDeployConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
 ): NonNullable<WorkerRuntimeDependencies['selfDeploy']> {
@@ -686,6 +708,8 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      agentLoginWatch: resolveHeadlessAgentLoginWatchConfig(deps.invokerConfig),
+      messageBus: deps.messageBus,
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
