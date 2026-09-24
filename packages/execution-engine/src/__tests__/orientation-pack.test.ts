@@ -88,6 +88,63 @@ describe('worker orientation pack prompts', () => {
     );
   });
 
+  it('tells a worker to reconcile HEAD with a Head SHA the task names', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeRepairTaskRequest([
+      'Address the unresolved review thread PRRT_kwDOT3uYWs6lYaDH.',
+      '',
+      'PR: #870',
+      'Head branch: reflect/claimed-search-not-run-20260923',
+      'Head SHA: 704f2db7bae560ed72a4d22a372eeff7a72864f1',
+    ].join('\n')));
+
+    expect(prompt).toContain('Head SHA 704f2db7bae560ed72a4d22a372eeff7a72864f1 is named in this task');
+    expect(prompt).toContain('git rev-parse HEAD');
+    expect(prompt).toContain('git reset --hard 704f2db7bae560ed72a4d22a372eeff7a72864f1');
+  });
+
+  it('tells a worker to stash uncommitted work before the hard reset', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeRepairTaskRequest([
+      'Address the unresolved review thread PRRT_kwDOT3uYWs6lYaDH.',
+      '',
+      'Head SHA: 704f2db7bae560ed72a4d22a372eeff7a72864f1',
+    ].join('\n')));
+
+    expect(prompt).toContain('git status --porcelain');
+    expect(prompt).toContain('git stash push -u');
+    expect(prompt.indexOf('git stash push -u')).toBeLessThan(
+      prompt.indexOf('git reset --hard 704f2db7bae560ed72a4d22a372eeff7a72864f1'),
+    );
+  });
+
+  it('stays silent about stashing when the task names no Head SHA', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeAiTaskRequest([
+      'Goal: Add a typed task summary field.',
+    ].join('\n')));
+
+    expect(prompt).not.toContain('git stash push -u');
+  });
+
+  it('stays silent about HEAD when the task names no Head SHA', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeAiTaskRequest([
+      'Goal: Add a typed task summary field.',
+      'Implementation details: Touch the execution-engine task runner only.',
+    ].join('\n')));
+
+    expect(prompt).not.toContain('git rev-parse HEAD');
+    expect(prompt).not.toMatch(/Head SHA/i);
+  });
+
+  it('does not treat a Head SHA from the CI job log tail as the task-named head', () => {
+    const prompt = new PromptProbeExecutor().promptFor(makeRepairTaskRequest([
+      "This PR's CI check is failing. Diagnose why it is failing, then fix it.",
+      'Failed check: PR Body',
+      'Job log (tail):',
+      'PR Body\tCheckout\tHead SHA: 0123456789abcdef0123456789abcdef01234567',
+    ].join('\n')));
+
+    expect(prompt).not.toContain('git rev-parse HEAD');
+  });
+
   it('still scopes a repair task to a package named before the job log tail', () => {
     const prompt = new PromptProbeExecutor().promptFor(makeRepairTaskRequest([
       "This PR's CI check is failing. Diagnose why it is failing, then fix it.",
