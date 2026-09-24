@@ -514,6 +514,7 @@ export function resolveHeadlessAgentLoginWatchConfig(
 ): NonNullable<WorkerRuntimeDependencies['agentLoginWatch']> {
   return {
     ...resolveAgentLoginWatchWorkerConfig(invokerConfig),
+    enabled: true,
     remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
       name,
       connection: {
@@ -708,6 +709,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
       agentLoginWatch: resolveHeadlessAgentLoginWatchConfig(deps.invokerConfig),
+      messageBus: deps.messageBus,
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });

@@ -19,6 +19,7 @@ describe('resolveHeadlessAgentLoginWatchConfig', () => {
     });
 
     expect(config).toEqual({
+      enabled: true,
       intervalMs: 7 * 60_000,
       remoteTargets: [{
         name: 'do1',
@@ -35,6 +36,7 @@ describe('resolveHeadlessAgentLoginWatchConfig', () => {
   it('defaults interval and targets when config is omitted', () => {
     const config = resolveHeadlessAgentLoginWatchConfig({});
 
+    expect(config.enabled).toBe(true);
     expect(config.intervalMs).toBe(DEFAULT_AGENT_LOGIN_WATCH_INTERVAL_MINUTES * 60_000);
     expect(config.remoteTargets).toEqual([]);
   });
