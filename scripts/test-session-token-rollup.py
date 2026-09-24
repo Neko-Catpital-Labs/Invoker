@@ -375,6 +375,57 @@ class TestClaudeRootLevelUsage(unittest.TestCase):
         self.assertNotIn("legacy root-shape log", proc.stdout)
 
 
+class TestStreamedCompactSummary(unittest.TestCase):
+    """Claude streams one compact-summary message as two rows that share a
+    message id and requestId. The usage is billed once, so the compaction must
+    be counted once too; a second, distinct compact summary still counts."""
+
+    SESSION = "77770000-0000-0000-0000-000000000007"
+
+    def row(self, message_id, output_tokens):
+        return {
+            "type": "assistant",
+            "sessionId": self.SESSION,
+            "timestamp": "2026-09-20T10:00:00.000Z",
+            "requestId": "req_" + message_id,
+            "isCompactSummary": True,
+            "message": {
+                "id": message_id,
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": MARKER}],
+                "usage": {"input_tokens": 10, "output_tokens": output_tokens},
+            },
+        }
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp()
+        project = os.path.join(tmp, "claude", "projects", "-home-user-compact")
+        empty = os.path.join(tmp, "empty")
+        os.makedirs(project)
+        os.makedirs(empty)
+        rows = [self.row("msg_c1", 5), self.row("msg_c1", 5), self.row("msg_c2", 7)]
+        with open(os.path.join(project, self.SESSION + ".jsonl"), "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        self.proc = run_script([
+            "collect", "--since", SINCE, "--host", "mac", "--now", "2026-09-23T00:00:00Z",
+            "--claude-root", os.path.join(tmp, "claude", "projects"),
+            "--codex-root", empty, "--omp-root", empty,
+        ])
+        self.session = sessions_by_id(json.loads(self.proc.stdout))[self.SESSION]
+
+    def test_duplicate_stream_row_counts_one_compaction(self):
+        self.assertEqual(self.session["compactions"], 2)
+
+    def test_duplicate_stream_row_is_billed_once(self):
+        self.assertEqual(self.session["turns"], 2)
+        self.assertEqual(self.session["total"], 32)
+
+    def test_no_message_text_leaks(self):
+        self.assertNotIn(MARKER, self.proc.stdout)
+
+
 class TestCodexCollection(unittest.TestCase):
     """total_token_usage runs 1000/400/100 -> 3000/1400/250 -> 500/100/20.
     Uncached input deltas are 600 + 1000 + 400 = 2000, cached 400 + 1000 + 100
