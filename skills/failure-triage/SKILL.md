@@ -19,9 +19,16 @@ and the autofix decision ledger.
 
 Run the digest first, then chase the classes it surfaces:
 
+Text digest:
+
 ```sh
-node skills/failure-triage/scripts/failure-digest.mjs            # text digest
-node skills/failure-triage/scripts/failure-digest.mjs --json     # structured
+node skills/failure-triage/scripts/failure-digest.mjs
+```
+
+Structured (JSON) output:
+
+```sh
+node skills/failure-triage/scripts/failure-digest.mjs --json
 ```
 
 The digest is read-only. It runs `invoker-cli query workflows/tasks` and folds

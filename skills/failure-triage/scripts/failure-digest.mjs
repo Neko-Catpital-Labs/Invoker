@@ -1,12 +1,4 @@
 #!/usr/bin/env node
-// failure-digest.mjs — read-only triage of failed Invoker workflows/tasks.
-//
-// Usage: node skills/failure-triage/scripts/failure-digest.mjs [--json] [--log PATH]
-//
-// Groups failed tasks by error signature, folds the worker-autofix decision
-// ledger from ~/.invoker/invoker.log, and prints per-class disposition with
-// the owning worker (autofix / infra-repair / human). No mutations, no git.
-
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -54,7 +46,6 @@ function cli(args) {
 }
 
 function foldAutofixLedger(logPath) {
-  // { taskId: { lastEvent, reason, skips } , counts: { event: n } }
   const ledger = { tasks: {}, counts: {} };
   let lines;
   try {
@@ -119,7 +110,7 @@ function main() {
   const failedWfs = wfList.filter((w) => w.status === 'failed');
 
   const ledger = foldAutofixLedger(logPath);
-  const classes = {}; // class -> [{ workflowId, taskId, member, errorTail, autofix }]
+  const classes = {};
   for (const wf of failedWfs) {
     const tasks = cli(['query', 'tasks', '--workflow', wf.id, '--status', 'failed', '--output', 'json']);
     const list = Array.isArray(tasks) ? tasks : [];
