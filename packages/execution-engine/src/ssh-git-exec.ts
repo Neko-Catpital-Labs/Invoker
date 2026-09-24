@@ -120,7 +120,8 @@ export interface GitMirrorCloneOpts {
  *   __INVOKER_BASE_REF__=<resolved-ref>
  *   __INVOKER_BASE_HEAD__=<sha>
  *
- * On base ref not found, attempts fallback to origin/HEAD and outputs:
+ * When the requested base is main or master and missing, falls back to the
+ * origin/<alternate> default branch (master or main) and outputs:
  *   __INVOKER_BASE_WARNING__=Requested base '<ref>' not found; falling back to '<fallback>'.
  *   __INVOKER_BASE_REF__=<fallback>
  *   __INVOKER_BASE_HEAD__=<sha>
@@ -134,7 +135,7 @@ export interface GitMirrorCloneOpts {
  * prints REQUIRED_COMMIT_UNRESOLVED=<sha> to stderr) if it's still
  * unresolvable after retries.
  *
- * Exits 128 if base ref and fallback both missing.
+ * Exits 128 if any other named base ref was not found on the remote.
  *
  * This shared/reused clone (one per repo hash, fetched once at task start,
  * never recreated) has repeatedly produced "downstream task can't resolve
@@ -213,12 +214,17 @@ elif git -C "$CLONE" rev-parse --verify "origin/$BASE^{commit}" >/dev/null 2>&1;
 elif git -C "$CLONE" rev-parse --verify "$RESOLVED_BASE^{commit}" >/dev/null 2>&1; then
   RESOLVED_BASE="$BASE"
 else
-  FALLBACK="\${ORIGIN_HEAD:-origin/master}"
-  if git -C "$CLONE" rev-parse --verify "$FALLBACK^{commit}" >/dev/null 2>&1; then
-    RESOLVED_BASE="$FALLBACK"
+  ALTERNATE_BASE=""
+  if [ "$BASE" = "main" ]; then
+    ALTERNATE_BASE="master"
+  elif [ "$BASE" = "master" ]; then
+    ALTERNATE_BASE="main"
+  fi
+  if [ -n "$ALTERNATE_BASE" ] && git -C "$CLONE" rev-parse --verify "origin/$ALTERNATE_BASE^{commit}" >/dev/null 2>&1; then
+    RESOLVED_BASE="origin/$ALTERNATE_BASE"
     printf "__INVOKER_BASE_WARNING__=Requested base '%s' not found; falling back to '%s'.\\n" "$BASE" "$RESOLVED_BASE"
   else
-    echo "ERROR: base ref '$BASE' not found and fallback '$FALLBACK' also missing" >&2
+    echo "ERROR: base ref '$BASE' was not found on the remote" >&2
     exit 128
   fi
 fi
