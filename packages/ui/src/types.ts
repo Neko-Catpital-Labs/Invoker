@@ -219,20 +219,7 @@ export interface WorkflowRollupPatch {
 }
 
 
-export type TaskGraphEvent =
-  | {
-      readonly type: 'delta';
-      readonly delta: TaskDelta;
-      readonly workflowRollups: readonly WorkflowRollupPatch[];
-    }
-  | {
-      readonly type: 'snapshot';
-      readonly tasks: readonly TaskState[];
-      readonly workflows: readonly WorkflowMeta[];
-      readonly reason: string;
-      readonly streamSequence: number;
-      readonly forced?: boolean;
-    };
+export type { TaskGraphEvent } from '@invoker/contracts';
 
 
 export type WorkflowStatus =
