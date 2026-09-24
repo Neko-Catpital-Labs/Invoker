@@ -110,6 +110,7 @@ class SessionStats:
         self.model_tokens = {}
         self.fork_starts = []
         self.seen_usage_keys = set()
+        self.seen_compaction_keys = set()
 
     @property
     def total(self):
@@ -349,14 +350,16 @@ def collect_claude_file(rollup, root, path):
         message = row.get("message")
         if not isinstance(message, dict):
             message = {}
+        key = claude_usage_key(row, message, row_index)
         if message.get("isCompactSummary") is True or row.get("isCompactSummary") is True:
-            stats.compactions += 1
+            if key not in stats.seen_compaction_keys:
+                stats.seen_compaction_keys.add(key)
+                stats.compactions += 1
         usage, model = claude_usage_fields(row, message)
         if usage is None:
             continue
         if model == SYNTHETIC_MODEL:
             continue
-        key = claude_usage_key(row, message, row_index)
         if key in stats.seen_usage_keys:
             continue
         stats.seen_usage_keys.add(key)
