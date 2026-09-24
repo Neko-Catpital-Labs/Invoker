@@ -57,6 +57,13 @@ describe('ONBOARDING_WORKER_TOGGLES', () => {
     expect(ONBOARDING_WORKER_TOGGLES.some((spec) => spec.id === 'codex-spend-clamp')).toBe(false);
   });
 
+  it('describes session-token-push as covering every tool the rollup collects, not just Claude', () => {
+    const push = findWorkerToggle('session-token-push')!;
+    expect(push.description).toContain('Claude');
+    expect(push.description).toContain('Codex');
+    expect(push.description).toContain('OMP');
+  });
+
   it('gives every registered builtin worker kind a toggle that can switch it on', () => {
     const toggled = new Set(
       WORKER_TOGGLES.flatMap((spec) => (isDesiredStateWorkerToggle(spec) ? [...spec.workerKinds] : [])),
