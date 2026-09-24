@@ -432,3 +432,48 @@ describe('invoker-cli set', () => {
     expect(output.stderr).toContain('No running Invoker owner is reachable');
   });
 });
+
+describe('invoker-cli fire-and-forget success line', () => {
+  const QUEUED = 'queued by live owner (not yet applied; re-read with invoker-cli query to confirm).';
+
+  function liveOwner() {
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.exec', async () => ({ ok: true }));
+    return bus;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.fails('says delete-all was queued, not accepted', async () => {
+    const output = captureProcessOutput();
+    const bus = liveOwner();
+    const code = await main(['delete-all'], { createMessageBus: () => bus });
+    output.restore();
+
+    expect(code).toBe(0);
+    expect(output.stdout).toContain(`delete-all ${QUEUED}`);
+    expect(output.stdout).not.toContain('accepted');
+  });
+
+  it.fails('says retry-task was queued, not accepted', async () => {
+    const output = captureProcessOutput();
+    const bus = liveOwner();
+    const code = await main(['retry-task', 'wf-1/task-1'], { createMessageBus: () => bus });
+    output.restore();
+
+    expect(code).toBe(0);
+    expect(output.stdout).toContain(`retry-task ${QUEUED}`);
+    expect(output.stdout).not.toContain('accepted');
+  });
+
+  it.fails('says set pool was queued, not accepted', async () => {
+    const result = await runSet(['pool', TASK_ID, 'ssh', 'remote-1'], ownerTask());
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(`set pool ${QUEUED}`);
+    expect(result.stdout).not.toContain('accepted');
+  });
+});
