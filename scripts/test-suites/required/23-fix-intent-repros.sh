@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=scripts/lib/require-headless-display.sh
+source "$ROOT/scripts/lib/require-headless-display.sh"
+invoker_require_headless_display "23-fix-intent-repros.sh"
+
 export REPRO_TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-180}"
 export INVOKER_REPRO_TIMEOUT_SECONDS="${INVOKER_REPRO_TIMEOUT_SECONDS:-600}"
 
