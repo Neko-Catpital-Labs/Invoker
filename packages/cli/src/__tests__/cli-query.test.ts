@@ -246,4 +246,98 @@ describe('invoker-cli query', () => {
     expect(output.stderr).toContain('query capacity requires a live owner');
     output.restore();
   });
+
+  it('forwards a single-task query id to a live owner as the first argument', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const queryHandler = vi.fn(async (request: unknown) => {
+      expect(request).toEqual({
+        kind: 'cli-query',
+        args: ['query', 'task', 'wf-env/task-failed', '--output', 'json'],
+      });
+      return { output: '{"id":"wf-env/task-failed"}\n' };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', queryHandler);
+
+    const code = await main(
+      ['query', 'task', 'wf-env/task-failed', '--output', 'json'],
+      { createMessageBus: () => bus },
+    );
+
+    expect(code).toBe(0);
+    expect(queryHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toBe('{"id":"wf-env/task-failed"}\n');
+    output.restore();
+  });
+
+  it('forwards a single-workflow query id ahead of flags given before it', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const queryHandler = vi.fn(async (request: unknown) => {
+      expect(request).toEqual({
+        kind: 'cli-query',
+        args: ['query', 'workflow', 'wf-env', '--output', 'json'],
+      });
+      return { output: '{"id":"wf-env"}\n' };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', queryHandler);
+
+    const code = await main(
+      ['query', 'workflow', '--output', 'json', 'wf-env'],
+      { createMessageBus: () => bus },
+    );
+
+    expect(code).toBe(0);
+    expect(queryHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toBe('{"id":"wf-env"}\n');
+    output.restore();
+  });
+
+  it('rejects a single-resource query with no id', async () => {
+    const output = captureProcessOutput();
+
+    expect(await main(['query', 'task'], { createMessageBus: () => new LocalBus() })).toBe(1);
+    expect(output.stderr).toContain('Missing id. Usage: invoker-cli query task <id>');
+    expect(await main(['query', 'workflow'], { createMessageBus: () => new LocalBus() })).toBe(1);
+    expect(output.stderr).toContain('Missing id. Usage: invoker-cli query workflow <id>');
+    output.restore();
+  });
+
+  it('rejects --workflow on a single-task query', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(
+      ['query', 'task', 'wf-env/task-failed', '--workflow', 'wf-env'],
+      { createMessageBus: () => new LocalBus() },
+    );
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain('--workflow is only supported for `query tasks`');
+    output.restore();
+  });
+
+  it('still rejects a positional argument on a list query', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(['query', 'tasks', 'wf-env'], { createMessageBus: () => new LocalBus() });
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain('Unexpected query argument: wf-env');
+    output.restore();
+  });
+
+  it('rejects a second positional argument on a single-task query', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(
+      ['query', 'task', 'wf-env/task-failed', 'wf-env/task-complete'],
+      { createMessageBus: () => new LocalBus() },
+    );
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain('Unexpected query argument: wf-env/task-complete');
+    output.restore();
+  });
 });
