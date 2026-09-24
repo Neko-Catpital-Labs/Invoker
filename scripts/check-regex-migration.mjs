@@ -9,7 +9,14 @@ const ROOTS = [
   'packages/workflow-graph/src',
 ];
 const BASELINE_PATH = 'scripts/regex-boundary-baseline.json';
-const FORBIDDEN = ['new RegExp', '.match(', '.search(', '.test('];
+const FORBIDDEN = [
+  'new RegExp',
+  '.match(',
+  '.matchAll(',
+  '.search(',
+  '.test(',
+  /(?:\/[dgimsuvy]*|\b[A-Z][A-Z0-9_]*)\.exec\(/,
+];
 
 async function productionFiles(root) {
   const found = [];
@@ -33,7 +40,8 @@ async function countsByFile() {
     for (const file of (await productionFiles(root)).sort()) {
       const hits = (await readFile(file, 'utf8'))
         .split('\n')
-        .filter((line) => FORBIDDEN.some((marker) => line.includes(marker)))
+        .filter((line) => FORBIDDEN.some((marker) =>
+          (typeof marker === 'string' ? line.includes(marker) : marker.test(line))))
         .length;
       if (hits > 0) counts[file] = hits;
     }

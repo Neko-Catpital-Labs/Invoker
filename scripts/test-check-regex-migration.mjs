@@ -35,6 +35,17 @@ try {
     regressed.out.includes(TARGET) && /\d+ -> \d+/.test(regressed.out), regressed.out);
   writeFileSync(TARGET, savedTarget);
 
+  writeFileSync(TARGET, `${savedTarget}\nconst EXTRA_C = /x/.exec('y');\nconst EXTRA_D = [...'y'.matchAll(/x/g)];\n`);
+  const execRegressed = run();
+  check('added .exec( on a regex literal fails the ratchet', execRegressed.code === 1, `exit ${execRegressed.code}`);
+  check('added .matchAll( is counted too', execRegressed.out.includes(`${TARGET}: 3 -> 5`), execRegressed.out);
+  writeFileSync(TARGET, savedTarget);
+
+  writeFileSync(TARGET, `${savedTarget}\nconst EXTRA_E = await this.exec('gh', ['pr', 'view']);\nconst EXTRA_F = await cp.exec('git status');\n`);
+  const shellExec = run();
+  check('shell .exec( calls are not counted as regexes', shellExec.code === 0, `exit ${shellExec.code}: ${shellExec.out}`);
+  writeFileSync(TARGET, savedTarget);
+
   const dir = mkdtempSync(join(tmpdir(), 'regex-baseline-'));
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   writeFileSync(BASELINE, '{ not json');
