@@ -31,6 +31,9 @@ function validateConfiguredModel(agentName: string | undefined, executionModel: 
     assertExecutionModelSupported(agent, normalizedModel);
   } catch (error) {
     if (!isExecutionModelDiscoveryUnavailableError(error)) throw error;
+    console.warn(
+      `[config-validation] skipped model check for agent "${normalizedAgent}" model "${normalizedModel}": ${error.message}`,
+    );
   }
 }
 
