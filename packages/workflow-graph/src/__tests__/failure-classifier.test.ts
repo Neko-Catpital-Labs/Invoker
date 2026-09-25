@@ -21,6 +21,14 @@ describe('FailureClassifier.classifyError', () => {
     )).toBe('ssh-provision-failed');
   });
 
+  it('keeps a full disk during dependency installation as ssh-disk-full', () => {
+    expect(FailureClassifier.classifyError(
+      '[SshExecutor] Installing managed worktree dependencies...\n'
+      + 'ERR_PNPM_ENOSPC  ENOSPC: No space left on device, write\n'
+      + 'SSH remote script failed (exit=1, phase=run_script)\n',
+    )).toBe('ssh-disk-full');
+  });
+
   it('does not classify a payload-stage failure after provisioning succeeded', () => {
     expect(FailureClassifier.classifyError(
       '[SshExecutor] Installing managed worktree dependencies...\n'

@@ -58,6 +58,9 @@ export class FailureClassifier {
     if (errorText.includes('.invoker/env.sh') && errorText.includes('not a valid identifier')) {
       return 'ssh-env-invalid-export';
     }
+    if (errorText.includes('No space left on device')) {
+      return 'ssh-disk-full';
+    }
     if (
       (
         errorText.includes('Installing managed worktree dependencies')
@@ -93,9 +96,6 @@ export class FailureClassifier {
     }
     if (errorText.includes('Failed to authenticate: OAuth session expired and could not be refreshed')) {
       return 'ssh-oauth-session-expired';
-    }
-    if (errorText.includes('No space left on device')) {
-      return 'ssh-disk-full';
     }
     if (this.isTransientTransportError(errorText)) {
       return 'ssh-transport-transient';
