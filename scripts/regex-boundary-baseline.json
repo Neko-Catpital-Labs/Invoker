@@ -33,5 +33,5 @@
   "packages/workflow-core/src/plan-parser.ts": 6,
   "packages/workflow-core/src/repo-default-branch.ts": 1,
   "packages/workflow-core/src/task-freshness.ts": 2,
-  "packages/workflow-graph/src/failure-classifier.ts": 3
+  "packages/workflow-graph/src/failure-classifier.ts": 4
 }
