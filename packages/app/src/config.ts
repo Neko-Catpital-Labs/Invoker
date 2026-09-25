@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
-import { validateInvokerConfig } from './config-validation.js';
+import { validateInvokerConfig, type ConfigValidationOptions } from './config-validation.js';
 import type {
   E2eAutoFixWorkerConfig,
   PrMaintenanceWorkerConfig,
@@ -740,9 +740,11 @@ export function resolveConfigFileState(): { path: string; exists: boolean } {
   const path = resolveConfigFilePath();
   return { path, exists: existsSync(path) };
 }
-export function loadConfig(): InvokerConfig {
+export type LoadConfigOptions = ConfigValidationOptions;
+
+export function loadConfig(options: LoadConfigOptions = {}): InvokerConfig {
   const config = readJsonSafe(resolveConfigFilePath());
-  return materializeResolvedConfig(validateInvokerConfig(config));
+  return materializeResolvedConfig(validateInvokerConfig(config, options));
 }
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = (config.defaultExecutionHarness ?? config.defaultExecutionAgent)?.trim();
