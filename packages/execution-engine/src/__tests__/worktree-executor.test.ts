@@ -26,6 +26,13 @@ import { BaseExecutor, isHeartbeatAliveDuringFinalize, normalizeRepoUrlForProvis
 import { registerBuiltinAgents } from '../agents/index.js';
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 
+function fakeCodexProbeRunner() {
+  return {
+    status: 0,
+    stdout: JSON.stringify({ models: [{ slug: 'gpt-5-codex', display_name: 'GPT-5 Codex' }] }),
+  };
+}
+
 const mockedSpawn = vi.mocked(spawn);
 
 function createDeferred<T>() {
@@ -1260,7 +1267,7 @@ describe('WorktreeExecutor', () => {
       const executorWithRegistry = new WorktreeExecutor({
         cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
-        agentRegistry: registerBuiltinAgents(),
+        agentRegistry: registerBuiltinAgents({ codex: { probeRunner: fakeCodexProbeRunner } }),
       });
       mockPool(executorWithRegistry);
       setupSpawnMock();
