@@ -103,6 +103,10 @@ scan_repo() {
     fingerprint="${fingerprint%% *}"
     fingerprint="${fingerprint:0:16}"
 
+    if ledger_marker_seen orphan-head-submitted "$key" "$head_oid"; then
+      log_line "$label: repair already submitted for this head ($head_oid); waiting"
+      continue
+    fi
     if ledger_marker_seen orphan-submitted "$key" "$fingerprint"; then
       log_line "$label: repair already submitted for this head-state ($fingerprint); waiting"
       continue
@@ -215,6 +219,7 @@ scan_repo() {
     fi
 
     if output="$(headless_mutation run "$plan_file" 2>&1)"; then
+      ledger_record orphan-head-submitted "$key" "$head_oid"
       ledger_record orphan-submitted "$key" "$fingerprint"
       submitted=$((submitted + 1))
       log_line "$label: submitted repair task ($fingerprint; blockers: $summary)"

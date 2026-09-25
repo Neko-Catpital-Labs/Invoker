@@ -37,6 +37,7 @@ run_cron() {
   PATH="$TMP/bin:$PATH" \
   HOME="$TMP/home" \
   INVOKER_GITHUB_TARGET_REPO="fake/repo" \
+  INVOKER_GITHUB_TARGET_REPOS="fake/repo" \
   INVOKER_PR_CRON_AUTHOR="fake-bot" \
   INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
@@ -60,5 +61,8 @@ attempts="$(awk -F '\t' '$1 == "orphan-attempt" { c++ } END { print c + 0 }' "$T
 submitted="$(awk -F '\t' '$1 == "orphan-submitted" { c++ } END { print c + 0 }' "$TMP/ledger.tsv")"
 [ "$submitted" -eq 0 ] \
   || fail "submit failures must not be marked submitted" "$(cat "$TMP/ledger.tsv")"
+head_submitted="$(awk -F '\t' '$1 == "orphan-head-submitted" { c++ } END { print c + 0 }' "$TMP/ledger.tsv")"
+[ "$head_submitted" -eq 0 ] \
+  || fail "submit failures must not be marked head-submitted" "$(cat "$TMP/ledger.tsv")"
 
 echo "[test] passed"

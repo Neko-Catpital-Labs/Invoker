@@ -46,6 +46,7 @@ run_cron() {
   PATH="$TMP/bin:$PATH" \
   HOME="$TMP/home" \
   INVOKER_GITHUB_TARGET_REPO="fake/repo" \
+  INVOKER_GITHUB_TARGET_REPOS="fake/repo" \
   INVOKER_PR_CRON_AUTHOR="fake-bot" \
   INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
@@ -82,20 +83,26 @@ grep -q "kind='orphan-attempt'" "$plan" || fail "plan: safe-push must own orphan
 grep -q "Do not push" "$plan" || fail "plan: repair prompt must forbid direct pushes" "$(cat "$plan")"
 awk -F '\t' '$1 == "orphan-attempt" && $2 == "801" { found=1 } END { exit found ? 0 : 1 }' "$TMP/ledger.tsv" \
   && fail "tick 1: submission must not record orphan-attempt" "$(cat "$TMP/ledger.tsv")"
+awk -F '\t' '$1 == "orphan-head-submitted" && $2 == "801" { found=1 } END { exit found ? 0 : 1 }' "$TMP/ledger.tsv" \
+  || fail "tick 1: submission must record a head-level in-flight marker" "$(cat "$TMP/ledger.tsv")"
 grep -q "repair-pr-802" "$NODE_LOG" && fail "healthy PR #802 got a repair plan"
 grep -q "repair-pr-803" "$NODE_LOG" && fail "mapped PR #803 got a repair plan"
 
-# ── Tick 2: same head-state -> fingerprint dedup, no second submission ──
+# ── Tick 2: same head, changed blockers -> head-level dedup, no second submission ──
+jq '(.prs[] | select(.number == 801)) |= (.mergeStateStatus = "BLOCKED" | .mergeable = "MERGEABLE" | .reviewDecision = "" | .checks = {"Unit Tests": "FAILURE"})' \
+  "$FAKE_GH_STATE_DIR/state.json" > "$TMP/state2.json"
+mv "$TMP/state2.json" "$FAKE_GH_STATE_DIR/state.json"
 out="$(run_cron)" || fail "tick 2 exited non-zero" "$out"
-echo "$out" | grep -q "PR #801: repair already submitted for this head-state" \
-  || fail "tick 2: expected fingerprint dedup for #801" "$out"
+echo "$out" | grep -q "PR #801: repair already submitted for this head" \
+  || fail "tick 2: expected same-head in-flight dedup for #801" "$out"
 runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 [ "$runs" -eq 1 ] || fail "tick 2: dedup breached; got $runs submissions"
 
 # ── Tick 3: attempt cap -> one-time exhausted comment ──
+cp "$ROOT/scripts/repro/fixtures/fake-gh/scenarios/pr-orphan-broken.json" "$FAKE_GH_STATE_DIR/state.json"
 fp="$(awk -F '\t' '$1 == "orphan-submitted" && $2 == "801" { print $3 }' "$TMP/ledger.tsv")"
 [ -n "$fp" ] || fail "could not read fingerprint from ledger"
-awk -F '\t' '!( $1 == "orphan-submitted" && $2 == "801" )' "$TMP/ledger.tsv" > "$TMP/ledger2.tsv"
+awk -F '\t' '!( ($1 == "orphan-submitted" || $1 == "orphan-head-submitted") && $2 == "801" )' "$TMP/ledger.tsv" > "$TMP/ledger2.tsv"
 mv "$TMP/ledger2.tsv" "$TMP/ledger.tsv"
 for _ in 1 2 3; do printf 'orphan-attempt\t801\t%s\t%s\n' "$fp" "$(date +%s)" >> "$TMP/ledger.tsv"; done
 out="$(run_cron)" || fail "tick 3 exited non-zero" "$out"
