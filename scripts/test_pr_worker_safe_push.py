@@ -272,6 +272,31 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(recorded["kind"], "repair-bot-thread-settled")
         self.assertEqual(recorded["pr"], 456)
 
+    def test_moved_branch_settles_as_noop_when_pr_already_merged(self) -> None:
+        self.clone_other()
+        remote_after_merge = self.commit(self.other, "post-merge branch maintenance", "maintenance\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "repair")
+        env = self._fake_github_remote_and_gh(pr_identifier=456, state="MERGED")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "orphan-attempt",
+            "--tsv-key", "456",
+            "--tsv-marker", "fp1",
+            "--json-pr", "456",
+            env=env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertIn("merged", result.stderr)
+        self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_merge)
+        self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["orphan-attempt", "456", "fp1"])
+
     def test_missing_branch_settles_as_noop_when_pr_merged_and_no_json_pr_given(self) -> None:
         # Reproduces the safe-push worker command: only --branch/--expected-head
         # (no ledger flags, so no --json-pr) is passed when the branch's PR

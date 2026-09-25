@@ -350,9 +350,22 @@ def _settled_via_pr_merge_or_close(args: argparse.Namespace) -> str | None:
     return state if state in ("MERGED", "CLOSED") else None
 
 
+def _settle_merged_or_closed_pr(args: argparse.Namespace, state: str) -> int:
+    _record_ledgers(args)
+    pr_label = f"PR #{args.json_pr}" if args.json_pr is not None else f"the PR for refs/heads/{normalize_branch(args.branch)}"
+    print(
+        f"pr-worker-safe-push: noop: {pr_label} is already {state.lower()}; nothing to push",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
+        state = _settled_via_pr_merge_or_close(args)
+        if state is not None:
+            return _settle_merged_or_closed_pr(args, state)
         pushed = safe_push(
             branch=args.branch,
             expected_head=args.expected_head,
@@ -371,14 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if state is None:
             print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
             return exc.exit_code or 1
-        _record_ledgers(args)
-        pr_label = f"PR #{args.json_pr}" if args.json_pr is not None else f"the PR for refs/heads/{normalize_branch(args.branch)}"
-        print(
-            f"pr-worker-safe-push: noop: {pr_label} is already {state.lower()}; "
-            f"refs/heads/{normalize_branch(args.branch)} no longer exists, nothing to push",
-            file=sys.stderr,
-        )
-        return 0
+        return _settle_merged_or_closed_pr(args, state)
     except SafePushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return exc.exit_code or 1
