@@ -95,6 +95,7 @@ async function resolveBaseCheckoutRef(
 type ResolvedReviewBaseRef = {
   branchName: string;
   gitRef: string;
+  resolvedToDistinctBase: boolean;
 };
 
 function defaultBranchNameCandidates(branchName: string): string[] {
@@ -124,6 +125,7 @@ async function resolveReviewBaseRef(
   const normalizedBase = normalizeBranchForGithubCli(baseBranch);
   for (const branchName of defaultBranchNameCandidates(normalizedBase)) {
     for (const ref of gitRefCandidatesForBranch(branchName)) {
+      if (ref === 'HEAD') continue;
       try {
         const resolved = (await execGitInMergeSafe(
           host,
@@ -131,14 +133,14 @@ async function resolveReviewBaseRef(
           dir,
         )).trim();
         if (resolved) {
-          return { branchName, gitRef: ref };
+          return { branchName, gitRef: ref, resolvedToDistinctBase: true };
         }
       } catch {
         // Try the next base spelling.
       }
     }
   }
-  return { branchName: normalizedBase, gitRef: baseBranch };
+  return { branchName: normalizedBase, gitRef: baseBranch, resolvedToDistinctBase: normalizedBase !== 'HEAD' };
 }
 
 /**
@@ -1003,13 +1005,15 @@ export async function runMergeGateActionImpl(
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
         const reviewBase = await resolveReviewBaseRef(host, gateWorkspacePath!, baseBranch);
 
-        const changedFiles = await listReviewableChangedFiles(
-          host,
-          gateWorkspacePath!,
-          reviewBase.gitRef,
-          featureBranch,
-        );
-        if (changedFiles.length === 0) {
+        const changedFiles = reviewBase.resolvedToDistinctBase
+          ? await listReviewableChangedFiles(
+              host,
+              gateWorkspacePath!,
+              reviewBase.gitRef,
+              featureBranch,
+            )
+          : null;
+        if (changedFiles !== null && changedFiles.length === 0) {
           logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty branch', {
             baseBranch: reviewBase.branchName,
             featureBranch,
@@ -1564,10 +1568,14 @@ export async function publishAfterFixImpl(
 
     const reviewBase = shouldPublishReview || visualProof
       ? await resolveReviewBaseRef(host, consolidateDir, baseBranch)
-      : { branchName: normalizeBranchForGithubCli(baseBranch), gitRef: baseBranch };
+      : {
+          branchName: normalizeBranchForGithubCli(baseBranch),
+          gitRef: baseBranch,
+          resolvedToDistinctBase: normalizeBranchForGithubCli(baseBranch) !== 'HEAD',
+        };
 
     let skipReviewForEmptyDiff = false;
-    if (shouldPublishReview) {
+    if (shouldPublishReview && reviewBase.resolvedToDistinctBase) {
       const changedFiles = await listReviewableChangedFiles(host, consolidateDir, reviewBase.gitRef, featureBranch);
       if (changedFiles.length === 0) {
         logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty branch', {
