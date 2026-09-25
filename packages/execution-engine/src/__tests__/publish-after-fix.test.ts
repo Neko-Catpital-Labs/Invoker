@@ -590,6 +590,95 @@ describe('publishAfterFixImpl integration (real git)', () => {
     }
   }, REAL_GIT_TIMEOUT_MS);
 
+  it('skips make-pr review publication when latest master already contains the same tree through different commits', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pub-fix-already-merged-'));
+    const originDir = join(root, 'origin.git');
+    const hostDir = join(root, 'host');
+    const gateDir = join(root, 'gate');
+
+    try {
+      execSync(`git init --bare -b master "${originDir}"`, { stdio: 'pipe' });
+
+      execSync(`git clone "${originDir}" "${hostDir}"`, { stdio: 'pipe' });
+      git('config user.email "test@test.com"', hostDir);
+      git('config user.name "Test"', hostDir);
+      writeFileSync(join(hostDir, 'initial.txt'), 'initial');
+      git('add -A', hostDir);
+      git('commit -m "initial"', hostDir);
+      git('push origin master', hostDir);
+
+      git('checkout -b invoker/t1', hostDir);
+      writeFileSync(join(hostDir, 't1.txt'), 'task 1 work');
+      git('add -A', hostDir);
+      git('commit -m "task 1"', hostDir);
+      git('push origin invoker/t1', hostDir);
+
+      execSync(`git clone "${originDir}" "${gateDir}"`, { stdio: 'pipe' });
+      git('config user.email "test@test.com"', gateDir);
+      git('config user.name "Test"', gateDir);
+      writeFileSync(join(gateDir, 'fix.txt'), 'claude fix');
+      git('add -A', gateDir);
+      git('commit -m "claude fix"', gateDir);
+      const fixCommit = git('rev-parse HEAD', gateDir);
+
+      git('checkout master', hostDir);
+      writeFileSync(join(hostDir, 't1.txt'), 'task 1 work');
+      writeFileSync(join(hostDir, 'fix.txt'), 'claude fix');
+      git('add -A', hostDir);
+      git('commit -m "upstream already landed task and fix content"', hostDir);
+      git('push origin master', hostDir);
+
+      const mergeTask: TaskState = {
+        id: '__merge__wf-int',
+        description: 'Merge gate',
+        status: 'running',
+        dependencies: ['t1'],
+        createdAt: new Date(),
+        config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+        execution: { fixedIntegrationSha: fixCommit } as any,
+      };
+      const taskT1: TaskState = {
+        id: 't1',
+        description: 'Task 1',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: 'wf-int' } as any,
+        execution: { branch: 'invoker/t1' } as any,
+      };
+
+      const host = makeHost(hostDir, gateDir, [mergeTask, taskT1]);
+      (host.persistence as any).loadWorkflow = () => ({
+        id: 'wf-int',
+        onFinish: 'pull_request',
+        mergeMode: 'external_review',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        name: 'Integration Test',
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      });
+      host.publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
+        artifacts: [{ url: 'https://github.com/example/pr/1', providerId: '1' }],
+        sessionId: 'session-1',
+        agentName: 'claude',
+      });
+
+      await publishAfterFixImpl(host, mergeTask);
+
+      expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+      expect(host.publishReviewStackWithMakePrSkill).not.toHaveBeenCalled();
+      expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-int', expect.objectContaining({
+        execution: expect.objectContaining({ branch: 'plan/feature' }),
+      }), expect.objectContaining({ generation: 0 }));
+
+      git('fetch origin', hostDir);
+      expect(gitSilent('diff --stat origin/master origin/plan/feature', hostDir)).toBe('');
+      expect(git('diff --name-only origin/master...origin/plan/feature', hostDir)).toContain('t1.txt');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
   describe('keeps the merge gate config valid under the orchestrator config patch', () => {
     function mergeGateTask(execution: Record<string, unknown> = {}): TaskState {
       return {

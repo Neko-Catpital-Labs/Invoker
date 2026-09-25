@@ -367,6 +367,23 @@ async function listReviewableChangedFiles(
   baseGitRef: string,
   featureBranch: string,
 ): Promise<string[]> {
+  try {
+    await execGitInMergeSafe(
+      host,
+      ['diff', '--quiet', baseGitRef, featureBranch, '--'],
+      dir,
+    );
+    return [];
+  } catch (error) {
+    const status = typeof (error as { status?: unknown }).status === 'number'
+      ? (error as { status: number }).status
+      : undefined;
+    const message = error instanceof Error ? error.message : String(error);
+    if (status !== 1 && !/\bfailed \(code 1\)\b|\bexited with code 1\b|\bexit status 1\b/i.test(message)) {
+      throw error;
+    }
+  }
+
   const out = await execGitInMergeSafe(
     host,
     ['diff', '--name-only', `${baseGitRef}...${featureBranch}`, '--'],
