@@ -1,5 +1,6 @@
 ---
 name: failure-triage
+category: core
 description: >
   Triage Invoker workflow/task failures into owned classes before claiming
   autofix will or won't repair them. Trigger on "why so many failures",
