@@ -447,4 +447,8 @@ if grep -n 'invoker-ready' "$REPO_ROOT/scripts/cross-repo-research-watch.mjs" | 
 fi
 echo "PASS J: prose mention of the ready label is neutralized; prompts do not name it"
 
+grep -qF "node $REPO_ROOT/scripts/linear-issue-create.mjs --artifact" "$file_lin" \
+  || fail "K: file-linear must run the generating checkout's linear-issue-create.mjs by absolute path" "$file_lin"
+echo "PASS K: file-linear runs the generator's own filing script"
+
 echo "All cross-repo-research fixture tests passed."
