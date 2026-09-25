@@ -54,7 +54,8 @@ function makeLeg(kind) {
     PATH: `${bin}:${process.env.PATH}`,
     HOME: home,
     FAKE_GH_STATE_DIR: state,
-    INVOKER_GITHUB_TARGET_REPO: 'fake/repo',
+    INVOKER_GITHUB_TARGET_REPO: undefined,
+    INVOKER_GITHUB_TARGET_REPOS: undefined,
     INVOKER_PR_CRON_AUTHOR: 'fake-bot',
     INVOKER_HEADLESS_IPC_HELPER: join(ROOT, 'scripts/repro/fixtures/fake-headless-ipc.js'),
   };
@@ -237,6 +238,8 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   );
   console.log('\n=== leg 5: unmapped broken PR (pr-orphan-broken.json) -> pr-orphan-repair ===');
   const err = await tickWorker(leg, createPrOrphanRepairWorker, {
+    INVOKER_GITHUB_TARGET_REPO: 'fake/repo',
+    INVOKER_GITHUB_TARGET_REPOS: 'fake/repo',
     INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
     INVOKER_PR_ORPHAN_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
     INVOKER_PR_ORPHAN_PLAN_DIR: join(leg.legDir, 'plans'),

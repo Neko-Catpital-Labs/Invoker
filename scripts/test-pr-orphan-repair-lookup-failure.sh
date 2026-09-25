@@ -33,6 +33,7 @@ run_case() {
     HOME="$dir/home" \
     FAKE_GH_STATE_DIR="$dir/state" \
     INVOKER_GITHUB_TARGET_REPO="fake/repo" \
+    INVOKER_GITHUB_TARGET_REPOS="fake/repo" \
     INVOKER_PR_CRON_AUTHOR="fake-bot" \
     INVOKER_PR_CRON_LOCK="$dir/crons.lock" \
     INVOKER_PR_CRON_REVIEW_GATE_CMD="$dir/review-gate.sh" \

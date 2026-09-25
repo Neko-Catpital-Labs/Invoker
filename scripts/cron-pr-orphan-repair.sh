@@ -154,7 +154,7 @@ scan_repo() {
       printf 'name: repair-pr-%s-%s\n' "$num" "$fingerprint"
       printf 'onFinish: none\n'
       printf 'repoUrl: https://github.com/%s.git\n' "$repo"
-      printf 'baseBranch: %s\n' "$base_ref"
+      printf 'baseBranch: %s\n' "$head_ref"
       printf 'tasks:\n'
       printf '  - id: repair\n'
       printf '    description: "Repair PR #%s: %s"\n' "$num" "$(printf '%s' "$summary" | tr '"' "'")"
@@ -163,8 +163,7 @@ scan_repo() {
         printf 'Repair the existing pull request #%s ("%s") on %s.\n' "$num" "$title" "$repo"
         printf 'PR URL: %s\n' "$url"
         printf 'Head branch: %s (at %s), base branch: %s\n\n' "$head_ref" "$head_oid" "$base_ref"
-        printf 'This PR has no Invoker workflow; work directly on its branch:\n'
-        printf '  git fetch origin %s && git checkout %s\n\n' "$head_ref" "$head_ref"
+        printf 'This PR has no Invoker workflow. Invoker starts this task from the PR branch; keep working in the managed checkout.\n\n'
         printf 'Blockers to clear, strictly in this order:\n'
         i=1
         for b in "${blockers[@]}"; do
