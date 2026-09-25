@@ -251,7 +251,7 @@ async function runE2eAutoFixEntrypoint(
   });
 
   if (succeeded) {
-    checkRedDefaultBranchAlert(options, childEnv, alertState);
+    checkRedDefaultBranchAlert(options, childEnv, alertState, repoRoot);
   }
 }
 
@@ -259,8 +259,9 @@ function checkRedDefaultBranchAlert(
   options: E2eAutoFixTickOptions,
   env: NodeJS.ProcessEnv,
   alertState: RedDefaultBranchAlertState,
+  repoRoot: string,
 ): void {
-  const stateDir = resolveCiWatchStateDir(env);
+  const stateDir = resolveCiWatchStateDir(env, repoRoot);
   const sweepLogPath = resolve(stateDir, 'sweep-log.jsonl');
 
   let lastLine: string | undefined;
@@ -351,9 +352,9 @@ function persistAlertDate(options: E2eAutoFixTickOptions, path: string, utcDate:
   }
 }
 
-function resolveCiWatchStateDir(env: NodeJS.ProcessEnv): string {
+function resolveCiWatchStateDir(env: NodeJS.ProcessEnv, repoRoot: string): string {
   const explicit = env.INVOKER_CI_WATCH_STATE_DIR ?? env.INVOKER_E2E_WATCH_STATE_DIR;
-  if (typeof explicit === 'string' && explicit.trim()) return explicit;
+  if (typeof explicit === 'string' && explicit.trim()) return resolve(repoRoot, explicit);
   const targetRepo = env.INVOKER_GITHUB_TARGET_REPO?.trim() || DEFAULT_CI_WATCH_TARGET_REPO;
   if (targetRepo === DEFAULT_CI_WATCH_TARGET_REPO) {
     return resolve(homedir(), '.invoker', 'e2e-regression-watch');
@@ -362,16 +363,12 @@ function resolveCiWatchStateDir(env: NodeJS.ProcessEnv): string {
 }
 
 function slugifyCiWatchTargetRepo(value: string, maxLength = 128): string {
-  const slug = trimDashes(value.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
-  return trimDashes((slug || 'ci-job').slice(0, maxLength)) || 'ci-job';
-}
-
-function trimDashes(value: string): string {
-  let start = 0;
-  let end = value.length;
-  while (start < end && value[start] === '-') start += 1;
-  while (end > start && value[end - 1] === '-') end -= 1;
-  return value.slice(start, end);
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+  return (slug || 'ci-job').slice(0, maxLength).replace(/-+$/g, '') || 'ci-job';
 }
 
 function attachChildStreamLogger(

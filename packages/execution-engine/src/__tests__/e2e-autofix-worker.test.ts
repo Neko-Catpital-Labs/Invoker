@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -527,6 +527,35 @@ describe('e2e auto-fix worker', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('could not read the CI regression watcher sweep log'),
       expect.objectContaining({ worker: E2E_AUTOFIX_WORKER_KIND }),
+    );
+  });
+
+  it('red default branch alert: resolves a relative explicit state dir against the repo root, matching the watcher', async () => {
+    const repoRoot = makeRepoRoot();
+    const relativeStateDir = 'ci-watch-state';
+    mkdirSync(join(repoRoot, relativeStateDir), { recursive: true });
+    writeSweepLogLastLine(join(repoRoot, relativeStateDir), {
+      defaultBranchRedForHours: 72,
+      lastGreenDefaultBranchRunAt: '2026-09-21T00:00:00.000Z',
+    });
+    const bus = makeMessageBus();
+
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: relativeStateDir },
+      messageBus: bus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+
+    await tick(makeCtx());
+
+    expect(bus.publish).toHaveBeenCalledWith(
+      Channels.SURFACE_EVENT,
+      expect.objectContaining({
+        type: 'alert',
+        alert: expect.objectContaining({ source: E2E_AUTOFIX_WORKER_KIND }),
+      }),
     );
   });
 });
