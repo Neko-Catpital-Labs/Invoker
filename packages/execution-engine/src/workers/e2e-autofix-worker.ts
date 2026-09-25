@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -70,6 +70,8 @@ export interface E2eAutoFixTickOptions extends E2eAutoFixWorkerConfig {
 interface RedDefaultBranchAlertState {
   lastAlertedUtcDate?: string;
 }
+
+const RED_DEFAULT_BRANCH_ALERT_STATE_FILE = 'red-default-branch-alert.json';
 
 /** Register the built-in default-branch CI auto-fix watcher. */
 export function registerE2eAutoFixWorker(
@@ -293,8 +295,13 @@ function checkRedDefaultBranchAlert(
   }
 
   const utcDate = new Date().toISOString().slice(0, 10);
+  const alertStatePath = resolve(stateDir, RED_DEFAULT_BRANCH_ALERT_STATE_FILE);
+  if (alertState.lastAlertedUtcDate === undefined) {
+    alertState.lastAlertedUtcDate = readPersistedAlertDate(options, alertStatePath);
+  }
   if (alertState.lastAlertedUtcDate === utcDate) return;
   alertState.lastAlertedUtcDate = utcDate;
+  persistAlertDate(options, alertStatePath, utcDate);
 
   const redForDays = redForHours / 24;
   const lastGreenText = entry.lastGreenDefaultBranchRunAt
@@ -311,6 +318,37 @@ function checkRedDefaultBranchAlert(
       alertKey: `default-branch-red:${utcDate}`,
     },
   });
+}
+
+function readPersistedAlertDate(options: E2eAutoFixTickOptions, path: string): string | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as RedDefaultBranchAlertState;
+    return typeof parsed.lastAlertedUtcDate === 'string' ? parsed.lastAlertedUtcDate : undefined;
+  } catch (err) {
+    options.logger.warn(
+      `[worker:${E2E_AUTOFIX_WORKER_KIND}] could not parse the red default branch alert state at ${path}`,
+      { module: 'e2e-autofix-worker', worker: E2E_AUTOFIX_WORKER_KIND, err },
+    );
+    return undefined;
+  }
+}
+
+function persistAlertDate(options: E2eAutoFixTickOptions, path: string, utcDate: string): void {
+  const state: RedDefaultBranchAlertState = { lastAlertedUtcDate: utcDate };
+  try {
+    writeFileSync(path, `${JSON.stringify(state)}\n`);
+  } catch (err) {
+    options.logger.warn(
+      `[worker:${E2E_AUTOFIX_WORKER_KIND}] could not persist the red default branch alert state at ${path}`,
+      { module: 'e2e-autofix-worker', worker: E2E_AUTOFIX_WORKER_KIND, err },
+    );
+  }
 }
 
 function resolveCiWatchStateDir(env: NodeJS.ProcessEnv): string {

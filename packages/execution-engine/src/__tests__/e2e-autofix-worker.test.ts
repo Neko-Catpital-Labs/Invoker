@@ -476,6 +476,37 @@ describe('e2e auto-fix worker', () => {
     expect(bus.publish).toHaveBeenCalledTimes(1);
   });
 
+  it('red default branch alert: does not re-fire on the same UTC day after a worker restart (persisted claim)', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    writeSweepLogLastLine(stateDir, { defaultBranchRedForHours: 72, lastGreenDefaultBranchRunAt: '2026-09-21T00:00:00.000Z' });
+
+    const firstBus = makeMessageBus();
+    const firstTick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: firstBus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+    await firstTick(makeCtx());
+    expect(firstBus.publish).toHaveBeenCalledTimes(1);
+
+    // Simulate a worker restart: a brand-new tick closure starts with an empty
+    // in-memory alertState, but the daily publication claim persists on disk.
+    const secondBus = makeMessageBus();
+    const secondTick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: secondBus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+    await secondTick(makeCtx());
+
+    expect(secondBus.publish).not.toHaveBeenCalled();
+  });
+
   it('red default branch alert: warns and publishes nothing when the sweep log is unreadable', async () => {
     const repoRoot = makeRepoRoot();
     const stateDir = makeCiWatchStateDir();
