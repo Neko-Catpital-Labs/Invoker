@@ -481,6 +481,25 @@ class ClassifyRepairOutcome(unittest.TestCase):
         with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
             self.assertEqual(f.classify_repair_outcome("wf-1", "failed"), "code")
 
+    def test_repair_that_launched_then_hit_the_agent_usage_limit_is_infra(self):
+        tasks = [
+            {
+                "id": "wf-1790301925973-160/repair",
+                "status": "failed",
+                "execution": {
+                    "exitCode": 1,
+                    "phase": "executing",
+                    "launchStartedAt": "2026-09-25T02:12:17.119Z",
+                    "launchCompletedAt": "2026-09-25T02:12:45.905Z",
+                    "error": "You've hit your session limit · resets 3:50am (UTC)",
+                    "failureClass": "agent-usage-limit",
+                },
+            },
+            {"id": "wf-1790301925973-160/safe-push", "status": "skipped", "execution": {}},
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            self.assertEqual(f.classify_repair_outcome("wf-1790301925973-160", "failed"), "infra")
+
     def test_one_launched_failure_beside_a_never_launched_task_is_code(self):
         tasks = [
             {
