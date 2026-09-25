@@ -368,21 +368,33 @@ ${tasks}
 `;
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
 function buildFileLinearWorkflow({
   targetRepoUrl,
   artifactDir,
   slotCount,
   upstreamToken,
+  teamId,
 }) {
-  const fileCommands = [];
+  const fileCommands = [
+    `export INVOKER_LINEAR_TEAM_ID=${shellQuote(teamId)}`,
+    'filed=0',
+  ];
   for (let i = 1; i <= slotCount; i += 1) {
     fileCommands.push(
       `if [ -f ${artifactDir}/research-${i}.json ]; then `
-      + `node scripts/linear-issue-create.mjs --artifact ${artifactDir}/research-${i}.json; `
+      + `node scripts/linear-issue-create.mjs --artifact ${artifactDir}/research-${i}.json || exit 1; `
+      + 'filed=$((filed + 1)); '
       + 'fi',
     );
   }
-  const command = fileCommands.join(' && ');
+  fileCommands.push(
+    `if [ "$filed" -eq 0 ]; then echo "no research artifacts found under ${artifactDir}" >&2; exit 1; fi`,
+  );
+  const command = fileCommands.join('; ');
 
   return `name: "cross-repo-research file-linear ${slugify(artifactDir)}"
 onFinish: none
@@ -478,6 +490,7 @@ export function generateChainForPair({
     artifactDir: runDir,
     slotCount: maxCandidates,
     upstreamToken: '__UPSTREAM_WORKFLOW_ID__',
+    teamId,
   }));
 
   return {
