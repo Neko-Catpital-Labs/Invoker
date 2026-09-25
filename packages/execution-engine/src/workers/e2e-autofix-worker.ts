@@ -362,12 +362,16 @@ function resolveCiWatchStateDir(env: NodeJS.ProcessEnv): string {
 }
 
 function slugifyCiWatchTargetRepo(value: string, maxLength = 128): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-{2,}/g, '-');
-  return (slug || 'ci-job').slice(0, maxLength).replace(/-+$/g, '') || 'ci-job';
+  const slug = trimDashes(value.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  return trimDashes((slug || 'ci-job').slice(0, maxLength)) || 'ci-job';
+}
+
+function trimDashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '-') start += 1;
+  while (end > start && value[end - 1] === '-') end -= 1;
+  return value.slice(start, end);
 }
 
 function attachChildStreamLogger(
