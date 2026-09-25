@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -505,6 +505,53 @@ describe('e2e auto-fix worker', () => {
     await secondTick(makeCtx());
 
     expect(secondBus.publish).not.toHaveBeenCalled();
+  });
+
+  it('red default branch alert: reads the target-specific sweep log when INVOKER_CI_WATCH_CONFIG_FILE selects a non-default target repo', async () => {
+    const repoRoot = makeRepoRoot();
+    const fakeHome = mkdtempSync(join(tmpdir(), 'invoker-e2e-autofix-home-test-'));
+    stateDirs.push(fakeHome);
+    const targetRepo = 'octo/example-repo';
+    const targetStateDir = join(fakeHome, '.invoker', 'e2e-regression-watch-targets', 'octo-example-repo');
+    mkdirSync(targetStateDir, { recursive: true });
+    writeSweepLogLastLine(targetStateDir, { defaultBranchRedForHours: 72, lastGreenDefaultBranchRunAt: '2026-09-21T00:00:00.000Z' });
+
+    const configPath = join(fakeHome, 'ci-watch-config.json');
+    writeFileSync(configPath, `${JSON.stringify({ targetRepo })}\n`);
+
+    const bus = makeMessageBus();
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    try {
+      const tick = createE2eAutoFixTick({
+        logger: makeLogger(),
+        repoRoot,
+        env: {
+          INVOKER_CI_WATCH_CONFIG_FILE: configPath,
+          INVOKER_GITHUB_TARGET_REPO: undefined,
+          INVOKER_CI_WATCH_STATE_DIR: undefined,
+          INVOKER_E2E_WATCH_STATE_DIR: undefined,
+        },
+        messageBus: bus,
+        spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+      });
+
+      await tick(makeCtx());
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+
+    expect(bus.publish).toHaveBeenCalledWith(
+      Channels.SURFACE_EVENT,
+      expect.objectContaining({
+        type: 'alert',
+        alert: expect.objectContaining({ severity: 'critical', source: E2E_AUTOFIX_WORKER_KIND }),
+      }),
+    );
   });
 
   it('red default branch alert: warns and publishes nothing when the sweep log is unreadable', async () => {

@@ -354,11 +354,37 @@ function persistAlertDate(options: E2eAutoFixTickOptions, path: string, utcDate:
 function resolveCiWatchStateDir(env: NodeJS.ProcessEnv): string {
   const explicit = env.INVOKER_CI_WATCH_STATE_DIR ?? env.INVOKER_E2E_WATCH_STATE_DIR;
   if (typeof explicit === 'string' && explicit.trim()) return explicit;
-  const targetRepo = env.INVOKER_GITHUB_TARGET_REPO?.trim() || DEFAULT_CI_WATCH_TARGET_REPO;
+  const targetRepo = resolveCiWatchTargetRepo(env);
   if (targetRepo === DEFAULT_CI_WATCH_TARGET_REPO) {
     return resolve(homedir(), '.invoker', 'e2e-regression-watch');
   }
   return resolve(homedir(), '.invoker', 'e2e-regression-watch-targets', slugifyCiWatchTargetRepo(targetRepo));
+}
+
+function resolveCiWatchTargetRepo(env: NodeJS.ProcessEnv): string {
+  const envRepo = env.INVOKER_GITHUB_TARGET_REPO;
+  if (typeof envRepo === 'string' && envRepo.trim()) return envRepo.trim();
+  const configRepo = readCiWatchConfigTargetRepo(env.INVOKER_CI_WATCH_CONFIG_FILE);
+  if (configRepo) return configRepo;
+  return DEFAULT_CI_WATCH_TARGET_REPO;
+}
+
+function readCiWatchConfigTargetRepo(configPath: string | undefined): string | undefined {
+  if (typeof configPath !== 'string' || !configPath.trim()) return undefined;
+  let raw: string;
+  try {
+    raw = readFileSync(configPath, 'utf8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { targetRepo?: unknown };
+    return typeof parsed.targetRepo === 'string' && parsed.targetRepo.trim()
+      ? parsed.targetRepo.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function slugifyCiWatchTargetRepo(value: string, maxLength = 128): string {
