@@ -27,6 +27,16 @@ SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-submit.XXXXXX")"
 PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-plan.XXXXXX")"
 DB_PATH="$INVOKER_DB_DIR/invoker.db"
 OWNER_PID=""
+SANDBOX_FLAG=()
+
+if [ "$(uname)" = "Linux" ]; then
+  SANDBOX_BIN="$REPO_ROOT/node_modules/.pnpm/electron@"*/node_modules/electron/dist/chrome-sandbox
+  # shellcheck disable=SC2086
+  if ! stat -c '%U:%a' $SANDBOX_BIN 2>/dev/null | grep -q '^root:4755$'; then
+    SANDBOX_FLAG=(--no-sandbox)
+  fi
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
 
 cleanup() {
   if [ -n "$OWNER_PID" ]; then
@@ -40,7 +50,8 @@ trap cleanup EXIT
 
 echo "==> case 2.17: start GUI owner"
 unset ELECTRON_RUN_AS_NODE
-./run.sh >"$OWNER_LOG" 2>&1 &
+ELECTRON_ENABLE_LOGGING=1 \
+  ./scripts/electron.cjs packages/app/dist/main.js "${SANDBOX_FLAG[@]}" >"$OWNER_LOG" 2>&1 &
 OWNER_PID=$!
 
 echo "==> case 2.17: wait for owner mutation readiness"
