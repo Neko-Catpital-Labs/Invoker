@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -9,6 +9,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Logger } from '@invoker/contracts';
+import { Channels, type MessageBus } from '@invoker/transport';
 
 import type { WorkerTickContext } from '../worker-runtime.js';
 import {
@@ -115,6 +116,16 @@ function makeExitWithoutCloseHarness(options: { exitCode?: number } = {}): {
   return { calls, spawnProcess: spawnProcess as unknown as typeof spawn };
 }
 
+function makeMessageBus(): MessageBus & { publish: ReturnType<typeof vi.fn> } {
+  return {
+    publish: vi.fn(),
+    subscribe: vi.fn(() => () => undefined),
+    request: vi.fn(),
+    onRequest: vi.fn(() => () => undefined),
+    disconnect: vi.fn(),
+  } as unknown as MessageBus & { publish: ReturnType<typeof vi.fn> };
+}
+
 function makeHangingSpawnHarness(): { calls: SpawnCall[]; spawnProcess: typeof spawn; child: ChildProcess & { kill: ReturnType<typeof vi.fn> } } {
   const calls: SpawnCall[] = [];
   const stdout = new PassThrough();
@@ -138,6 +149,7 @@ function makeHangingSpawnHarness(): { calls: SpawnCall[]; spawnProcess: typeof s
 
 describe('e2e auto-fix worker', () => {
   let tmpRoot: string | undefined;
+  let stateDirs: string[] = [];
 
   afterEach(() => {
     vi.useRealTimers();
@@ -146,11 +158,25 @@ describe('e2e auto-fix worker', () => {
       rmSync(tmpRoot, { recursive: true, force: true });
       tmpRoot = undefined;
     }
+    for (const dir of stateDirs) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    stateDirs = [];
   });
 
   function makeRepoRoot(): string {
     tmpRoot = mkdtempSync(join(tmpdir(), 'invoker-e2e-autofix-test-'));
     return tmpRoot;
+  }
+
+  function makeCiWatchStateDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-e2e-autofix-state-test-'));
+    stateDirs.push(dir);
+    return dir;
+  }
+
+  function writeSweepLogLastLine(stateDir: string, entry: Record<string, unknown>): void {
+    writeFileSync(join(stateDir, 'sweep-log.jsonl'), `${JSON.stringify({ ts: '2026-09-24T00:00:00.000Z' })}\n${JSON.stringify(entry)}\n`);
   }
 
   it('spawns the CI regression watcher script with the repo root as cwd', async () => {
@@ -380,5 +406,127 @@ describe('e2e auto-fix worker', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(harness.calls).toHaveLength(2);
     await worker.stop();
+  });
+
+  it('publishes a red default branch alert once the sweep log reports it over threshold', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    writeSweepLogLastLine(stateDir, { defaultBranchRedForHours: 50, lastGreenDefaultBranchRunAt: '2026-09-22T00:00:00.000Z' });
+    const bus = makeMessageBus();
+
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: bus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+
+    await tick(makeCtx());
+
+    expect(bus.publish).toHaveBeenCalledWith(
+      Channels.SURFACE_EVENT,
+      expect.objectContaining({
+        type: 'alert',
+        alert: expect.objectContaining({
+          severity: 'critical',
+          source: E2E_AUTOFIX_WORKER_KIND,
+          alertKey: expect.stringMatching(/^default-branch-red:\d{4}-\d{2}-\d{2}$/),
+        }),
+      }),
+    );
+  });
+
+  it('red default branch alert: does not fire when the sweep log reports the default branch under threshold', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    writeSweepLogLastLine(stateDir, { defaultBranchRedForHours: 5, lastGreenDefaultBranchRunAt: '2026-09-24T18:00:00.000Z' });
+    const bus = makeMessageBus();
+
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: bus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+
+    await tick(makeCtx());
+
+    expect(bus.publish).not.toHaveBeenCalled();
+  });
+
+  it('red default branch alert: fires at most once per UTC day for repeated over-threshold sweeps', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    writeSweepLogLastLine(stateDir, { defaultBranchRedForHours: 72, lastGreenDefaultBranchRunAt: '2026-09-21T00:00:00.000Z' });
+    const bus = makeMessageBus();
+
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: bus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+
+    await tick(makeCtx());
+    await tick(makeCtx());
+
+    expect(bus.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('red default branch alert: does not re-fire on the same UTC day after a worker restart (persisted claim)', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    writeSweepLogLastLine(stateDir, { defaultBranchRedForHours: 72, lastGreenDefaultBranchRunAt: '2026-09-21T00:00:00.000Z' });
+
+    const firstBus = makeMessageBus();
+    const firstTick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: firstBus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+    await firstTick(makeCtx());
+    expect(firstBus.publish).toHaveBeenCalledTimes(1);
+
+    // Simulate a worker restart: a brand-new tick closure starts with an empty
+    // in-memory alertState, but the daily publication claim persists on disk.
+    const secondBus = makeMessageBus();
+    const secondTick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: secondBus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+    await secondTick(makeCtx());
+
+    expect(secondBus.publish).not.toHaveBeenCalled();
+  });
+
+  it('red default branch alert: warns and publishes nothing when the sweep log is unreadable', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    const logger = makeLogger();
+    const bus = makeMessageBus();
+
+    const tick = createE2eAutoFixTick({
+      logger,
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: bus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+
+    await tick(makeCtx());
+
+    expect(bus.publish).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not read the CI regression watcher sweep log'),
+      expect.objectContaining({ worker: E2E_AUTOFIX_WORKER_KIND }),
+    );
   });
 });

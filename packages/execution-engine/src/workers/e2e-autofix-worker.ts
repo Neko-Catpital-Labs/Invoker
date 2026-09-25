@@ -1,8 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import { resolveRepoRoot, type Logger } from '@invoker/contracts';
+import { Channels, type MessageBus } from '@invoker/transport';
 
 import { terminateChildProcessGroup } from '../process-utils.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -29,6 +32,8 @@ export const DEFAULT_E2E_AUTOFIX_INTERVAL_MS = 15 * 60_000;
  * backgrounds a long-lived grandchild sharing its stdio fds).
  */
 export const DEFAULT_E2E_AUTOFIX_CLOSE_GRACE_MS = 2_000;
+export const DEFAULT_RED_DEFAULT_BRANCH_ALERT_HOURS = 48;
+const DEFAULT_CI_WATCH_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
 
 type EnvOverrides = Record<string, string | undefined>;
 
@@ -43,6 +48,7 @@ export interface E2eAutoFixWorkerConfig {
   shell?: string;
   /** See DEFAULT_E2E_AUTOFIX_CLOSE_GRACE_MS. */
   closeGraceMs?: number;
+  redDefaultBranchAlertHours?: number;
 }
 
 export interface E2eAutoFixWorkerOptions extends E2eAutoFixWorkerConfig {
@@ -52,12 +58,20 @@ export interface E2eAutoFixWorkerOptions extends E2eAutoFixWorkerConfig {
   tickOnStart?: boolean;
   onTick?: WorkerTick;
   spawnProcess?: typeof spawn;
+  messageBus?: MessageBus;
 }
 
 export interface E2eAutoFixTickOptions extends E2eAutoFixWorkerConfig {
   logger: Logger;
   spawnProcess?: typeof spawn;
+  messageBus?: MessageBus;
 }
+
+interface RedDefaultBranchAlertState {
+  lastAlertedUtcDate?: string;
+}
+
+const RED_DEFAULT_BRANCH_ALERT_STATE_FILE = 'red-default-branch-alert.json';
 
 /** Register the built-in default-branch CI auto-fix watcher. */
 export function registerE2eAutoFixWorker(
@@ -70,6 +84,7 @@ export function registerE2eAutoFixWorker(
       createE2eAutoFixWorker({
         logger: deps.logger,
         ...deps.e2eAutoFix,
+        ...(deps.messageBus !== undefined ? { messageBus: deps.messageBus } : {}),
       }),
   });
   return registry;
@@ -90,18 +105,25 @@ export function createE2eAutoFixWorker(options: E2eAutoFixWorkerOptions): Worker
       intervalMs: options.intervalMs,
       shell: options.shell,
       closeGraceMs: options.closeGraceMs,
+      redDefaultBranchAlertHours: options.redDefaultBranchAlertHours,
+      messageBus: options.messageBus,
       spawnProcess: options.spawnProcess,
     }),
   });
 }
 
 export function createE2eAutoFixTick(options: E2eAutoFixTickOptions): WorkerTick {
+  const alertState: RedDefaultBranchAlertState = {};
   return async (ctx) => {
-    await runE2eAutoFixEntrypoint(options, ctx?.signal);
+    await runE2eAutoFixEntrypoint(options, alertState, ctx?.signal);
   };
 }
 
-async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions, signal?: AbortSignal): Promise<void> {
+async function runE2eAutoFixEntrypoint(
+  options: E2eAutoFixTickOptions,
+  alertState: RedDefaultBranchAlertState,
+  signal?: AbortSignal,
+): Promise<void> {
   signal?.throwIfAborted();
   const repoRoot = options.repoRoot ? resolve(options.repoRoot) : resolveRepoRoot(process.cwd());
   const scriptPath = resolve(repoRoot, E2E_AUTOFIX_SCRIPT_RELATIVE_PATH);
@@ -117,8 +139,9 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions, signal?: 
   });
 
   let child: ChildProcess;
+  let childEnv: NodeJS.ProcessEnv;
   try {
-    const childEnv = { ...process.env, ...options.env };
+    childEnv = { ...process.env, ...options.env };
     delete childEnv.INVOKER_HEADLESS_STANDALONE;
     child = spawnProcess(shell, [scriptPath], {
       cwd: repoRoot,
@@ -139,6 +162,7 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions, signal?: 
   attachChildStreamLogger(options, child.stderr, 'stderr');
 
   const closeGraceMs = options.closeGraceMs ?? DEFAULT_E2E_AUTOFIX_CLOSE_GRACE_MS;
+  let succeeded = false;
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let settled = false;
@@ -171,6 +195,7 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions, signal?: 
           } else {
             options.logger.info(`[worker:${E2E_AUTOFIX_WORKER_KIND}] shell entrypoint completed`, fields);
           }
+          succeeded = true;
           resolvePromise();
           return;
         }
@@ -224,6 +249,129 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions, signal?: 
       graceTimer.unref?.();
     });
   });
+
+  if (succeeded) {
+    checkRedDefaultBranchAlert(options, childEnv, alertState);
+  }
+}
+
+function checkRedDefaultBranchAlert(
+  options: E2eAutoFixTickOptions,
+  env: NodeJS.ProcessEnv,
+  alertState: RedDefaultBranchAlertState,
+): void {
+  const stateDir = resolveCiWatchStateDir(env);
+  const sweepLogPath = resolve(stateDir, 'sweep-log.jsonl');
+
+  let lastLine: string | undefined;
+  try {
+    const raw = readFileSync(sweepLogPath, 'utf8');
+    const lines = raw.split('\n').filter((line) => line.trim().length > 0);
+    lastLine = lines[lines.length - 1];
+    if (lastLine === undefined) throw new Error('sweep log is empty');
+  } catch (err) {
+    options.logger.warn(
+      `[worker:${E2E_AUTOFIX_WORKER_KIND}] could not read the CI regression watcher sweep log at ${sweepLogPath}`,
+      { module: 'e2e-autofix-worker', worker: E2E_AUTOFIX_WORKER_KIND, err },
+    );
+    return;
+  }
+
+  let entry: { defaultBranchRedForHours?: number | null; lastGreenDefaultBranchRunAt?: string | null };
+  try {
+    entry = JSON.parse(lastLine);
+  } catch (err) {
+    options.logger.warn(
+      `[worker:${E2E_AUTOFIX_WORKER_KIND}] could not parse the CI regression watcher sweep log at ${sweepLogPath}`,
+      { module: 'e2e-autofix-worker', worker: E2E_AUTOFIX_WORKER_KIND, err },
+    );
+    return;
+  }
+
+  const redForHours = entry.defaultBranchRedForHours;
+  const thresholdHours = options.redDefaultBranchAlertHours ?? DEFAULT_RED_DEFAULT_BRANCH_ALERT_HOURS;
+  if (typeof redForHours !== 'number' || !Number.isFinite(redForHours) || redForHours < thresholdHours) {
+    return;
+  }
+
+  const utcDate = new Date().toISOString().slice(0, 10);
+  const alertStatePath = resolve(stateDir, RED_DEFAULT_BRANCH_ALERT_STATE_FILE);
+  if (alertState.lastAlertedUtcDate === undefined) {
+    alertState.lastAlertedUtcDate = readPersistedAlertDate(options, alertStatePath);
+  }
+  if (alertState.lastAlertedUtcDate === utcDate) return;
+  alertState.lastAlertedUtcDate = utcDate;
+  persistAlertDate(options, alertStatePath, utcDate);
+
+  const redForDays = redForHours / 24;
+  const lastGreenText = entry.lastGreenDefaultBranchRunAt
+    ? `last green at ${entry.lastGreenDefaultBranchRunAt}`
+    : 'no green run on record';
+
+  options.messageBus?.publish(Channels.SURFACE_EVENT, {
+    type: 'alert',
+    alert: {
+      severity: 'critical',
+      source: E2E_AUTOFIX_WORKER_KIND,
+      subject: `Default branch CI has been red for ${redForDays.toFixed(1)} days`,
+      message: `${lastGreenText}; red for ${redForHours.toFixed(1)} hours.`,
+      alertKey: `default-branch-red:${utcDate}`,
+    },
+  });
+}
+
+function readPersistedAlertDate(options: E2eAutoFixTickOptions, path: string): string | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as RedDefaultBranchAlertState;
+    return typeof parsed.lastAlertedUtcDate === 'string' ? parsed.lastAlertedUtcDate : undefined;
+  } catch (err) {
+    options.logger.warn(
+      `[worker:${E2E_AUTOFIX_WORKER_KIND}] could not parse the red default branch alert state at ${path}`,
+      { module: 'e2e-autofix-worker', worker: E2E_AUTOFIX_WORKER_KIND, err },
+    );
+    return undefined;
+  }
+}
+
+function persistAlertDate(options: E2eAutoFixTickOptions, path: string, utcDate: string): void {
+  const state: RedDefaultBranchAlertState = { lastAlertedUtcDate: utcDate };
+  try {
+    writeFileSync(path, `${JSON.stringify(state)}\n`);
+  } catch (err) {
+    options.logger.warn(
+      `[worker:${E2E_AUTOFIX_WORKER_KIND}] could not persist the red default branch alert state at ${path}`,
+      { module: 'e2e-autofix-worker', worker: E2E_AUTOFIX_WORKER_KIND, err },
+    );
+  }
+}
+
+function resolveCiWatchStateDir(env: NodeJS.ProcessEnv): string {
+  const explicit = env.INVOKER_CI_WATCH_STATE_DIR ?? env.INVOKER_E2E_WATCH_STATE_DIR;
+  if (typeof explicit === 'string' && explicit.trim()) return explicit;
+  const targetRepo = env.INVOKER_GITHUB_TARGET_REPO?.trim() || DEFAULT_CI_WATCH_TARGET_REPO;
+  if (targetRepo === DEFAULT_CI_WATCH_TARGET_REPO) {
+    return resolve(homedir(), '.invoker', 'e2e-regression-watch');
+  }
+  return resolve(homedir(), '.invoker', 'e2e-regression-watch-targets', slugifyCiWatchTargetRepo(targetRepo));
+}
+
+function slugifyCiWatchTargetRepo(value: string, maxLength = 128): string {
+  const slug = trimDashes(value.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  return trimDashes((slug || 'ci-job').slice(0, maxLength)) || 'ci-job';
+}
+
+function trimDashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '-') start += 1;
+  while (end > start && value[end - 1] === '-') end -= 1;
+  return value.slice(start, end);
 }
 
 function attachChildStreamLogger(
