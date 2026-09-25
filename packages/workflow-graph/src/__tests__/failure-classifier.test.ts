@@ -248,3 +248,27 @@ describe('FailureClassifier predicates', () => {
     ) as never)).toBe(false);
   });
 });
+
+describe('FailureClassifier.agentUsageResetAtMs', () => {
+  const failedAt = Date.parse('2026-09-25T02:14:00.000Z');
+
+  it('reads a same-day UTC reset time from the Claude session-limit message', () => {
+    expect(FailureClassifier.agentUsageResetAtMs("You've hit your session limit · resets 3:50am (UTC)", failedAt))
+      .toBe(Date.parse('2026-09-25T03:50:00.000Z'));
+  });
+
+  it('rolls a reset time already past the failure over to the next day', () => {
+    expect(FailureClassifier.agentUsageResetAtMs('resets 1am (UTC)', failedAt))
+      .toBe(Date.parse('2026-09-26T01:00:00.000Z'));
+  });
+
+  it('reads pm hours', () => {
+    expect(FailureClassifier.agentUsageResetAtMs('resets 2:05pm (UTC)', failedAt))
+      .toBe(Date.parse('2026-09-25T14:05:00.000Z'));
+  });
+
+  it('returns undefined when the message names no reset time', () => {
+    expect(FailureClassifier.agentUsageResetAtMs('rate_limit_exceeded', failedAt)).toBeUndefined();
+  });
+});
+
