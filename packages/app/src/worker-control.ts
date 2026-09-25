@@ -12,6 +12,7 @@ import type {
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import type { SQLiteAdapter, TaskEvent, WorkerActionRecord } from '@invoker/data-store';
+import type { WorkerHealth } from '@invoker/execution-engine';
 import {
   AUTO_FIX_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
@@ -41,6 +42,12 @@ import {
 } from '@invoker/execution-engine';
 import { SLACK_BUG_SCAN_WORKER_KIND } from '@invoker/slack-bug-scan';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
+
+declare module '@invoker/contracts' {
+  interface WorkerStatusEntry {
+    health?: WorkerHealth;
+  }
+}
 
 export const AGENT_LOGIN_WATCH_WORKER_KIND = 'agent-login-watch';
 
@@ -622,6 +629,7 @@ function buildWorkerStatusEntry(args: {
     : 'stopped';
   const controlDisabledReason = getControlDisabledReason(args.canControl);
   const runtime = args.handle?.runtime;
+  const health = lifecycle === 'running' ? runtime?.health?.() : undefined;
   const rawActions = args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 }).slice(0, 5);
   const recentActions = rawActions.map(toWorkerActionSummary);
   return {
@@ -631,6 +639,7 @@ function buildWorkerStatusEntry(args: {
     availability: 'available',
     ...(args.runningKnown ? { running: lifecycle === 'running' } : {}),
     ...(runtime ? { runtimeKind: runtime.identity.kind, instanceId: runtime.identity.instanceId } : {}),
+    ...(health ? { health } : {}),
     lifecycle,
     policy: args.policy,
     autoStarts: args.autoStarts,

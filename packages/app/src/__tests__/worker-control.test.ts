@@ -18,6 +18,7 @@ import {
   REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
+  type WorkerHealth,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
@@ -64,7 +65,7 @@ interface TestWorkerRuntime extends WorkerRuntime {
   readonly stops: number;
 }
 
-function runtime(kind: string): TestWorkerRuntime {
+function runtime(kind: string, options?: { health?: () => WorkerHealth }): TestWorkerRuntime {
   let running = false;
   let starts = 0;
   let stops = 0;
@@ -81,6 +82,7 @@ function runtime(kind: string): TestWorkerRuntime {
       running = false;
     }),
     isRunning: vi.fn(() => running),
+    ...(options?.health ? { health: vi.fn(options.health) } : {}),
     forceExit: () => { running = false; },
     get starts() { return starts; },
     get stops() { return stops; },
@@ -490,6 +492,46 @@ describe('createWorkerRuntimeController', () => {
       lifecycle: 'exited',
       policy: 'unknown',
     });
+  });
+
+  it('worker health: a running worker with a failing runtime reports its streak', () => {
+    const failingHealth: WorkerHealth = {
+      consecutiveFailedTicks: 3,
+      failingSince: 1000,
+      lastFailedAt: 3000,
+      lastError: 'boom',
+    };
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registry.register({
+      kind: PR_STATUS_WORKER_KIND,
+      note: 'Checks pull request status.',
+      factory: () => runtime(PR_STATUS_WORKER_KIND, { health: () => failingHealth }),
+    });
+
+    const controller = createWorkerRuntimeController({
+      registry,
+      deps: deps(),
+      autoStartKinds: [],
+      persistence: persistence() as never,
+      canControl: () => true,
+    });
+
+    controller.start(PR_STATUS_WORKER_KIND);
+
+    expect(controller.snapshot().workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)).toMatchObject({
+      lifecycle: 'running',
+      health: failingHealth,
+    });
+  });
+
+  it('worker health: a stopped worker has no health', () => {
+    const setup = controller();
+
+    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)).toMatchObject({
+      lifecycle: 'stopped',
+    });
+    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.health)
+      .toBeUndefined();
   });
 
   it('keeps status recentActions capped to five items', () => {
