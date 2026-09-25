@@ -18,6 +18,7 @@ import {
   REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
+  type WorkerHealth,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
@@ -609,6 +610,50 @@ describe('createWorkerRuntimeController', () => {
       nextOffset: 6,
     });
     expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: 'history', limit: 3, offset: 4 });
+  });
+
+  describe('worker health', () => {
+    it('a running worker with a failing runtime reports its streak', () => {
+      const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+      const health: WorkerHealth = {
+        consecutiveFailedTicks: 4,
+        failingSince: 1000,
+        lastFailedAt: 2000,
+        lastError: 'boom',
+      };
+      registry.register({
+        kind: 'flaky',
+        note: 'Flaky worker.',
+        factory: () => ({
+          identity: { kind: 'flaky', instanceId: 'flaky-instance' },
+          start: vi.fn(),
+          wake: vi.fn(),
+          tick: vi.fn(async () => {}),
+          stop: vi.fn(async () => {}),
+          isRunning: vi.fn(() => true),
+          health: vi.fn(() => health),
+        }),
+      });
+
+      const setup = createWorkerRuntimeController({
+        registry,
+        deps: deps(),
+        autoStartKinds: [],
+        persistence: persistence() as never,
+        canControl: () => true,
+      });
+
+      setup.start('flaky');
+      const row = setup.snapshot().workers.find((worker) => worker.kind === 'flaky');
+      expect(row?.health).toEqual(health);
+    });
+
+    it('a stopped worker has no health', () => {
+      const setup = controller();
+      const row = setup.controller.snapshot().workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND);
+      expect(row?.lifecycle).toBe('stopped');
+      expect(row?.health).toBeUndefined();
+    });
   });
 });
 
