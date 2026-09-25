@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import base64
 import re
 import sys
 from pathlib import Path
@@ -216,9 +217,33 @@ def main() -> None:
 
     if ARGS[0] == "api":
         path = next((arg for arg in ARGS[1:] if arg.startswith("repos/")), "")
+        contents_match = re.fullmatch(r"repos/[^/]+/[^/]+/contents/(.+)", path)
+        if contents_match and flag_value("--method") in (None, "GET"):
+            file_path = contents_match.group(1)
+            files = state.get("files", {})
+            text = files.get(file_path)
+            if text is None and file_path == ".mergify.yml":
+                text = "\n".join([
+                    "queue_rules:",
+                    "  - name: admin-bypass",
+                    "    queue_conditions:",
+                    "      - base=master",
+                    "      - label=admin-bypass",
+                    "    merge_conditions:",
+                    "      - check-success = PR Body",
+                ])
+            if text is None:
+                print(f"fake gh: no file {file_path}", file=sys.stderr)
+                sys.exit(1)
+            print(base64.b64encode(text.encode("utf-8")).decode("ascii"))
+            return
         comments_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/comments", path)
         if comments_match and flag_value("--method") in (None, "GET"):
             print(json.dumps(state.get("issue_comments", {}).get(comments_match.group(1), [])))
+            return
+        repo_match = re.fullmatch(r"repos/[^/]+/[^/]+", path)
+        if repo_match and flag_value("--method") in (None, "GET"):
+            print(json.dumps({"default_branch": state.get("default_branch", "master")}))
             return
         compare_match = re.fullmatch(r"repos/[^/]+/[^/]+/compare/(.+)\.\.\.(.+)", path)
         if compare_match and flag_value("--method") in (None, "GET"):

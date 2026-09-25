@@ -148,6 +148,8 @@ scan_repo() {
     q_key="$(shell_quote "$key")"
     q_fingerprint="$(shell_quote "$fingerprint")"
     q_tsv_kind="$(shell_quote "orphan-attempt")"
+    q_repo="$(shell_quote "$repo")"
+    q_num="$(shell_quote "$num")"
 
     plan_file="$repo_plan_dir/repair-pr-$num.yaml"
     {
@@ -190,6 +192,19 @@ scan_repo() {
         printf 'kind=%s\n' "$q_tsv_kind"
         printf 'key=%s\n' "$q_key"
         printf 'marker=%s\n' "$q_fingerprint"
+        printf 'repo=%s\n' "$q_repo"
+        printf 'pr=%s\n' "$q_num"
+        printf 'current_json="$(gh pr view "$pr" --repo "$repo" --json state,headRefOid)"\n'
+        printf 'current_state="$(printf '"'"'%%s'"'"' "$current_json" | jq -r '"'"'.state // ""'"'"')"\n'
+        printf 'current_head="$(printf '"'"'%%s'"'"' "$current_json" | jq -r '"'"'.headRefOid // ""'"'"')"\n'
+        printf 'if [ "$current_state" != "OPEN" ]; then\n'
+        printf '  echo "pr-worker-safe-push: PR #$pr is ${current_state:-missing}; nothing to push"\n'
+        printf '  exit 0\n'
+        printf 'fi\n'
+        printf 'if [ "$current_head" != "$expected" ]; then\n'
+        printf '  echo "stale-head: PR #$pr head is ${current_head:-missing}; expected $expected" >&2\n'
+        printf '  exit 20\n'
+        printf 'fi\n'
         printf 'ref="refs/heads/$branch"\n'
         printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
         printf 'if [ "$live" != "$expected" ]; then\n'
