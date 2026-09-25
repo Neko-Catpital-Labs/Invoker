@@ -750,7 +750,7 @@ export function WorkflowInspector({
             </label>
           </section>
         )}
-        {(task?.config.prompt || task?.config.isMergeNode) && onEditModel && modelOptions.length > 0 && (
+        {(task?.config.prompt || task?.config.isMergeNode) && onEditModel && (
           <section className="rounded border border-border bg-secondary/70 p-3">
             <label className="flex items-center justify-between gap-3">
               <span className="text-xs uppercase tracking-wide text-muted-foreground">AI Model</span>
