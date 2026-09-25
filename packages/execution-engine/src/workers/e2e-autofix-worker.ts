@@ -294,41 +294,30 @@ function checkRedDefaultBranchAlert(
     return;
   }
 
-  if (!options.messageBus) return;
-
   const utcDate = new Date().toISOString().slice(0, 10);
   const alertStatePath = resolve(stateDir, RED_DEFAULT_BRANCH_ALERT_STATE_FILE);
   if (alertState.lastAlertedUtcDate === undefined) {
     alertState.lastAlertedUtcDate = readPersistedAlertDate(options, alertStatePath);
   }
   if (alertState.lastAlertedUtcDate === utcDate) return;
+  alertState.lastAlertedUtcDate = utcDate;
+  persistAlertDate(options, alertStatePath, utcDate);
 
   const redForDays = redForHours / 24;
   const lastGreenText = entry.lastGreenDefaultBranchRunAt
     ? `last green at ${entry.lastGreenDefaultBranchRunAt}`
     : 'no green run on record';
 
-  try {
-    options.messageBus.publish(Channels.SURFACE_EVENT, {
-      type: 'alert',
-      alert: {
-        severity: 'critical',
-        source: E2E_AUTOFIX_WORKER_KIND,
-        subject: `Default branch CI has been red for ${redForDays.toFixed(1)} days`,
-        message: `${lastGreenText}; red for ${redForHours.toFixed(1)} hours.`,
-        alertKey: `default-branch-red:${utcDate}`,
-      },
-    });
-  } catch (err) {
-    options.logger.warn(
-      `[worker:${E2E_AUTOFIX_WORKER_KIND}] could not publish the red default branch alert`,
-      { module: 'e2e-autofix-worker', worker: E2E_AUTOFIX_WORKER_KIND, err },
-    );
-    return;
-  }
-
-  alertState.lastAlertedUtcDate = utcDate;
-  persistAlertDate(options, alertStatePath, utcDate);
+  options.messageBus?.publish(Channels.SURFACE_EVENT, {
+    type: 'alert',
+    alert: {
+      severity: 'critical',
+      source: E2E_AUTOFIX_WORKER_KIND,
+      subject: `Default branch CI has been red for ${redForDays.toFixed(1)} days`,
+      message: `${lastGreenText}; red for ${redForHours.toFixed(1)} hours.`,
+      alertKey: `default-branch-red:${utcDate}`,
+    },
+  });
 }
 
 function readPersistedAlertDate(options: E2eAutoFixTickOptions, path: string): string | undefined {
