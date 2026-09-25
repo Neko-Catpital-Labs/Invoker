@@ -418,6 +418,15 @@ export async function runRepoLocalPrBodyChecker(args: {
 
 type AssistantBodyPredicate = (body: string) => boolean;
 
+const AGENT_BODY_RETRY_ATTEMPTS = 6;
+const AGENT_BODY_RETRY_DELAY_MS = 250;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function extractAssistantBody(
   driver: SessionDriver | undefined,
   sessionId: string,
@@ -441,6 +450,23 @@ function extractAssistantBody(
   }
   if (latestAssistantBody) return latestAssistantBody;
   return fallback.trim();
+}
+
+async function extractAssistantBodyWithRetry(
+  driver: SessionDriver | undefined,
+  sessionId: string,
+  fallback: string,
+  isAcceptable?: AssistantBodyPredicate,
+): Promise<string> {
+  let body = extractAssistantBody(driver, sessionId, fallback, isAcceptable);
+  if (!driver || !isAcceptable || isAcceptable(body)) return body;
+
+  for (let attempt = 1; attempt < AGENT_BODY_RETRY_ATTEMPTS; attempt += 1) {
+    await delay(AGENT_BODY_RETRY_DELAY_MS);
+    body = extractAssistantBody(driver, sessionId, fallback, isAcceptable);
+    if (isAcceptable(body)) return body;
+  }
+  return body;
 }
 
 export function resolveInstalledSkillPathForAgent(agentName: string, skillName: string): string | null {
@@ -1118,13 +1144,16 @@ export function spawnAgentPrAuthorViaRegistry(
           const effectiveSessionId = realId ?? sessionId;
           const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
           if (code === 0) {
-            const body = extractAssistantBody(
+            void extractAssistantBodyWithRetry(
               driver,
               effectiveSessionId,
               displayStdout,
               isAcceptableAssistantBody,
-            );
-            resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+            ).then((body) => {
+              resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+            }, (err) => {
+              reject(err instanceof Error ? err : new Error(String(err)));
+            });
             return;
           }
           const failureDetail = buildAgentExitFailureDetail(stdout, stderr, displayStdout);
