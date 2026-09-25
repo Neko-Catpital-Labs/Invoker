@@ -17,6 +17,13 @@ import type { PrAuthoringContext } from '../pr-authoring.js';
 import { registerBuiltinAgents } from '../agents/index.js';
 import { createAutoCompleteExecutor } from './helpers/task-runner-fixtures.js';
 
+function fakeCodexProbeRunner() {
+  return {
+    status: 0,
+    stdout: JSON.stringify({ models: [{ slug: 'gpt-5-codex', display_name: 'GPT-5 Codex' }] }),
+  };
+}
+
 function makeTask(overrides: {
   id?: string;
   description?: string;
@@ -204,7 +211,7 @@ describe('TaskRunner', () => {
       orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
       persistence: { updateTask: vi.fn() } as any,
       executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
-      executionAgentRegistry: registerBuiltinAgents(),
+      executionAgentRegistry: registerBuiltinAgents({ codex: { probeRunner: fakeCodexProbeRunner } }),
       cwd: '/tmp',
     });
 
