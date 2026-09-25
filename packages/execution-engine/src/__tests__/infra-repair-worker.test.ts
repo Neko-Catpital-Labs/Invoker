@@ -503,6 +503,24 @@ describe('infra-repair worker', () => {
     expect(parseInfraRepairRetryTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
   });
 
+  it('routes a provision-stage failure through remote provision repair and retries the task', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: '[SshExecutor] Installing managed worktree dependencies...\n'
+            + 'bash: scripts/provision-ssh-worker.sh: No such file or directory\n',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.runRemoteProvisionRepairFn).toHaveBeenCalledTimes(1);
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RETRY_TASK_CHANNEL);
+    expect(parseInfraRepairRetryTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+  });
+
   it('repairs missing worktree owner path, updates workspacePath, and queues retry-task', async () => {
     const h = makeHarness([
       makeTask({
