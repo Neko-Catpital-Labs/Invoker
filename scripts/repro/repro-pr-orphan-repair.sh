@@ -46,6 +46,7 @@ run_cron() {
   PATH="$TMP/bin:$PATH" \
   HOME="$TMP/home" \
   INVOKER_GITHUB_TARGET_REPO="fake/repo" \
+  INVOKER_GITHUB_TARGET_REPOS="fake/repo" \
   INVOKER_PR_CRON_AUTHOR="fake-bot" \
   INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
@@ -77,8 +78,9 @@ grep -q "2. failed_checks: Unit Tests" "$plan" || fail "plan: failing check must
 grep -q "3. changes_requested:" "$plan" || fail "plan: review feedback must be blocker #3" "$(cat "$plan")"
 grep -q "git fetch origin feature/orphan-801" "$plan" || fail "plan: must target the existing PR branch" "$(cat "$plan")"
 grep -q "id: safe-push" "$plan" || fail "plan: missing safe-push task" "$(cat "$plan")"
-grep -q "git push --force-with-lease" "$plan" || fail "plan: missing guarded safe-push command" "$(cat "$plan")"
-grep -q "kind='orphan-attempt'" "$plan" || fail "plan: safe-push must own orphan-attempt recording" "$(cat "$plan")"
+grep -q "scripts/pr_worker_safe_push.py" "$plan" || fail "plan: safe-push must use the shared guarded helper" "$(cat "$plan")"
+grep -q -- "--record-tsv-ledger" "$plan" || fail "plan: safe-push must own orphan-attempt recording" "$(cat "$plan")"
+grep -q "git push --force-with-lease" "$plan" && fail "plan: safe-push must not duplicate bespoke push shell" "$(cat "$plan")"
 grep -q "Do not push" "$plan" || fail "plan: repair prompt must forbid direct pushes" "$(cat "$plan")"
 awk -F '\t' '$1 == "orphan-attempt" && $2 == "801" { found=1 } END { exit found ? 0 : 1 }' "$TMP/ledger.tsv" \
   && fail "tick 1: submission must not record orphan-attempt" "$(cat "$TMP/ledger.tsv")"
