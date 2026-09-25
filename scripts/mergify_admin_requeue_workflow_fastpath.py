@@ -209,7 +209,7 @@ def classify_repair_outcome(workflow_id: str, status: str) -> str:
     for task in tasks:
         execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
         failure_class = execution.get("failureClass")
-        if isinstance(failure_class, str) and failure_class in _SSH_INFRA_FAILURE_CLASSES:
+        if isinstance(failure_class, str) and (failure_class in _SSH_INFRA_FAILURE_CLASSES or failure_class == "agent-usage-limit"):
             return "infra"
         error = str(execution.get("error") or execution.get("pendingFixError") or "")
         if "stale-head" in error:
