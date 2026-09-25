@@ -82,7 +82,7 @@ function toRecord(write: WorkerActionWrite): WorkerActionRecord {
 
 function makeHarness(
   tasksInput: TaskState[] = [makeTask()],
-  options: { defaultAutoFixRetries?: number } = {},
+  options: { defaultAutoFixRetries?: number; localAgentLoginRenewedAtMs?: () => number | undefined } = {},
 ) {
   const tasks = new Map(tasksInput.map((task) => [task.id, task]));
   const actions = new Map<string, WorkerActionRecord>();
@@ -153,6 +153,7 @@ function makeHarness(
     resolveRemoteBranchOwnerPathFn,
     cleanupRemoteInvokerHomeFn,
     now: () => nowMs,
+    ...(options.localAgentLoginRenewedAtMs ? { localAgentLoginRenewedAtMs: options.localAgentLoginRenewedAtMs } : {}),
   });
 
   return {
@@ -828,6 +829,40 @@ describe('infra-repair worker', () => {
           infraReason: 'ssh-oauth-session-expired',
         }),
       }),
+    ]));
+  });
+
+  it('recreates a local OAuth-session-expired task once after the agent login is renewed', async () => {
+    const failedAt = new Date('2026-01-01T00:00:00.000Z');
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', command: 'pnpm test' },
+        execution: { error: WORKTREE_OAUTH_SESSION_EXPIRED_ERROR, completedAt: failedAt },
+      }),
+    ], { localAgentLoginRenewedAtMs: () => failedAt.getTime() + 60_000 });
+
+    await h.tick(POLL_CTX);
+    await h.tick({ ...POLL_CTX, tickNumber: 2 });
+
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
+    expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+  });
+
+  it('keeps alerting and does not recreate when the agent login was not renewed after the failure', async () => {
+    const failedAt = new Date('2026-01-01T00:00:00.000Z');
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', command: 'pnpm test' },
+        execution: { error: WORKTREE_OAUTH_SESSION_EXPIRED_ERROR, completedAt: failedAt },
+      }),
+    ], { localAgentLoginRenewedAtMs: () => failedAt.getTime() - 60_000 });
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subjectId: 'local-agent-cli', status: 'failed' }),
     ]));
   });
 
