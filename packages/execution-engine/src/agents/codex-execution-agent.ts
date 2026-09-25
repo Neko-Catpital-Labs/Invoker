@@ -12,11 +12,21 @@ import type {
 } from '../agent.js';
 import { createCodexSpendGateReader, type CodexSpendGateReader } from '../codex-spend-gate.js';
 
+export interface CodexModelProbeResult {
+  status: number | null;
+  stdout?: string | null;
+  error?: NodeJS.ErrnoException;
+  signal?: NodeJS.Signals | null;
+}
+
+export type CodexModelProbeRunner = (command: string, args: string[]) => CodexModelProbeResult;
+
 export interface CodexExecutionAgentConfig {
   command?: string;
   fullAuto?: boolean;
   bypassApprovalsAndSandbox?: boolean;
   spendGate?: CodexSpendGateReader;
+  probeRunner?: CodexModelProbeRunner;
 }
 
 const CODEX_MODEL_DISCOVERY_TIMEOUT_MS = 3_000;
@@ -61,7 +71,15 @@ function boundDetail(text: string): string {
     : collapsed;
 }
 
-function describeProbeFailure(result: ReturnType<typeof spawnSync>): string {
+function defaultCodexModelProbeRunner(command: string, args: string[]): CodexModelProbeResult {
+  return spawnSync(command, args, {
+    encoding: 'utf8',
+    timeout: CODEX_MODEL_DISCOVERY_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
+}
+
+function describeProbeFailure(result: CodexModelProbeResult): string {
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
     return boundDetail(`failed to run (${code ?? result.error.message})`);
@@ -120,6 +138,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
   private readonly fullAuto: boolean;
   private readonly bypassApprovalsAndSandbox: boolean;
   private readonly spendGate: CodexSpendGateReader;
+  private readonly probeRunner: CodexModelProbeRunner;
   private supportedModelCache?: {
     expiresAt: number;
     models: readonly ExecutionModelOption[];
@@ -135,6 +154,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
     this.bypassApprovalsAndSandbox = config.bypassApprovalsAndSandbox ?? true;
     this.fullAuto = config.fullAuto ?? true;
     this.spendGate = config.spendGate ?? createCodexSpendGateReader();
+    this.probeRunner = config.probeRunner ?? defaultCodexModelProbeRunner;
     this.bundledSkillRoot = join(homedir(), '.codex', 'skills');
   }
   get supportedModels(): readonly ExecutionModelOption[] {
@@ -207,11 +227,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
   private discoverSupportedModels(): CodexModelDiscoveryResult {
     const failures: CodexModelProbeFailure[] = [];
     for (const { attempt, args } of CODEX_DISCOVERY_ATTEMPTS) {
-      const result = spawnSync(this.command, args, {
-        encoding: 'utf8',
-        timeout: CODEX_MODEL_DISCOVERY_TIMEOUT_MS,
-        killSignal: 'SIGKILL',
-      });
+      const result = this.probeRunner(this.command, args);
       if (result.error || result.status !== 0) {
         failures.push({ attempt, detail: describeProbeFailure(result) });
         continue;
