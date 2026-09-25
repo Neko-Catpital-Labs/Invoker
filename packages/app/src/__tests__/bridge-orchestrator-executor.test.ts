@@ -1151,7 +1151,7 @@ const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
   mergeMode: 'manual',
   baseBranch: 'master',
   featureBranch: 'plan/manual-onfinish-none',
-  tasks: [{ id: 'A', description: 'Task A', command: 'echo a' }],
+  tasks: [{ id: 'A', description: 'Task A', command: 'echo flow-9c > flow-9c-review.txt' }],
 };
 
 // ── Flow 9c: UI external_review merge mode ───────────────────
@@ -1180,6 +1180,14 @@ describe('Flow 9c: workflow merge mode external_review', () => {
     const wfId = h.getTask(mergeId)!.config.workflowId!;
     await h.executor.executeTasks([h.getTask(mergeId)!]);
     expect(h.getTask(mergeId)!.status).toBe('review_ready');
+
+    h.git.on(
+      (args) =>
+        args[0] === 'diff' &&
+        args[1] === '--name-only' &&
+        args.some((arg) => arg.endsWith('...plan/manual-onfinish-none')),
+      'flow-9c-review.txt\n',
+    );
 
     await setWorkflowMergeMode(wfId, 'external_review', {
       orchestrator: h.orchestrator,
