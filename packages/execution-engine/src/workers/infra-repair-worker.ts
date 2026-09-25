@@ -61,7 +61,8 @@ export const INFRA_REPAIR_RECREATE_TASK_CHANNEL = 'invoker:infra-repair-recreate
 
 const INFRA_REPAIR_TASK_ACTION_TYPE = 'repair-infra-failure';
 const INFRA_REPAIR_TARGET_ACTION_TYPE = 'repair-target';
-const DEFAULT_REMOTE_PROVISION_COMMAND = 'bash scripts/provision-ssh-worker.sh ensure-repo-ready';
+const PROVISION_SSH_WORKER_SCRIPT = 'scripts/provision-ssh-worker.sh';
+const DEFAULT_REMOTE_PROVISION_COMMAND = `bash ${PROVISION_SSH_WORKER_SCRIPT} ensure-repo-ready`;
 const MAX_OUTPUT_TAIL_CHARS = 400;
 
 type InfraRepairTaskDecisionStatus = Extract<WorkerActionStatus, 'completed' | 'failed' | 'skipped'>;
@@ -532,6 +533,9 @@ ${buildPortableBase64DecodeFunction()}
 WORKSPACE_PATH=$(printf '%s' ${shellPosixSingleQuote(workspacePathB64)} | invoker_base64_decode)
 ${bashNormalizeTildePath('WORKSPACE_PATH')}
 cd "$WORKSPACE_PATH"
+if [ ! -f ${shellPosixSingleQuote(PROVISION_SSH_WORKER_SCRIPT)} ]; then
+  git checkout HEAD -- ${shellPosixSingleQuote(PROVISION_SSH_WORKER_SCRIPT)} 2>/dev/null || true
+fi
 ${provisionCommand}
 . "$HOME/.invoker/env.sh"
 `;

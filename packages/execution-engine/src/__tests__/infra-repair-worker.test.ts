@@ -9,6 +9,7 @@ import type { TaskState } from '@invoker/workflow-core';
 
 import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from './fixtures/pr-6976-oauth-session-expired.js';
 import {
+  buildRemoteProvisionRepairScript,
   buildRepoMirrorRepairScript,
   classifyGenericSshInfraFailure,
   createInfraRepairTick,
@@ -933,6 +934,18 @@ describe('extractCorruptMirrorPath', () => {
     expect(extractCorruptMirrorPath('[WARNING] Git fetch failed for /\n')).toBeUndefined();
     expect(extractCorruptMirrorPath('[WARNING] Git fetch failed for ~\n')).toBeUndefined();
     expect(extractCorruptMirrorPath('[WARNING] Git fetch failed for /home/invoker/.invoker/worktrees/x\n')).toBeUndefined();
+  });
+});
+
+describe('buildRemoteProvisionRepairScript', () => {
+  it('restores a missing provision script from committed HEAD before invoking it', () => {
+    const script = buildRemoteProvisionRepairScript({ workspacePath: '/home/invoker/.invoker/worktrees/wf-1/task-1' });
+    expect(script).toContain("if [ ! -f 'scripts/provision-ssh-worker.sh' ]; then");
+    expect(script).toContain("git checkout HEAD -- 'scripts/provision-ssh-worker.sh'");
+    // The restore must run before the provision command that depends on the script.
+    expect(script.indexOf('git checkout HEAD --')).toBeLessThan(
+      script.indexOf('bash scripts/provision-ssh-worker.sh ensure-repo-ready'),
+    );
   });
 });
 
