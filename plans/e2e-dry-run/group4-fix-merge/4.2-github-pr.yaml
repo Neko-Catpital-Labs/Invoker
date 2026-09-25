@@ -9,9 +9,9 @@ baseBranch: HEAD
 tasks:
   - id: e2e-g442-taskA
     description: "E2E 4.2 — first task"
-    command: echo pr-test-a
+    command: echo "content-4.2-a" > e2e-g42-task-a.txt
     dependencies: []
   - id: e2e-g442-taskB
     description: "E2E 4.2 — second task"
-    command: echo pr-test-b
+    command: echo "content-4.2-b" > e2e-g42-task-b.txt
     dependencies: []
