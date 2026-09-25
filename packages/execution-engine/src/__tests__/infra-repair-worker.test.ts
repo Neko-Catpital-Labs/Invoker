@@ -508,7 +508,7 @@ describe('infra-repair worker', () => {
       makeTask({
         execution: {
           error: '[SshExecutor] Installing managed worktree dependencies...\n'
-            + 'bash: scripts/provision-ssh-worker.sh: No such file or directory\n',
+            + 'ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/left-pad: Not Found - 404\n',
         },
       }),
     ]);
@@ -519,6 +519,31 @@ describe('infra-repair worker', () => {
     expect(h.submit).toHaveBeenCalledTimes(1);
     expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RETRY_TASK_CHANNEL);
     expect(parseInfraRepairRetryTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+  });
+
+  it('does not rerun a provision script that is missing from the task checkout', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: '[SshExecutor] Installing managed worktree dependencies...\n'
+            + 'bash: scripts/provision-ssh-worker.sh: No such file or directory\n',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.runRemoteProvisionRepairFn).not.toHaveBeenCalled();
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(workerActions(h.actions)).toEqual([expect.objectContaining({
+      taskId: 'wf-1/task-1',
+      status: 'failed',
+      summary: expect.stringContaining('scripts/provision-ssh-worker.sh is missing'),
+      payload: expect.objectContaining({
+        infraReason: 'ssh-provision-failed',
+        reason: 'provision-script-missing',
+      }),
+    })]);
   });
 
   it('repairs missing worktree owner path, updates workspacePath, and queues retry-task', async () => {
