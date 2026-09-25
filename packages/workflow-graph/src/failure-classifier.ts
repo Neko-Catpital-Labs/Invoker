@@ -16,6 +16,7 @@ import type { AgentFailureClass, FailureClass, SshInfraFailureClass, WorkFailure
  */
 export const SSH_INFRA_FAILURE_CLASSES: readonly SshInfraFailureClass[] = [
   'ssh-env-invalid-export',
+  'ssh-provision-failed',
   'ssh-worktree-missing',
   'ssh-invalid-reference',
   'ssh-repo-mirror-corrupt',
@@ -57,6 +58,18 @@ export class FailureClassifier {
     if (errorText.includes('.invoker/env.sh') && errorText.includes('not a valid identifier')) {
       return 'ssh-env-invalid-export';
     }
+    if (errorText.includes('No space left on device')) {
+      return 'ssh-disk-full';
+    }
+    if (
+      (
+        errorText.includes('Installing managed worktree dependencies')
+        || errorText.includes('Installing pnpm dependencies for managed worktree')
+      )
+      && !errorText.includes('Running task payload')
+    ) {
+      return 'ssh-provision-failed';
+    }
     if (errorText.includes('.invoker/worktrees/') && errorText.includes('No such file or directory')) {
       return 'ssh-worktree-missing';
     }
@@ -83,9 +96,6 @@ export class FailureClassifier {
     }
     if (errorText.includes('Failed to authenticate: OAuth session expired and could not be refreshed')) {
       return 'ssh-oauth-session-expired';
-    }
-    if (errorText.includes('No space left on device')) {
-      return 'ssh-disk-full';
     }
     if (this.isTransientTransportError(errorText)) {
       return 'ssh-transport-transient';

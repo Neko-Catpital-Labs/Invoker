@@ -1606,9 +1606,22 @@ export function processFailureFilingSweep(state, {
   return counts;
 }
 
+function corruptStateSuffix(now = new Date()) {
+  return now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
 export function loadState() {
   if (!existsSync(STATE_FILE)) return loadEmptyState();
-  return normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
+  let state;
+  try {
+    state = normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
+  } catch (error) {
+    const corruptPath = `${STATE_FILE}.corrupt-${corruptStateSuffix()}`;
+    renameSync(STATE_FILE, corruptPath);
+    console.error(`ci-regression-watch: state file unreadable, moved to ${corruptPath}: ${error.message}`);
+    return loadEmptyState();
+  }
+  return state;
 }
 
 function fsyncFile(path) {

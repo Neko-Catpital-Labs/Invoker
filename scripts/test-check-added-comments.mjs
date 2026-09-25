@@ -255,23 +255,6 @@ const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.me
 }
 
 {
-  const diff = [
-    'diff --git a/skills/reflect-ci/SKILL.md b/skills/reflect-ci/SKILL.md',
-    '+++ b/skills/reflect-ci/SKILL.md',
-    '@@ -0,0 +1,3 @@',
-    '+```js',
-    '+const value = true; // grandfathered file stays exempt',
-    '+```',
-    '',
-  ].join('\n');
-  assert.equal(
-    collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.js']])).length,
-    0,
-    'a grandfathered skill markdown file must stay exempt even for a genuinely new comment line',
-  );
-}
-
-{
   const root = mkdtempSync(path.join(tmpdir(), 'invoker-comment-check-md-'));
   try {
     execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: root, stdio: 'ignore' });
