@@ -277,6 +277,7 @@ export interface ReviewGateState {
 /** Machine/infra failure buckets that require repairing host or workspace state, not a code fix. */
 export type SshInfraFailureClass =
   | 'ssh-env-invalid-export'
+  | 'ssh-provision-failed'
   | 'ssh-worktree-missing'
   | 'ssh-invalid-reference'
   | 'ssh-repo-mirror-corrupt'

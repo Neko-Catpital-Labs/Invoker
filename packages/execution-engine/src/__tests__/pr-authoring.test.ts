@@ -17,6 +17,7 @@ import {
   validateReviewStackPrBody,
 } from '../pr-authoring.js';
 import type { ExecutionAgent } from '../agent.js';
+import type { SessionDriver } from '../session-driver.js';
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -647,6 +648,99 @@ describe('resolveSkillPathViaAgent', () => {
 // ── spawnAgentPrAuthorViaRegistry ───────────────────────
 
 describe('spawnAgentPrAuthorViaRegistry', () => {
+  it('can select the newest assistant message that satisfies the caller output contract', async () => {
+    const tmpDir = createTempDir();
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    const agent: ExecutionAgent = {
+      name: 'claude',
+      stdinMode: 'ignore',
+      buildCommand: () => ({
+        cmd: process.execPath,
+        args: ['-e', 'process.stdout.write("claude sdk envelope")'],
+        sessionId: 'sess-stack-publish',
+      }),
+      buildResumeArgs: () => ({ cmd: process.execPath, args: ['-e', ''] }),
+    };
+    const driver: SessionDriver = {
+      processOutput: (_sessionId, rawStdout) => rawStdout,
+      loadSession: () => 'session-jsonl',
+      parseSession: () => [
+        { role: 'assistant', content: payload, timestamp: '1' },
+        { role: 'assistant', content: 'The task is complete. The required JSON deliverable is above.', timestamp: '2' },
+      ],
+      inspectSession: () => ({ state: 'finished' }),
+    };
+
+    const result = await spawnAgentPrAuthorViaRegistry(
+      'publish stack',
+      tmpDir,
+      agent,
+      driver,
+      {},
+      (body) => {
+        try {
+          parseMakePrStackPublishResult(body);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    );
+
+    expect(result.body).toBe(payload);
+    expect(parseMakePrStackPublishResult(result.body)[0]?.id).toBe('a');
+  });
+
+  it('retries the session read when the first assistant transcript is stale', async () => {
+    const tmpDir = createTempDir();
+    const payload = JSON.stringify({ artifacts: [{ id: 'a', url: 'https://x/1' }] });
+    let loadCount = 0;
+    const agent: ExecutionAgent = {
+      name: 'claude',
+      stdinMode: 'ignore',
+      buildCommand: () => ({
+        cmd: process.execPath,
+        args: ['-e', 'process.stdout.write("The JSON answer is above.")'],
+        sessionId: 'sess-stack-publish',
+      }),
+      buildResumeArgs: () => ({ cmd: process.execPath, args: ['-e', ''] }),
+    };
+    const driver: SessionDriver = {
+      processOutput: (_sessionId, rawStdout) => rawStdout,
+      loadSession: () => {
+        loadCount += 1;
+        return loadCount === 1 ? 'stale' : 'fresh';
+      },
+      parseSession: (raw) => raw === 'stale'
+        ? [{ role: 'assistant', content: 'The JSON answer is above.', timestamp: '1' }]
+        : [
+          { role: 'assistant', content: payload, timestamp: '1' },
+          { role: 'assistant', content: 'The JSON answer is above.', timestamp: '2' },
+        ],
+      inspectSession: () => ({ state: 'finished' }),
+    };
+
+    const result = await spawnAgentPrAuthorViaRegistry(
+      'publish stack',
+      tmpDir,
+      agent,
+      driver,
+      {},
+      (body) => {
+        try {
+          parseMakePrStackPublishResult(body);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    );
+
+    expect(loadCount).toBeGreaterThan(1);
+    expect(result.body).toBe(payload);
+    expect(parseMakePrStackPublishResult(result.body)[0]?.id).toBe('a');
+  });
+
   it('times out and rejects when the PR-authoring agent never exits', async () => {
     const tmpDir = createTempDir();
     const previousTimeout = process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS;

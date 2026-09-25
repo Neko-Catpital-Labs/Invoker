@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 const DEFAULT_TARGET_REPO_URL_FOR_TEST = 'https://github.com/Neko-Catpital-Labs/Invoker.git';
 import {
@@ -15,6 +17,7 @@ import {
   CATSTACK_REPO_URL,
   DEFAULT_TARGET_REPO,
   failureStorageKey,
+  fetchLastGreenDefaultBranchRun,
   fileBugfixPlan,
   getVerifyCommandForFailure,
   isCiRegressionReflectEnabled,
@@ -1805,5 +1808,70 @@ describe('saveState', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('loadState corrupt file recovery', () => {
+  it('moves an unreadable state file aside and returns empty state instead of crash-looping', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-corrupt-'));
+    try {
+      const stateFile = join(dir, 'state.json');
+      writeFileSync(stateFile, '{"groups": {"x": "trunc');
+      const scriptPath = fileURLToPath(new URL('./e2e-regression-watch.mjs', import.meta.url));
+      const stdout = execFileSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import(${JSON.stringify(scriptPath)}).then((m) => m.loadState()).then((s) => { process.stdout.write(JSON.stringify(s)); })`,
+        ],
+        { env: { ...process.env, INVOKER_CI_WATCH_STATE_DIR: dir }, encoding: 'utf8' },
+      );
+
+      assert.deepEqual(JSON.parse(stdout), normalizeState(loadEmptyState()));
+      assert.equal(existsSync(stateFile), false);
+      const corruptFiles = readdirSync(dir).filter((name) => name.startsWith('state.json.corrupt-'));
+      assert.equal(corruptFiles.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fetchLastGreenDefaultBranchRun', () => {
+  it('returns the newest successful run createdAt when gh finds one', () => {
+    const calls = [];
+    const runner = (args) => {
+      calls.push(args);
+      return [{ createdAt: '2026-09-20T12:00:00Z' }];
+    };
+
+    const result = fetchLastGreenDefaultBranchRun({ runner, targetRepo: 'org/repo', branch: 'master', workflowFile: 'ci.yml' });
+
+    assert.deepEqual(result, { createdAt: '2026-09-20T12:00:00Z', error: null });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], [
+      'run', 'list', '--repo', 'org/repo', '--branch', 'master',
+      '--workflow', 'ci.yml', '--status', 'success', '--limit', '1',
+      '--json', 'createdAt',
+    ]);
+  });
+
+  it('returns null with no error when gh finds no successful run', () => {
+    const runner = () => [];
+
+    const result = fetchLastGreenDefaultBranchRun({ runner, targetRepo: 'org/repo', branch: 'master', workflowFile: 'ci.yml' });
+
+    assert.deepEqual(result, { createdAt: null, error: null });
+  });
+
+  it('returns null createdAt plus the error message when the gh call throws', () => {
+    const runner = () => {
+      throw new Error('gh: command not found');
+    };
+
+    const result = fetchLastGreenDefaultBranchRun({ runner, targetRepo: 'org/repo', branch: 'master', workflowFile: 'ci.yml' });
+
+    assert.deepEqual(result, { createdAt: null, error: 'gh: command not found' });
   });
 });

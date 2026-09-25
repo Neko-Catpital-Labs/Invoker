@@ -40,6 +40,13 @@ export interface WorkerTickContext {
 /** The unit of work a worker performs on each tick. */
 export type WorkerTick = (ctx: WorkerTickContext) => void | Promise<void>;
 
+export interface WorkerHealth {
+  consecutiveFailedTicks: number;
+  failingSince: number | null;
+  lastFailedAt: number | null;
+  lastError: string | null;
+}
+
 export interface WorkerRuntimeStopOptions {
   /**
    * When > 0, wait up to this many ms for an in-flight tick after cancel.
@@ -84,6 +91,7 @@ export interface WorkerRuntimeOptions {
    * final), preserving shutdown semantics for processes that exit.
    */
   restartAfterSurvivedSignalMs?: number;
+  onHealthChange?: (health: WorkerHealth) => void;
 }
 
 export interface WorkerRuntime {
@@ -104,6 +112,7 @@ export interface WorkerRuntime {
   stop(options?: WorkerRuntimeStopOptions): Promise<void>;
   /** True between `start()` and `stop()`. */
   isRunning(): boolean;
+  health?(): WorkerHealth;
 }
 
 const DEFAULT_SHUTDOWN_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
@@ -154,6 +163,39 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
   let abortController = new AbortController();
 
+  let health: WorkerHealth = {
+    consecutiveFailedTicks: 0,
+    failingSince: null,
+    lastFailedAt: null,
+    lastError: null,
+  };
+
+  const setHealth = (next: WorkerHealth): void => {
+    health = next;
+    try {
+      options.onHealthChange?.({ ...health });
+    } catch (err) {
+      options.logger.warn(`[worker:${identity.kind}] onHealthChange threw`, { ...logFields, err });
+    }
+  };
+
+  const recordTickFailure = (err: unknown): void => {
+    const now = Date.now();
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const lastError = rawMessage.split(/\r?\n/)[0].slice(0, 500);
+    setHealth({
+      consecutiveFailedTicks: health.consecutiveFailedTicks + 1,
+      failingSince: health.failingSince ?? now,
+      lastFailedAt: now,
+      lastError,
+    });
+  };
+
+  const recordTickSuccess = (): void => {
+    if (health.consecutiveFailedTicks === 0) return;
+    setHealth({ consecutiveFailedTicks: 0, failingSince: null, lastFailedAt: null, lastError: null });
+  };
+
   const runOnce = async (reason: WorkerTickReason, args?: string[]): Promise<boolean> => {
     tickNumber += 1;
     const ctx: WorkerTickContext = {
@@ -166,6 +208,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     lastTickActivityAt = Date.now();
     try {
       await options.onTick(ctx);
+      recordTickSuccess();
       return true;
     } catch (err) {
       if (abortController.signal.aborted) {
@@ -173,6 +216,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
         return true;
       }
       options.logger.error(`[worker:${identity.kind}] tick failed`, { ...logFields, reason, err });
+      recordTickFailure(err);
       return false;
     } finally {
       lastTickActivityAt = Date.now();
@@ -366,5 +410,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 
   const isRunning = (): boolean => started && !stopped;
 
-  return { identity, start, wake, tick, run, stop, isRunning };
+  const getHealth = (): WorkerHealth => ({ ...health });
+
+  return { identity, start, wake, tick, run, stop, isRunning, health: getHealth };
 }

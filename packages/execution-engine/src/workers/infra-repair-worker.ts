@@ -1280,6 +1280,10 @@ async function handleValidatedGenericSshInfraCandidate(
     await handleRemoteProvisionRecovery(options, candidate);
     return;
   }
+  if (candidate.reason === 'ssh-provision-failed') {
+    await handleRemoteProvisionRecovery(options, candidate);
+    return;
+  }
   if (candidate.reason === 'ssh-worktree-missing') {
     await handleMissingWorktreeRecovery(options, candidate);
     return;
