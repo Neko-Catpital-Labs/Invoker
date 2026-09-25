@@ -882,10 +882,32 @@ async function submitFollowUpMutation(
   recordAutoFixRetryConsumed(options.store, candidate.taskId, { workflowId: candidate.workflowId });
 }
 
+const PROVISION_SCRIPT_PATH = 'scripts/provision-ssh-worker.sh';
+
+function isProvisionScriptMissing(candidate: ValidatedGenericSshInfraCandidate): boolean {
+  const repairCommand = candidate.target.provisionCommand?.trim() || DEFAULT_REMOTE_PROVISION_COMMAND;
+  return candidate.reason === 'ssh-provision-failed'
+    && repairCommand.includes(PROVISION_SCRIPT_PATH)
+    && (candidate.task.execution.error ?? '').includes(`${PROVISION_SCRIPT_PATH}: No such file or directory`);
+}
+
 async function handleRemoteProvisionRecovery(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedGenericSshInfraCandidate,
 ): Promise<void> {
+  if (isProvisionScriptMissing(candidate)) {
+    recordTaskDecision(
+      options,
+      candidate,
+      candidate.reason,
+      'failed',
+      'Skipped infra repair: scripts/provision-ssh-worker.sh is missing from the task checkout, so rerunning it cannot succeed; check the workflow repoUrl and base branch',
+      { targetId: candidate.targetId },
+      'provision-script-missing',
+    );
+    return;
+  }
+
   const repair = await runTargetRepairWithCooldown(options, {
     targetKey: candidate.targetId,
     reason: candidate.reason,
