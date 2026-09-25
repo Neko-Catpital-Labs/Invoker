@@ -539,6 +539,7 @@ def _close_pr_plan_yaml(pr_number: int, repo: str, reason: str, expected_head_oi
     return (
         f"name: close-pr-{pr_number}-{fingerprint_suffix}\n"
         "onFinish: none\n"
+        "mergeMode: no_op\n"
         "baseBranch: master\n"
         "tasks:\n"
         "  - id: close\n"
@@ -600,6 +601,7 @@ def _flag_probable_duplicate_plan_yaml(
     return (
         f"name: flag-duplicate-pr-{pr_number}-vs-{merged_pr_number}\n"
         "onFinish: none\n"
+        "mergeMode: no_op\n"
         "baseBranch: master\n"
         "tasks:\n"
         "  - id: flag\n"
