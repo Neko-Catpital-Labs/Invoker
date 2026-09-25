@@ -476,6 +476,29 @@ describe('e2e auto-fix worker', () => {
     expect(bus.publish).toHaveBeenCalledTimes(1);
   });
 
+  it('red default branch alert: retries on the next tick when publication throws', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    writeSweepLogLastLine(stateDir, { defaultBranchRedForHours: 72, lastGreenDefaultBranchRunAt: '2026-09-21T00:00:00.000Z' });
+    const bus = makeMessageBus();
+    bus.publish.mockImplementationOnce(() => {
+      throw new Error('bus down');
+    });
+
+    const tick = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: bus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+
+    await expect(tick(makeCtx())).rejects.toThrow('bus down');
+    await tick(makeCtx());
+
+    expect(bus.publish).toHaveBeenCalledTimes(2);
+  });
+
   it('red default branch alert: warns and publishes nothing when the sweep log is unreadable', async () => {
     const repoRoot = makeRepoRoot();
     const stateDir = makeCiWatchStateDir();

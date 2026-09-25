@@ -292,16 +292,18 @@ function checkRedDefaultBranchAlert(
     return;
   }
 
+  const messageBus = options.messageBus;
+  if (!messageBus) return;
+
   const utcDate = new Date().toISOString().slice(0, 10);
   if (alertState.lastAlertedUtcDate === utcDate) return;
-  alertState.lastAlertedUtcDate = utcDate;
 
   const redForDays = redForHours / 24;
   const lastGreenText = entry.lastGreenDefaultBranchRunAt
     ? `last green at ${entry.lastGreenDefaultBranchRunAt}`
     : 'no green run on record';
 
-  options.messageBus?.publish(Channels.SURFACE_EVENT, {
+  messageBus.publish(Channels.SURFACE_EVENT, {
     type: 'alert',
     alert: {
       severity: 'critical',
@@ -311,6 +313,8 @@ function checkRedDefaultBranchAlert(
       alertKey: `default-branch-red:${utcDate}`,
     },
   });
+
+  alertState.lastAlertedUtcDate = utcDate;
 }
 
 function resolveCiWatchStateDir(env: NodeJS.ProcessEnv): string {
