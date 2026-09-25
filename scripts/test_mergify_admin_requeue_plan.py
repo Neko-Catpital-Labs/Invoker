@@ -1920,7 +1920,7 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
             "repair-check-settled", 1, HEAD, "build", epoch=NOW,
             meta={"workflowId": "wf-capacity", "outcomeClass": "capacity-deferred"},
         )
-        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, "build"), 0)
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
         self.assertTrue(p.repair_in_flight(ledger, 1, HEAD, "repair-check", "build", NOW + 1))
 
     def test_three_infra_outcomes_do_not_cap_and_eventual_retry_files(self):
