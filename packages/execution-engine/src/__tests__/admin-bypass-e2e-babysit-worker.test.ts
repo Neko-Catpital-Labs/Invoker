@@ -1,6 +1,8 @@
+import { Channels } from '@invoker/transport';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
   buildInvestigativePlanYaml,
   DEFAULT_WATCHED_WORKER_KINDS,
   E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX,
@@ -17,6 +19,22 @@ import {
   type WorkerLifecycleStarter,
 } from '../workers/admin-bypass-e2e-babysit-worker.js';
 import type { WorkerDecisionStore } from '../worker-decision-ledger.js';
+
+function makeMessageBus() {
+  const published: Array<{ channel: string; message: any }> = [];
+  return {
+    published,
+    publish: vi.fn((channel: string, message: unknown) => {
+      published.push({ channel, message });
+    }),
+  };
+}
+
+function alerts(messageBus: ReturnType<typeof makeMessageBus>) {
+  return messageBus.published
+    .filter((entry) => entry.channel === Channels.SURFACE_EVENT && entry.message?.type === 'alert')
+    .map((entry) => entry.message.alert);
+}
 
 class FakeWorkerLifecycle implements WorkerLifecycleReader, WorkerLifecycleStarter {
   readonly startCalls: string[] = [];
@@ -359,6 +377,98 @@ describe('runAdminBypassE2eBabysitTick', () => {
     expect(planSubmitter.submittedPlans).toHaveLength(1);
     expect(workerLifecycle.startCalls).toHaveLength(2);
     expect(repairFilings.deleteCalls).toHaveLength(2);
+  });
+
+  it('publishes a needs-human alert once for a new claim', async () => {
+    const needsHumanRow: RepairFilingRow = {
+      kind: `${E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX}playwright-5-of-9:job-level`,
+      subject: 'Neko-Catpital-Labs/Invoker',
+      stateSha: 'sha-capped',
+      createdAt: new Date().toISOString(),
+    };
+    const repairFilings = new FakeRepairFilingStore([needsHumanRow]);
+    const planSubmitter = new FakeInvestigativePlanSubmitter();
+    const { store } = makeDecisionStore();
+    const messageBus = makeMessageBus();
+
+    await runAdminBypassE2eBabysitTick({
+      logger: makeLogger(),
+      workerLifecycle: new FakeWorkerLifecycle([]),
+      repairFilings,
+      planSubmitter,
+      store,
+      messageBus: messageBus as unknown as AdminBypassE2eBabysitWorkerOptions['messageBus'],
+    });
+
+    const published = alerts(messageBus);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      severity: 'critical',
+      source: ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
+      subject: `CI regression needs a human: ${needsHumanRow.subject}`,
+      alertKey: `e2e-needs-human:${needsHumanRow.subject}:${needsHumanRow.stateSha}`,
+    });
+    expect(published[0].message).toContain(needsHumanRow.kind);
+    expect(published[0].message).toContain(needsHumanRow.subject);
+    expect(published[0].message).toContain(needsHumanRow.stateSha);
+    expect(published[0].message).toContain('attempt cap');
+  });
+
+  it('sends no needs-human alert for an already-claimed finding', async () => {
+    const needsHumanRow: RepairFilingRow = {
+      kind: `${E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX}playwright-5-of-9:job-level`,
+      subject: 'Neko-Catpital-Labs/Invoker',
+      stateSha: 'sha-capped',
+      createdAt: new Date().toISOString(),
+    };
+    const investigatedRow: RepairFilingRow = {
+      kind: `${E2E_REGRESSION_NEEDS_HUMAN_INVESTIGATED_KIND_PREFIX}playwright-5-of-9:job-level`,
+      subject: needsHumanRow.subject,
+      stateSha: needsHumanRow.stateSha,
+      createdAt: new Date().toISOString(),
+    };
+    const repairFilings = new FakeRepairFilingStore([needsHumanRow, investigatedRow]);
+    const planSubmitter = new FakeInvestigativePlanSubmitter();
+    const { store } = makeDecisionStore();
+    const messageBus = makeMessageBus();
+
+    await runAdminBypassE2eBabysitTick({
+      logger: makeLogger(),
+      workerLifecycle: new FakeWorkerLifecycle([]),
+      repairFilings,
+      planSubmitter,
+      store,
+      messageBus: messageBus as unknown as AdminBypassE2eBabysitWorkerOptions['messageBus'],
+    });
+
+    expect(alerts(messageBus)).toEqual([]);
+  });
+
+  it('logs a warn line for a needs-human alert when no message bus is configured', async () => {
+    const needsHumanRow: RepairFilingRow = {
+      kind: `${E2E_REGRESSION_NEEDS_HUMAN_KIND_PREFIX}playwright-5-of-9:job-level`,
+      subject: 'Neko-Catpital-Labs/Invoker',
+      stateSha: 'sha-capped',
+      createdAt: new Date().toISOString(),
+    };
+    const repairFilings = new FakeRepairFilingStore([needsHumanRow]);
+    const planSubmitter = new FakeInvestigativePlanSubmitter();
+    const { store } = makeDecisionStore();
+    const logger = makeLogger();
+
+    await runAdminBypassE2eBabysitTick({
+      logger,
+      workerLifecycle: new FakeWorkerLifecycle([]),
+      repairFilings,
+      planSubmitter,
+      store,
+    });
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [warnMessage] = (logger.warn as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(warnMessage).toContain(needsHumanRow.kind);
+    expect(warnMessage).toContain(needsHumanRow.subject);
+    expect(warnMessage).toContain(needsHumanRow.stateSha);
   });
 
   it('serializes investigative tasks so one stale-filing sweep cannot saturate the owner host', () => {
