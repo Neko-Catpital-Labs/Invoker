@@ -25,7 +25,7 @@
  *   effectivenessMeasurement (required: { leadingSignals, laggingSignals })
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -261,6 +261,14 @@ async function main() {
   const dryRun = env('INVOKER_LINEAR_DRY_RUN', '0') === '1';
   const createCmd = env('INVOKER_LINEAR_CREATE_CMD');
 
+  const filedMarker = args.artifact && !dryRun ? `${args.artifact}.filed.json` : '';
+  if (filedMarker && existsSync(filedMarker)) {
+    const prior = JSON.parse(readFileSync(filedMarker, 'utf8'));
+    log(`already filed ${prior.identifier ?? prior.id} for ${args.artifact}; skipping create`);
+    console.log(JSON.stringify({ ok: true, issue: prior, labels, skipped: 'already-filed' }));
+    return;
+  }
+
   let labelIds = [];
   if (!dryRun && !createCmd && labels.length > 0) {
     labelIds = await resolveLabelIds(apiKey, labels);
@@ -275,6 +283,9 @@ async function main() {
     dryRun,
     createCmd,
   });
+  if (filedMarker) {
+    writeFileSync(filedMarker, `${JSON.stringify({ id: issue.id, identifier: issue.identifier, url: issue.url })}\n`);
+  }
   log(`created ${issue.identifier ?? issue.id} labels=${labels.join(',') || '(none)'} verdict=${verdict || 'n/a'}`);
   console.log(JSON.stringify({ ok: true, issue, labels }));
 }
