@@ -146,7 +146,7 @@ def _foreign_safe_push_command(*, head_ref: str, start_head: str, skip_guard: st
         f"  echo \"refusing to push: {head_ref} moved from {start_head} to $current_head\" >&2\n"
         "  exit 1\n"
         "fi\n"
-        f"git push origin HEAD:{_shlex(head_ref)}\n"
+        f"git push --force-with-lease=refs/heads/{_shlex(head_ref)}:{_shlex(start_head)} origin HEAD:{_shlex(head_ref)}\n"
     )
 
 
