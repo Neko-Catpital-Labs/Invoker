@@ -1,5 +1,6 @@
 import {
   assertExecutionModelSupported,
+  type AgentRegistry,
   isExecutionModelDiscoveryUnavailableError,
   registerBuiltinAgents,
 } from '@invoker/execution-engine';
@@ -21,11 +22,19 @@ import {
 
 const builtinAgents = registerBuiltinAgents();
 
-function validateConfiguredModel(agentName: string | undefined, executionModel: string | undefined): void {
+export interface ConfigValidationOptions {
+  agentRegistry?: Pick<AgentRegistry, 'get'>;
+}
+
+function validateConfiguredModel(
+  agentName: string | undefined,
+  executionModel: string | undefined,
+  agentRegistry: Pick<AgentRegistry, 'get'>,
+): void {
   const normalizedAgent = agentName?.trim();
   const normalizedModel = executionModel?.trim();
   if (!normalizedAgent || !normalizedModel) return;
-  const agent = builtinAgents.get(normalizedAgent);
+  const agent = agentRegistry.get(normalizedAgent);
   if (!agent) return;
   try {
     assertExecutionModelSupported(agent, normalizedModel);
@@ -403,7 +412,8 @@ function validateAdminBypassE2eBabysitConfig(config: InvokerConfig): void {
   }
 }
 
-export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
+export function validateInvokerConfig(config: InvokerConfig, options: ConfigValidationOptions = {}): InvokerConfig {
+  const agentRegistry = options.agentRegistry ?? builtinAgents;
   const nestedExecutionAgent = config.defaultExecution?.executionAgent;
   const hasNestedExecutionAgent = typeof nestedExecutionAgent === 'string' && nestedExecutionAgent.trim().length > 0;
   if (config.defaultExecution?.executionModel !== undefined && !hasNestedExecutionAgent) {
@@ -427,8 +437,8 @@ export function validateInvokerConfig(config: InvokerConfig): InvokerConfig {
     }
   }
 
-  validateConfiguredModel(config.defaultExecution?.executionAgent, config.defaultExecution?.executionModel);
-  validateConfiguredModel(flatExecutionHarness, config.defaultExecutionModel);
+  validateConfiguredModel(config.defaultExecution?.executionAgent, config.defaultExecution?.executionModel, agentRegistry);
+  validateConfiguredModel(flatExecutionHarness, config.defaultExecutionModel, agentRegistry);
   validatePrMaintenanceTargetRepos(config);
   validateE2eAutoFixTargetRepos(config);
   validateCrossRepoResearchConfig(config);
