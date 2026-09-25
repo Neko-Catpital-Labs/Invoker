@@ -12,6 +12,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+TODAY="$(date -u +%Y-%m-%d)"
+
 fail() { echo "FAIL: $1" >&2; [ -n "${2:-}" ] && { echo "----- log -----" >&2; cat "$2" >&2; }; exit 1; }
 
 mk_sb() {
@@ -55,11 +57,11 @@ echo "PASS A: empty activity → no chain"
 
 # ── B. New feat → chain YAML with K research slots ───────────────────────────
 mk_sb
-cat > "$sb/activity.json" <<'JSON'
+cat > "$sb/activity.json" <<JSON
 {
   "https://github.com/stablyai/orca": [
     {
-      "date": "2026-08-20",
+      "date": "$TODAY",
       "kind": "feat",
       "title": "feat(cmd-j): rank palette results by recency",
       "url": "https://github.com/stablyai/orca/pull/15551",
@@ -114,11 +116,11 @@ mkdir -p "$sb/work"
 cat > "$sb/work/ledger.json" <<JSON
 { "fingerprints": { "$fp": { "at": "2026-08-01T00:00:00Z" } }, "watermarks": {} }
 JSON
-cat > "$sb/activity.json" <<'JSON'
+cat > "$sb/activity.json" <<JSON
 {
   "https://github.com/stablyai/orca": [
     {
-      "date": "2026-08-20",
+      "date": "$TODAY",
       "kind": "feat",
       "title": "feat(cmd-j): rank palette results by recency",
       "url": "https://example.com",
@@ -280,5 +282,64 @@ if env INVOKER_LINEAR_DRY_RUN=1 \
 fi
 grep -qi "Effectiveness measurement" "$log" || fail "F: expected missing-effectiveness error message" "$log"
 echo "PASS F: fails closed without effectivenessMeasurement"
+
+mk_sb
+cat > "$sb/activity.json" <<JSON
+{
+  "https://github.com/stablyai/orca": [
+    { "date": "$TODAY", "kind": "feat", "title": "feat(x): one idea", "url": "https://github.com/stablyai/orca/pull/1", "body": "" }
+  ]
+}
+JSON
+log="$sb/g.log"
+env \
+  INVOKER_CROSS_REPO_RESEARCH_CONFIG_JSON='{"crossRepoResearch":{"linearTeamId":"team-from-config","maxCandidatesPerSource":2,"maps":{"https://github.com/Neko-Catpital-Labs/Invoker.git":[{"repoUrl":"https://github.com/stablyai/orca","lookbackDays":30}]}}}' \
+  INVOKER_CROSS_REPO_RESEARCH_ACTIVITY_FIXTURE="$sb/activity.json" \
+  INVOKER_CROSS_REPO_RESEARCH_WORK_DIR="$sb/work" \
+  INVOKER_CROSS_REPO_RESEARCH_GENERATE_ONLY=1 \
+  node "$REPO_ROOT/scripts/cross-repo-research-watch.mjs" > "$log" 2>&1 \
+  || fail "G: watch should exit 0" "$log"
+file_lin="$(find "$sb/work/runs" -name '03-file-linear.template.yaml' | head -1)"
+test -n "$file_lin" || fail "G: missing file-linear template" "$log"
+run_dir="$(dirname "$file_lin")"
+file_cmd="$(node -e '
+const text = require("fs").readFileSync(process.argv[1], "utf8");
+const block = text.split("- id: file-linear-tickets")[1];
+process.stdout.write(JSON.parse(block.match(/\n    command: (".*")\n/)[1]));
+' "$file_lin")"
+cat > "$sb/bin/create-stub" <<STUB
+#!/usr/bin/env bash
+cat >> "$sb/creates.jsonl"
+echo >> "$sb/creates.jsonl"
+echo '{"id":"stub","identifier":"STUB-1"}'
+STUB
+chmod +x "$sb/bin/create-stub"
+
+log="$sb/g-empty.log"
+if env -u INVOKER_LINEAR_TEAM_ID INVOKER_LINEAR_CREATE_CMD="$sb/bin/create-stub" \
+  bash -c "$file_cmd" > "$log" 2>&1; then
+  fail "G-empty: file-linear must fail when no research artifact exists" "$log"
+fi
+
+cat > "$run_dir/research-1.json" <<'JSON'
+{
+  "title": "Steal one idea",
+  "verdict": "steal",
+  "repo": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+  "goal": "g", "motivation": "m", "safetyInvariant": "s", "verify": "true",
+  "reviewClaim": "c", "reviewLane": "behavior", "evidence": "e",
+  "peerLandscape": [{ "repo": "orca", "approach": "a", "outcome": "o" }],
+  "alternateImplementations": [{ "approach": "a", "tradeoffs": "t" }, { "approach": "b", "tradeoffs": "t" }],
+  "adversarialAnalysis": [{ "objection": "o", "strength": "low" }],
+  "effectivenessMeasurement": { "leadingSignals": ["l"], "laggingSignals": ["l"] }
+}
+JSON
+log="$sb/g-one.log"
+env -u INVOKER_LINEAR_TEAM_ID INVOKER_LINEAR_CREATE_CMD="$sb/bin/create-stub" \
+  bash -c "$file_cmd" > "$log" 2>&1 \
+  || fail "G-one: file-linear should exit 0 with one research artifact and no team id in env" "$log"
+grep -q '"teamId":"team-from-config"' "$sb/creates.jsonl" \
+  || fail "G-one: create payload must carry the configured team id" "$sb/creates.jsonl"
+echo "PASS G: file-linear carries configured team id and fails with no research"
 
 echo "All cross-repo-research fixture tests passed."
