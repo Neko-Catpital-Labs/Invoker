@@ -9,6 +9,7 @@ import type { ElectronApplication, Page } from '@playwright/test';
 
 import { closeElectronApp, E2E_REPO_URL, waitForInvokerBridge } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
+import { e2eDevelopmentProfileEnv } from './fixtures/headless-client.js';
 
 const repoRoot = resolveRepoRoot(__dirname);
 
@@ -44,6 +45,7 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
     ],
     env: {
       ...process.env,
+      ...e2eDevelopmentProfileEnv(testDir, electronUserDataDir, configPath, ipcSocketPath),
       NODE_ENV: 'test',
           INVOKER_TEST_WORKFLOW_IDS: '1',
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
