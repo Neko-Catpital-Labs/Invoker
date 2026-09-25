@@ -3374,10 +3374,17 @@ export class Orchestrator {
       );
     }
     for (const dependentWorkflowId of directDependents) {
+      const removedDeps = this.getWorkflowExternalDependencies(dependentWorkflowId)
+        .filter((dep) => dep.workflowId === workflowId);
+      const allRemovedDepsSatisfied = removedDeps.length > 0 && removedDeps.every((dep) => {
+        const prerequisite = this.findExternalDependencyTask(dep.workflowId, dep.taskId);
+        return !!prerequisite && this.isExternalDependencySatisfied(dep, prerequisite);
+      });
       this.detachWorkflowInternal(
         dependentWorkflowId,
         workflowId,
         directDependentBaseBranches.get(dependentWorkflowId)!,
+        { skipDownstreamInvalidation: allRemovedDepsSatisfied },
       );
     }
 
@@ -4297,22 +4304,24 @@ export class Orchestrator {
       if (!prerequisite) {
         return `missing prerequisite ${depDisplayId}`;
       }
-      const required = dep.requiredStatus ?? 'completed';
-      const gatePolicy = dep.gatePolicy ?? this.defaultExternalGatePolicy(dep.taskId);
-      const isMergeGateDep = (dep.taskId?.trim() || '__merge__') === '__merge__';
-      const satisfied =
-        prerequisite.status === required
-        || (
-          isReviewReadyLikeGatePolicy(gatePolicy)
-          && isMergeGateDep
-          && required === 'completed'
-          && (prerequisite.status === 'review_ready' || prerequisite.status === 'awaiting_approval')
-        );
-      if (!satisfied) {
+      if (!this.isExternalDependencySatisfied(dep, prerequisite)) {
         return `waiting on ${depDisplayId} (${prerequisite.status})`;
       }
     }
     return undefined;
+  }
+
+  private isExternalDependencySatisfied(dep: ExternalDependency, prerequisite: TaskState): boolean {
+    const required = dep.requiredStatus ?? 'completed';
+    const gatePolicy = dep.gatePolicy ?? this.defaultExternalGatePolicy(dep.taskId);
+    const isMergeGateDep = (dep.taskId?.trim() || '__merge__') === '__merge__';
+    return prerequisite.status === required
+      || (
+        isReviewReadyLikeGatePolicy(gatePolicy)
+        && isMergeGateDep
+        && required === 'completed'
+        && (prerequisite.status === 'review_ready' || prerequisite.status === 'awaiting_approval')
+      );
   }
 
   private getExternalDependencyBlocker(
@@ -4428,6 +4437,7 @@ export class Orchestrator {
     workflowId: string,
     upstreamWorkflowId: string,
     baseBranchAfterDetach?: string,
+    options?: { skipDownstreamInvalidation?: boolean },
   ): void {
     if (workflowId === upstreamWorkflowId) {
       throw new Error(`Cannot detach workflow ${workflowId} from itself`);
@@ -4513,31 +4523,33 @@ export class Orchestrator {
       action: 'removed',
     });
 
-    const affectedWorkflowIds = [workflowId, ...this.collectDownstreamWorkflowIds(workflowId)];
-    for (const affectedWorkflowId of affectedWorkflowIds) {
-      this.cancelActiveBeforeInvalidation('workflow', affectedWorkflowId);
-    }
+    if (!options?.skipDownstreamInvalidation) {
+      const affectedWorkflowIds = [workflowId, ...this.collectDownstreamWorkflowIds(workflowId)];
+      for (const affectedWorkflowId of affectedWorkflowIds) {
+        this.cancelActiveBeforeInvalidation('workflow', affectedWorkflowId);
+      }
 
-    const affectedTaskIds = affectedWorkflowIds.flatMap((affectedWorkflowId) =>
-      this.stateMachine
-        .getAllTasks()
-        .filter((task) => task.config.workflowId === affectedWorkflowId)
-        .map((task) => task.id),
-    );
-    const forceResetIds = new Set(affectedTaskIds);
-    const { affectedIds } = this.resetSubgraphToPending(
-      affectedTaskIds,
-      'detach',
-      Orchestrator.DETACH_RESET_CHANGES,
-      { forceResetIds },
-    );
+      const affectedTaskIds = affectedWorkflowIds.flatMap((affectedWorkflowId) =>
+        this.stateMachine
+          .getAllTasks()
+          .filter((task) => task.config.workflowId === affectedWorkflowId)
+          .map((task) => task.id),
+      );
+      const forceResetIds = new Set(affectedTaskIds);
+      const { affectedIds } = this.resetSubgraphToPending(
+        affectedTaskIds,
+        'detach',
+        Orchestrator.DETACH_RESET_CHANGES,
+        { forceResetIds },
+      );
 
-    for (const taskId of affectedIds) {
-      this.persistence.logEvent?.(taskId, 'task.workflow_detached', {
-        workflowId,
-        upstreamWorkflowId,
-        affectedWorkflowIds,
-      });
+      for (const taskId of affectedIds) {
+        this.persistence.logEvent?.(taskId, 'task.workflow_detached', {
+          workflowId,
+          upstreamWorkflowId,
+          affectedWorkflowIds,
+        });
+      }
     }
   }
 
