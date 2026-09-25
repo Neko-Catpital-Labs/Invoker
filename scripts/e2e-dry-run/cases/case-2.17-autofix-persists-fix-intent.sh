@@ -12,6 +12,7 @@ export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
 # Keep shared WAL here so sqlite diagnostics can coexist with the owner.
 export INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK=1
 unset INVOKER_HEADLESS_STANDALONE
+export INVOKER_GUI_OWNER_MODE=gui
 
 TMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-home.XXXXXX")"
 export HOME="$TMP_HOME"
