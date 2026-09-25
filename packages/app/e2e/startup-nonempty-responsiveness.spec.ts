@@ -12,6 +12,7 @@ import type { Page } from '@playwright/test';
 
 import { closeElectronApp, E2E_REPO_URL, waitForInvokerBridge } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
+import { e2eDevelopmentProfileEnv } from './fixtures/headless-client.js';
 import {
   activityLogWatermark,
   maxPayloadNumber,
@@ -77,6 +78,7 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
     ],
     env: {
       ...process.env,
+      ...e2eDevelopmentProfileEnv(testDir, electronUserDataDir, configPath, ipcSocketPath),
       NODE_ENV: 'test',
       INVOKER_TEST_WORKFLOW_IDS: '1',
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
@@ -125,15 +127,16 @@ async function seedStartupWorkflows(testDir: string, workflowCount: number): Pro
       for (let index = 0; index < workflowCount; index += 1) {
         orchestrator.loadPlan(buildPlan(index));
       }
+      // Blocked tasks keep historical workflows visible without making them
+      // eligible for cleanup or live startup execution.
       for (const workflow of adapter.listWorkflows()) {
         for (const task of adapter.loadTasks(workflow.id)) {
           adapter.saveTask(workflow.id, {
             ...task,
-            status: 'completed',
+            status: 'blocked',
             execution: {
               ...task.execution,
-              completedAt: new Date(),
-              exitCode: 0,
+              pendingFixError: 'synthetic startup history',
             },
           });
         }
@@ -203,7 +206,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       await page.getByTestId('sidebar-planning').dispatchEvent('click', { bubbles: true, cancelable: true });
       await waitForInvokerBridge(page, 30_000);
       await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10_000 });
-      await waitForWorkflowGraphVisible(page, 5000);
+      await waitForWorkflowGraphVisible(page, STARTUP_GRAPH_VISIBLE_AFTER_WINDOW_BUDGET_MS);
       await waitForSelectedTaskGraphVisible(page, 10_000);
       await dragGraphAndAssertViewportMoves(page);
 
