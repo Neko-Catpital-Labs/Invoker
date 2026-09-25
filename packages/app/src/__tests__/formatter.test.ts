@@ -412,6 +412,18 @@ describe('serializeTask', () => {
     expect(execution).not.toHaveProperty('error');
   });
 
+  it('includes the recorded failure class so headless consumers can see it', () => {
+    const task = makeTask({
+      status: 'failed',
+      execution: {
+        error: "You've hit your session limit · resets 3:50am (UTC)",
+        failureClass: 'agent-usage-limit',
+      } as TaskState['execution'],
+    });
+    const execution = serializeTask(task).execution as Record<string, unknown>;
+    expect(execution.failureClass).toBe('agent-usage-limit');
+  });
+
   it('converts Date fields to ISO strings', () => {
     const task = makeTask({
       createdAt: new Date('2025-06-01T10:00:00Z'),
