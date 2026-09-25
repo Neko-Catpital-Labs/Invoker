@@ -13,6 +13,7 @@ import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
+import type { SessionDriver } from '../session-driver.js';
 import { createAutoCompleteExecutor } from './helpers/task-runner-fixtures.js';
 
 function makeTask(overrides: {
@@ -1564,6 +1565,94 @@ describe('TaskRunner', () => {
             artifactCount: 2,
           }),
         );
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('publishReviewStackWithMakePrSkill uses an earlier valid JSON assistant message when a later hook message is non-JSON', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const body = [
+          '## Summary', '', 'Slice prose.', '',
+          '## Review Claim', '', 'c', '',
+          '## Review Lane', '', 'cleanup', '',
+          '## Review Unit', '', 'cleanup', '',
+          '## Safety Invariant', '', 's', '',
+          '## Slice Rationale', '', 'r', '',
+          '## Non-goals', '', '- none', '',
+          '## Test Plan', '', '<details>', '<summary>Test Plan</summary>', '', '- [x] pnpm test', '', '</details>', '',
+          '## Revert Plan', '', '<details>', '<summary>Revert Plan</summary>', '', '- Safe to revert? Yes', '', '</details>',
+        ].join('\n');
+        const payload = JSON.stringify({
+          artifacts: [{
+            id: 'only',
+            title: 'Only',
+            url: 'https://example.test/pr/1',
+            providerId: '1',
+            branch: 'stack/only',
+            baseBranch: 'master',
+            body,
+          }],
+        });
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.stdout.write("claude sdk envelope")'],
+            sessionId: 'sess-claude-hook-feedback',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const driver: SessionDriver = {
+          processOutput: (_sessionId, rawStdout) => rawStdout,
+          loadSession: () => 'session-jsonl',
+          parseSession: () => [
+            { role: 'assistant', content: payload, timestamp: '1' },
+            { role: 'assistant', content: 'The task is complete. The required JSON deliverable is above.', timestamp: '2' },
+          ],
+          inspectSession: () => ({ state: 'finished' }),
+        };
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: { logEvent: vi.fn() } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => (name === 'claude' ? claudeAgent : undefined),
+            getOrThrow: vi.fn(),
+            getSessionDriver: vi.fn().mockReturnValue(driver),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent]),
+          } as any,
+          cwd: '/tmp',
+        });
+
+        const result = await (executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-1',
+          title: 'Stack',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: 'summary',
+          cwd: '/tmp',
+          mergeNodeTaskId: '__merge__wf-1',
+          expectedGeneration: 27,
+        });
+
+        expect(result.agentName).toBe('claude');
+        expect(result.artifacts).toEqual([
+          expect.objectContaining({ id: 'only', providerId: '1', generation: 27 }),
+        ]);
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
