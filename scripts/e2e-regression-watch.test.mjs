@@ -17,6 +17,7 @@ import {
   CATSTACK_REPO_URL,
   DEFAULT_TARGET_REPO,
   failureStorageKey,
+  fetchLastGreenDefaultBranchRun,
   fileBugfixPlan,
   getVerifyCommandForFailure,
   isCiRegressionReflectEnabled,
@@ -1834,5 +1835,43 @@ describe('loadState corrupt file recovery', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('fetchLastGreenDefaultBranchRun', () => {
+  it('returns the newest successful run createdAt when gh finds one', () => {
+    const calls = [];
+    const runner = (args) => {
+      calls.push(args);
+      return [{ createdAt: '2026-09-20T12:00:00Z' }];
+    };
+
+    const result = fetchLastGreenDefaultBranchRun({ runner, targetRepo: 'org/repo', branch: 'master', workflowFile: 'ci.yml' });
+
+    assert.deepEqual(result, { createdAt: '2026-09-20T12:00:00Z', error: null });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], [
+      'run', 'list', '--repo', 'org/repo', '--branch', 'master',
+      '--workflow', 'ci.yml', '--status', 'success', '--limit', '1',
+      '--json', 'createdAt',
+    ]);
+  });
+
+  it('returns null with no error when gh finds no successful run', () => {
+    const runner = () => [];
+
+    const result = fetchLastGreenDefaultBranchRun({ runner, targetRepo: 'org/repo', branch: 'master', workflowFile: 'ci.yml' });
+
+    assert.deepEqual(result, { createdAt: null, error: null });
+  });
+
+  it('returns null createdAt plus the error message when the gh call throws', () => {
+    const runner = () => {
+      throw new Error('gh: command not found');
+    };
+
+    const result = fetchLastGreenDefaultBranchRun({ runner, targetRepo: 'org/repo', branch: 'master', workflowFile: 'ci.yml' });
+
+    assert.deepEqual(result, { createdAt: null, error: 'gh: command not found' });
   });
 });
