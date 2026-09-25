@@ -1,4 +1,5 @@
 import type { Logger } from '@invoker/contracts';
+import { Channels, type MessageBus } from '@invoker/transport';
 
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -98,6 +99,7 @@ export interface AdminBypassE2eBabysitWorkerOptions {
   repairFilings: RepairFilingStore;
   planSubmitter: InvestigativePlanSubmitter;
   store?: WorkerDecisionStore;
+  messageBus?: MessageBus;
   onTick?: WorkerTick;
 }
 
@@ -373,6 +375,24 @@ export async function runAdminBypassE2eBabysitTick(
       summary: `Filed investigation for e2e-regression needs-human finding ${subjectId}`,
       payload: { ...row },
     });
+
+    if (options.messageBus) {
+      options.messageBus.publish(Channels.SURFACE_EVENT, {
+        type: 'alert',
+        alert: {
+          severity: 'critical',
+          source: ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
+          subject: `CI regression needs a human: ${row.subject}`,
+          message: `${row.kind} regression on ${row.subject} at ${row.stateSha} needs a human: automated repair hit its attempt cap.`,
+          alertKey: `e2e-needs-human:${row.subject}:${row.stateSha}`,
+        },
+      });
+    } else {
+      options.logger.warn(
+        `[${ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND}] no message bus configured; skipping needs-human alert for ${subjectId}`,
+        { module: ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND, kind: row.kind, subject: row.subject, stateSha: row.stateSha },
+      );
+    }
   }
 
   if (actions.length === 0) return;
@@ -393,6 +413,7 @@ export function createAdminBypassE2eBabysitWorker(
     workerLifecycle: WorkerLifecycleReader & WorkerLifecycleStarter;
     repairFilings: RepairFilingStore;
     planSubmitter: InvestigativePlanSubmitter;
+    messageBus?: MessageBus;
   },
 ): WorkerRuntime {
   const recentInvestigations = new Map<string, number>();
@@ -408,6 +429,7 @@ export function createAdminBypassE2eBabysitWorker(
     repairFilings: config.repairFilings,
     planSubmitter: config.planSubmitter,
     store: config.store,
+    messageBus: config.messageBus,
   };
   const onTick: WorkerTick = config.onTick ?? (async () => {
     await runAdminBypassE2eBabysitTick(options);
@@ -440,6 +462,7 @@ export function registerAdminBypassE2eBabysitWorker(
         repairFilings: deps.repairFilingStore,
         planSubmitter: deps.investigativePlanSubmitter,
         store: config.store ?? deps.store,
+        ...(deps.messageBus !== undefined ? { messageBus: deps.messageBus } : {}),
       });
     },
   });
