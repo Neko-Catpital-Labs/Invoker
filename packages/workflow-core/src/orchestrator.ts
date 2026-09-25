@@ -3374,9 +3374,6 @@ export class Orchestrator {
       );
     }
     for (const dependentWorkflowId of directDependents) {
-      // When every dependency edge the delete removes was already satisfied,
-      // nothing downstream is stale: detach the edge without wiping the
-      // dependent (and its downstream subgraph) back to pending.
       const removedDeps = this.getWorkflowExternalDependencies(dependentWorkflowId)
         .filter((dep) => dep.workflowId === workflowId);
       const allRemovedDepsSatisfied = removedDeps.length > 0 && removedDeps.every((dep) => {
