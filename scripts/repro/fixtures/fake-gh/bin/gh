@@ -216,6 +216,16 @@ def main() -> None:
 
     if ARGS[0] == "api":
         path = next((arg for arg in ARGS[1:] if arg.startswith("repos/")), "")
+        repo_match = re.fullmatch(r"repos/[^/]+/[^/]+", path)
+        if repo_match and flag_value("--method") in (None, "GET"):
+            print(json.dumps({"default_branch": state.get("default_branch", "master")}))
+            return
+        contents_match = re.fullmatch(r"repos/[^/]+/[^/]+/contents/(.+)", path)
+        if contents_match and flag_value("--method") in (None, "GET"):
+            contents = state.get("contents", {})
+            content = contents.get(contents_match.group(1), "")
+            print(content)
+            return
         comments_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/comments", path)
         if comments_match and flag_value("--method") in (None, "GET"):
             print(json.dumps(state.get("issue_comments", {}).get(comments_match.group(1), [])))
