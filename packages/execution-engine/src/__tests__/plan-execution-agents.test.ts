@@ -2,8 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { assertPlanExecutionAgentsRegistered } from '../plan-execution-agents.js';
 import { registerBuiltinAgents } from '../agents/index.js';
 
+function fakeCodexProbeRunner() {
+  return {
+    status: 0,
+    stdout: JSON.stringify({ models: [{ slug: 'gpt-5-codex', display_name: 'GPT-5 Codex' }] }),
+  };
+}
+
 function makeRegistry() {
-  return registerBuiltinAgents();
+  return registerBuiltinAgents({ codex: { probeRunner: fakeCodexProbeRunner } });
 }
 
 describe('assertPlanExecutionAgentsRegistered', () => {

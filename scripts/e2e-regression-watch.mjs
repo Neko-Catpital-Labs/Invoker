@@ -1090,6 +1090,32 @@ export function getCiRun(runId) {
   ]);
 }
 
+export function fetchLastGreenDefaultBranchRun({
+  runner = ghJson,
+  targetRepo = TARGET_REPO,
+  branch = WATCH_BRANCHES[0],
+  workflowFile = WORKFLOW_FILE,
+} = {}) {
+  try {
+    const runs = runner([
+      'run', 'list', '--repo', targetRepo, '--branch', branch,
+      '--workflow', workflowFile, '--status', 'success', '--limit', '1',
+      '--json', 'createdAt',
+    ]);
+    const run = Array.isArray(runs) ? runs[0] : undefined;
+    return { createdAt: run?.createdAt ?? null, error: null };
+  } catch (error) {
+    return { createdAt: null, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function computeDefaultBranchRedForHours(lastGreenRunAt, nowMs = Date.now()) {
+  if (!lastGreenRunAt) return null;
+  const lastGreenMs = new Date(lastGreenRunAt).getTime();
+  if (!Number.isFinite(lastGreenMs)) return null;
+  return (nowMs - lastGreenMs) / 3_600_000;
+}
+
 function headlessQueryWorkflowsJson() {
   return execSync(
     `source "${join(REPO_ROOT, 'scripts', 'headless-lib.sh')}" && headless_query query workflows --output json`,
@@ -1580,9 +1606,22 @@ export function processFailureFilingSweep(state, {
   return counts;
 }
 
+function corruptStateSuffix(now = new Date()) {
+  return now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
 export function loadState() {
   if (!existsSync(STATE_FILE)) return loadEmptyState();
-  return normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
+  let state;
+  try {
+    state = normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
+  } catch (error) {
+    const corruptPath = `${STATE_FILE}.corrupt-${corruptStateSuffix()}`;
+    renameSync(STATE_FILE, corruptPath);
+    console.error(`ci-regression-watch: state file unreadable, moved to ${corruptPath}: ${error.message}`);
+    return loadEmptyState();
+  }
+  return state;
 }
 
 function fsyncFile(path) {
@@ -1692,6 +1731,11 @@ export async function main() {
     console.error('ci-regression-watch: auto-fix circuit breaker is paused; skipped filing this sweep');
   }
 
+  const lastGreenLookup = fetchLastGreenDefaultBranchRun();
+  if (lastGreenLookup.error) {
+    console.error(`ci-regression-watch: failed to look up the last green default-branch run: ${lastGreenLookup.error}; continuing with the rest of the sweep`);
+  }
+
   appendSweepLog({
     runsProcessed,
     jobsProcessed,
@@ -1699,6 +1743,9 @@ export async function main() {
     jobsOk,
     jobsIgnored,
     ...filingCounts,
+    lastGreenDefaultBranchRunAt: lastGreenLookup.createdAt,
+    defaultBranchRedForHours: computeDefaultBranchRedForHours(lastGreenLookup.createdAt),
+    lastGreenLookupError: lastGreenLookup.error,
     dryRun,
   });
 }
