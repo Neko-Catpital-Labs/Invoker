@@ -482,6 +482,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.launchCompletedAt != null) execution.launchCompletedAt = task.execution.launchCompletedAt instanceof Date ? task.execution.launchCompletedAt.toISOString() : task.execution.launchCompletedAt;
   if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt.toISOString() : task.execution.lastHeartbeatAt;
   if (task.execution.pendingFixError != null) execution.pendingFixError = task.execution.pendingFixError;
+  if (task.execution.failureClass != null) execution.failureClass = task.execution.failureClass;
   if (task.execution.mergeConflict != null) {
     execution.mergeConflict = {
       failedBranch: task.execution.mergeConflict.failedBranch,
