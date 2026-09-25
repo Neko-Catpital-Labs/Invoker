@@ -2,6 +2,7 @@ import type * as NodeOs from 'node:os';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
+import { registerBuiltinAgents } from '@invoker/execution-engine';
 import {
   BUILT_IN_LOCAL_EXECUTION_POOL_ID,
   BUILT_IN_LOCAL_WORKTREE_TARGET_ID,
@@ -52,6 +53,19 @@ vi.mock('node:os', async (importOriginal) => {
 
 function writeUserConfig(value: unknown): void {
   writeFileSync(join(fakeHome, '.invoker', 'config.json'), JSON.stringify(value));
+}
+
+function fakeCodexProbeRunner() {
+  return {
+    status: 0,
+    stdout: JSON.stringify({ models: [{ slug: 'gpt-5-codex', display_name: 'GPT-5 Codex' }] }),
+  };
+}
+
+function loadConfigWithFakeCodexCatalog() {
+  return loadConfig({
+    agentRegistry: registerBuiltinAgents({ codex: { probeRunner: fakeCodexProbeRunner } }),
+  });
 }
 
 describe('loadConfig', () => {
@@ -651,7 +665,7 @@ describe('loadConfig', () => {
       defaultExecutionAgent: 'codex',
       defaultExecutionModel: 'claude',
     });
-    expect(() => loadConfig()).toThrow(
+    expect(() => loadConfigWithFakeCodexCatalog()).toThrow(
       'Execution model "claude" is not supported for execution agent "codex".',
     );
   });
