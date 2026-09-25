@@ -139,7 +139,7 @@ describe('worker orientation pack prompts', () => {
       "This PR's CI check is failing. Diagnose why it is failing, then fix it.",
       'Failed check: PR Body',
       'Job log (tail):',
-      'PR Body\tCheckout\tHead SHA: 0123456789abcdef0123456789abcdef01234567',
+      'Head SHA: 0123456789abcdef0123456789abcdef01234567',
     ].join('\n')));
 
     expect(prompt).not.toContain('git rev-parse HEAD');
