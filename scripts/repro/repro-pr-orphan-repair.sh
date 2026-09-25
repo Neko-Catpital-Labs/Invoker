@@ -78,6 +78,10 @@ grep -q "3. changes_requested:" "$plan" || fail "plan: review feedback must be b
 grep -q "git fetch origin feature/orphan-801" "$plan" || fail "plan: must target the existing PR branch" "$(cat "$plan")"
 grep -q "id: safe-push" "$plan" || fail "plan: missing safe-push task" "$(cat "$plan")"
 grep -q "git push --force-with-lease" "$plan" || fail "plan: missing guarded safe-push command" "$(cat "$plan")"
+grep -q "pr-worker-safe-push: stale-head:" "$plan" || fail "plan: stale head must be logged as a safe-push no-op" "$(cat "$plan")"
+grep -q "no push needed because this repair was superseded" "$plan" || fail "plan: stale head must settle the superseded repair" "$(cat "$plan")"
+awk '/pr-worker-safe-push: stale-head:/ { getline; if ($0 ~ /exit 0/) found=1 } END { exit found ? 0 : 1 }' "$plan" \
+  || fail "plan: stale-head branch must exit 0" "$(cat "$plan")"
 grep -q "kind='orphan-attempt'" "$plan" || fail "plan: safe-push must own orphan-attempt recording" "$(cat "$plan")"
 grep -q "Do not push" "$plan" || fail "plan: repair prompt must forbid direct pushes" "$(cat "$plan")"
 awk -F '\t' '$1 == "orphan-attempt" && $2 == "801" { found=1 } END { exit found ? 0 : 1 }' "$TMP/ledger.tsv" \
