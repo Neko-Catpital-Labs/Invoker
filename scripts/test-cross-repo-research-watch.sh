@@ -417,4 +417,34 @@ fi
 test ! -f "$sb/work/ledger.json" || fail "I-bad: failed submit must not write the ledger" "$sb/work/ledger.json"
 echo "PASS I: chain submits live to the owner on master with upstream ids; missing id fails"
 
+mk_sb
+cat > "$sb/echo.json" <<'JSON'
+{
+  "title": "Skip idea that echoes the prompt",
+  "verdict": "skip",
+  "repo": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+  "goal": "g",
+  "motivation": "m",
+  "safetyInvariant": "Writes only research-1.json; no Linear ticket and no invoker-ready labeling.",
+  "verify": "true",
+  "effectivenessMeasurement": { "leadingSignals": ["l"], "laggingSignals": ["l"] }
+}
+JSON
+cat > "$sb/bin/create-stub" <<STUB
+#!/usr/bin/env bash
+cat >> "$sb/creates.jsonl"
+echo >> "$sb/creates.jsonl"
+echo '{"id":"stub","identifier":"STUB-1"}'
+STUB
+chmod +x "$sb/bin/create-stub"
+log="$sb/j.log"
+env INVOKER_LINEAR_CREATE_CMD="$sb/bin/create-stub" INVOKER_LINEAR_TEAM_ID=team-test \
+  node "$REPO_ROOT/scripts/linear-issue-create.mjs" --artifact "$sb/echo.json" > "$log" 2>&1 \
+  || fail "J: an artifact that only mentions the ready label in prose must still file" "$log"
+grep -qi 'invoker-ready' "$sb/creates.jsonl" && fail "J: filed body must not contain the ready label name" "$sb/creates.jsonl"
+if grep -n 'invoker-ready' "$REPO_ROOT/scripts/cross-repo-research-watch.mjs" | grep -q "'Do not"; then
+  fail "J: research prompts must not name the ready label"
+fi
+echo "PASS J: prose mention of the ready label is neutralized; prompts do not name it"
+
 echo "All cross-repo-research fixture tests passed."
