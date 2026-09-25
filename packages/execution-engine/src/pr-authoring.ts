@@ -416,17 +416,30 @@ export async function runRepoLocalPrBodyChecker(args: {
   }
 }
 
-function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
+type AssistantBodyPredicate = (body: string) => boolean;
+
+function extractAssistantBody(
+  driver: SessionDriver | undefined,
+  sessionId: string,
+  fallback: string,
+  isAcceptable?: AssistantBodyPredicate,
+): string {
   const rawSession = driver?.loadSession(sessionId);
+  let latestAssistantBody: string | undefined;
   if (rawSession && driver) {
     const messages = driver.parseSession(rawSession);
     for (let idx = messages.length - 1; idx >= 0; idx--) {
       const message = messages[idx];
-      if (message?.role === 'assistant' && message.content.trim()) {
-        return message.content.trim();
+      const content = message?.role === 'assistant' ? message.content.trim() : '';
+      if (content) {
+        latestAssistantBody ??= content;
+        if (!isAcceptable || isAcceptable(content)) {
+          return content;
+        }
       }
     }
   }
+  if (latestAssistantBody) return latestAssistantBody;
   return fallback.trim();
 }
 
@@ -1037,6 +1050,7 @@ export function spawnAgentPrAuthorViaRegistry(
   agent: ExecutionAgent,
   driver?: SessionDriver,
   extraEnv: NodeJS.ProcessEnv = {},
+  isAcceptableAssistantBody?: AssistantBodyPredicate,
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
@@ -1104,7 +1118,12 @@ export function spawnAgentPrAuthorViaRegistry(
           const effectiveSessionId = realId ?? sessionId;
           const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
           if (code === 0) {
-            const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
+            const body = extractAssistantBody(
+              driver,
+              effectiveSessionId,
+              displayStdout,
+              isAcceptableAssistantBody,
+            );
             resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
             return;
           }
