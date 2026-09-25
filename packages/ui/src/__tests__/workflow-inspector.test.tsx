@@ -670,6 +670,33 @@ describe('WorkflowInspector', () => {
     expect(onEditModel).toHaveBeenCalledWith('task-1', 'openai/gpt-5-codex');
   });
 
+  it('renders the default model selector for merge nodes without catalog models', () => {
+    const onEditModel = vi.fn();
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Merge gate',
+          status: 'pending',
+          config: { workflowId: 'wf-1', isMergeNode: true, executionAgent: 'codex' },
+        })}
+        executionHarnesses={[
+          { name: 'codex', supportedModels: [] },
+        ]}
+        executionDefaults={{ executionAgent: 'codex' }}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditModel={onEditModel}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('execution-model-select')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Default' })).toBeInTheDocument();
+  });
+
   it('double-click edits prompt and saves through callback', () => {
     const onEditPrompt = vi.fn();
     render(
