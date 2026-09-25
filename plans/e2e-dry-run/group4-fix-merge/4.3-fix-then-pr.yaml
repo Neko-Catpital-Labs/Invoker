@@ -13,5 +13,5 @@ tasks:
     dependencies: []
   - id: e2e-g443-taskB
     description: "E2E 4.3 — downstream task depends on A"
-    command: echo downstream-ok
+    command: echo "content-4.3" > e2e-g43-downstream.txt
     dependencies: [e2e-g443-taskA]
