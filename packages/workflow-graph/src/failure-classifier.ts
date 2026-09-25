@@ -64,6 +64,7 @@ export class FailureClassifier {
         || errorText.includes('Installing pnpm dependencies for managed worktree')
       )
       && !errorText.includes('Running task payload')
+      && !errorText.includes('No space left on device')
     ) {
       return 'ssh-provision-failed';
     }

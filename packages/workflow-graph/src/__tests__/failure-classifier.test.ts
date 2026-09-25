@@ -29,6 +29,13 @@ describe('FailureClassifier.classifyError', () => {
     )).toBeUndefined();
   });
 
+  it('classifies a disk-full death during provisioning as disk-full, not provision-failed', () => {
+    expect(FailureClassifier.classifyError(
+      '[SshExecutor] Installing managed worktree dependencies...\n'
+      + 'ENOSPC: No space left on device, write\n',
+    )).toBe('ssh-disk-full');
+  });
+
   it('classifies the missing-worktree signature', () => {
     expect(FailureClassifier.classifyError(
       'cd ~/.invoker/worktrees/repo/task-1: No such file or directory',
