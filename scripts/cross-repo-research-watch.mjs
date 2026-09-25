@@ -357,6 +357,7 @@ function buildResearchWorkflow({
 onFinish: none
 mergeMode: no_op
 repoUrl: ${yamlQuote(targetRepoUrl)}
+baseBranch: master
 externalDependencies:
   - workflowId: "${upstreamToken}"
     taskId: "__merge__"
@@ -400,6 +401,7 @@ function buildFileLinearWorkflow({
 onFinish: none
 mergeMode: no_op
 repoUrl: ${yamlQuote(targetRepoUrl)}
+baseBranch: master
 externalDependencies:
   - workflowId: "${upstreamToken}"
     taskId: "__merge__"
@@ -522,8 +524,8 @@ export function runCrossRepoResearchWatch(options = {}) {
   const crossRepoResearch = config.crossRepoResearch ?? {};
   const pairs = normalizeMaps(crossRepoResearch);
   const workDir = options.workDir
-    ?? env('INVOKER_CROSS_REPO_RESEARCH_WORK_DIR')
-    ?? join(homedir(), '.invoker', 'cross-repo-research');
+    || env('INVOKER_CROSS_REPO_RESEARCH_WORK_DIR')
+    || join(homedir(), '.invoker', 'cross-repo-research');
   const dryRun = options.dryRun ?? env('INVOKER_CROSS_REPO_RESEARCH_DRY_RUN', '0') === '1';
   const maxCandidates = crossRepoResearch.maxCandidatesPerSource ?? DEFAULT_MAX_CANDIDATES;
   const teamId = crossRepoResearch.linearTeamId ?? env('INVOKER_LINEAR_TEAM_ID');
