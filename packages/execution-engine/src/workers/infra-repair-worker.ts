@@ -6,6 +6,9 @@ import type {
   WorkerActionWrite,
   WorkflowMutationPriority,
 } from '@invoker/data-store';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 import { FailureClassifier } from '@invoker/workflow-core';
 import type { SshInfraFailureClass, TaskState, TaskStateChanges } from '@invoker/workflow-core';
@@ -46,6 +49,7 @@ function buildPortableBase64DecodeFunction(functionName = 'invoker_base64_decode
   fi
 }`;
 }
+import { resolveClaudeWorkerConfigDir } from '../agents/claude-execution-agent.js';
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
 import { recordWorkerDecisionRow } from '../worker-decision-ledger.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
@@ -139,6 +143,7 @@ export interface InfraRepairWorkerPolicyOptions {
   runRepoMirrorRepairFn?: typeof runRepoMirrorRepair;
   runWorktreeCorruptRepairFn?: typeof runWorktreeCorruptRepair;
   cleanupRemoteInvokerHomeFn?: (opts: { target: RemoteDiskTarget; store: InfraRepairWorkerStore }) => Promise<DiskCleanupResult>;
+  localAgentLoginRenewedAtMs?: () => number | undefined;
 }
 
 export interface InfraRepairWorkerOptions {
@@ -470,6 +475,24 @@ function validateLocalOauthInfraCandidate(
   return { ...candidate, task: latest, reason };
 }
 
+function timestampMs(value: Date | string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const ms = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function defaultLocalAgentLoginRenewedAtMs(options: InfraRepairWorkerPolicyOptions): number | undefined {
+  const credentialsPath = join(resolveClaudeWorkerConfigDir(), '.credentials.json');
+  try {
+    return statSync(credentialsPath).mtimeMs;
+  } catch (error) {
+    options.logger.warn(`[${INFRA_REPAIR_WORKER_KIND}] could not read agent login renewal time from ${credentialsPath}: ${error instanceof Error ? error.message : String(error)}`, {
+      module: INFRA_REPAIR_WORKER_KIND,
+    });
+    return undefined;
+  }
+}
+
 async function handleLocalOauthSessionExpiredRecovery(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedLocalOauthInfraCandidate,
@@ -478,6 +501,23 @@ async function handleLocalOauthSessionExpiredRecovery(
     INFRA_REPAIR_WORKER_KIND,
     taskDecisionExternalKey(candidate, candidate.reason),
   );
+  if ((existingDecision?.payload as { channel?: string } | null | undefined)?.channel === INFRA_REPAIR_RECREATE_TASK_CHANNEL) {
+    return;
+  }
+  const loginRenewedAtMs = (options.localAgentLoginRenewedAtMs ?? defaultLocalAgentLoginRenewedAtMs)(options);
+  const failedAtMs = timestampMs(candidate.task.execution.completedAt);
+  if (loginRenewedAtMs !== undefined && failedAtMs !== undefined && loginRenewedAtMs > failedAtMs) {
+    await submitFollowUpMutation(
+      options,
+      candidate,
+      candidate.reason,
+      INFRA_REPAIR_RECREATE_TASK_CHANNEL,
+      buildInfraRepairRecreateTaskMutationArgs(candidate.taskId),
+      { loginRenewedAt: new Date(loginRenewedAtMs).toISOString(), failedAt: new Date(failedAtMs).toISOString() },
+      'Queued recreate-task: the local agent login was renewed after this task failed with an expired OAuth session',
+    );
+    return;
+  }
   if (existingDecision && isSettledTaskDecision(existingDecision)) {
     return;
   }
