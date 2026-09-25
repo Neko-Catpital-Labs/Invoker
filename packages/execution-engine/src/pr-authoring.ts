@@ -416,18 +416,57 @@ export async function runRepoLocalPrBodyChecker(args: {
   }
 }
 
-function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
+type AssistantBodyPredicate = (body: string) => boolean;
+
+const AGENT_BODY_RETRY_ATTEMPTS = 6;
+const AGENT_BODY_RETRY_DELAY_MS = 250;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function extractAssistantBody(
+  driver: SessionDriver | undefined,
+  sessionId: string,
+  fallback: string,
+  isAcceptable?: AssistantBodyPredicate,
+): string {
   const rawSession = driver?.loadSession(sessionId);
+  let latestAssistantBody: string | undefined;
   if (rawSession && driver) {
     const messages = driver.parseSession(rawSession);
     for (let idx = messages.length - 1; idx >= 0; idx--) {
       const message = messages[idx];
-      if (message?.role === 'assistant' && message.content.trim()) {
-        return message.content.trim();
+      const content = message?.role === 'assistant' ? message.content.trim() : '';
+      if (content) {
+        latestAssistantBody ??= content;
+        if (!isAcceptable || isAcceptable(content)) {
+          return content;
+        }
       }
     }
   }
+  if (latestAssistantBody) return latestAssistantBody;
   return fallback.trim();
+}
+
+async function extractAssistantBodyWithRetry(
+  driver: SessionDriver | undefined,
+  sessionId: string,
+  fallback: string,
+  isAcceptable?: AssistantBodyPredicate,
+): Promise<string> {
+  let body = extractAssistantBody(driver, sessionId, fallback, isAcceptable);
+  if (!driver || !isAcceptable || isAcceptable(body)) return body;
+
+  for (let attempt = 1; attempt < AGENT_BODY_RETRY_ATTEMPTS; attempt += 1) {
+    await delay(AGENT_BODY_RETRY_DELAY_MS);
+    body = extractAssistantBody(driver, sessionId, fallback, isAcceptable);
+    if (isAcceptable(body)) return body;
+  }
+  return body;
 }
 
 export function resolveInstalledSkillPathForAgent(agentName: string, skillName: string): string | null {
@@ -1037,6 +1076,7 @@ export function spawnAgentPrAuthorViaRegistry(
   agent: ExecutionAgent,
   driver?: SessionDriver,
   extraEnv: NodeJS.ProcessEnv = {},
+  isAcceptableAssistantBody?: AssistantBodyPredicate,
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
@@ -1104,8 +1144,16 @@ export function spawnAgentPrAuthorViaRegistry(
           const effectiveSessionId = realId ?? sessionId;
           const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
           if (code === 0) {
-            const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
-            resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+            void extractAssistantBodyWithRetry(
+              driver,
+              effectiveSessionId,
+              displayStdout,
+              isAcceptableAssistantBody,
+            ).then((body) => {
+              resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+            }, (err) => {
+              reject(err instanceof Error ? err : new Error(String(err)));
+            });
             return;
           }
           const failureDetail = buildAgentExitFailureDetail(stdout, stderr, displayStdout);

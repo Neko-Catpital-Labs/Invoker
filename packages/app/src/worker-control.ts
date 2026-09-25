@@ -35,12 +35,19 @@ import {
   WORKER_SESSION_MINE_WORKER_KIND,
   SESSION_TOKEN_PUSH_WORKER_KIND,
   WORKFLOW_CLEANUP_WORKER_KIND,
+  type WorkerHealth,
   type WorkerRegistry,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { SLACK_BUG_SCAN_WORKER_KIND } from '@invoker/slack-bug-scan';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
+
+declare module '@invoker/contracts' {
+  interface WorkerStatusEntry {
+    health?: WorkerHealth;
+  }
+}
 
 export const AGENT_LOGIN_WATCH_WORKER_KIND = 'agent-login-watch';
 
@@ -622,6 +629,7 @@ function buildWorkerStatusEntry(args: {
     : 'stopped';
   const controlDisabledReason = getControlDisabledReason(args.canControl);
   const runtime = args.handle?.runtime;
+  const health = runtime?.health?.();
   const rawActions = args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 }).slice(0, 5);
   const recentActions = rawActions.map(toWorkerActionSummary);
   return {
@@ -645,6 +653,7 @@ function buildWorkerStatusEntry(args: {
     recentActions,
     recentLogs: buildRecentWorkerLogs(args.definitionKind, args.persistence, rawActions),
     ...(args.recovery ? { recovery: args.recovery } : {}),
+    ...(health ? { health } : {}),
   };
 }
 
