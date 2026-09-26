@@ -81,14 +81,18 @@ assert(
   'build-artifacts must use fresh GitHub-hosted capacity so stale Git ref locks cannot block checkout',
 );
 assertStepBefore(jobs['build-artifacts'], 'Install native build tools', 'Install dependencies', 'build-artifacts');
-const buildArtifactsNativeBuildStep = jobs['build-artifacts'].steps.find(
-  (step) => step.name === 'Install native build tools',
-);
-assert(
-  String(buildArtifactsNativeBuildStep?.run ?? '').includes('make')
-    && String(buildArtifactsNativeBuildStep?.run ?? '').includes('g++'),
-  'build-artifacts must install make and g++ so pnpm can build native dependencies on self-hosted runners',
-);
+assertUsesSharedInstaller('build-artifacts', 'Install native build tools', {
+  CI_INSTALL_PACKAGES: 'make g++',
+  CI_INSTALL_PROBE_COMMANDS: 'make g++',
+  CI_INSTALL_NO_APT_ERROR: 'build-artifacts requires make and g++, but apt-get is unavailable.',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'build-artifacts requires make and g++; run as root or provide passwordless sudo for apt-get.',
+});
+assertUsesSharedInstaller('nightly-regression', 'Install native build tools', {
+  CI_INSTALL_PACKAGES: 'make g++',
+  CI_INSTALL_PROBE_COMMANDS: 'make g++',
+  CI_INSTALL_NO_APT_ERROR: 'nightly-regression requires make and g++, but apt-get is unavailable.',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'nightly-regression requires make and g++; run as root or provide passwordless sudo for apt-get.',
+});
 
 assert(jobs['quality-required'], 'Missing quality-required job');
 assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs');
