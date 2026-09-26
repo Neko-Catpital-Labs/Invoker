@@ -299,8 +299,16 @@ function extractCodexExecCommandFromArguments(args) {
   }
 }
 
+function claudeUsageKey(row, msg, rowIndex) {
+  const messageId = msg?.id ?? row?.id ?? null;
+  const requestId = row?.requestId ?? null;
+  if (messageId === null && requestId === null) return `row\u0000${row?.uuid ?? rowIndex}`;
+  return `${messageId}\u0000${requestId}`;
+}
+
 export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   const lines = text.split(/\r?\n/).filter(Boolean);
+  const seenUsageKeys = new Set();
   let assistantTurns = 0;
   let cacheReadTokens = 0;
   let codexCacheReadTokens = 0;
@@ -309,7 +317,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   const bashCounts = new Map();
   let workflowHint = '';
 
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     let row;
     try {
       row = JSON.parse(line);
@@ -356,13 +364,17 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     const msg = row.message ?? row;
     const role = msg.role ?? row.type;
     if (!countedByFormat && (role === 'assistant' || row.type === 'assistant')) {
-      assistantTurns += 1;
-      const usage = msg.usage ?? row.usage ?? {};
-      cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0;
-      totalTokens += (Number(usage.input_tokens ?? 0) || 0)
-        + (Number(usage.output_tokens ?? 0) || 0)
-        + (Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0)
-        + (Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? 0) || 0);
+      const usageKey = claudeUsageKey(row, msg, lineIndex);
+      if (!seenUsageKeys.has(usageKey)) {
+        seenUsageKeys.add(usageKey);
+        assistantTurns += 1;
+        const usage = msg.usage ?? row.usage ?? {};
+        cacheReadTokens += Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0;
+        totalTokens += (Number(usage.input_tokens ?? 0) || 0)
+          + (Number(usage.output_tokens ?? 0) || 0)
+          + (Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0) || 0)
+          + (Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? 0) || 0);
+      }
       const content = Array.isArray(msg.content) ? msg.content : [];
       for (const block of content) {
         if (block?.type === 'tool_use' && (block.name === 'Bash' || block.name === 'bash')) {
@@ -601,6 +613,23 @@ function selfTest() {
   ].join('\n');
   const codexNeg = analyzeClaudeJsonl(codexClean);
   if (codexNeg.thrash) throw new Error('expected clean codex fixture to stay silent');
+
+  const repeatedUsage = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-multiblock-repeated-usage.jsonl'));
+  if (repeatedUsage.assistantTurns !== 30) throw new Error(`expected 30 deduped turns, got ${repeatedUsage.assistantTurns}`);
+  if (repeatedUsage.cacheReadTokens !== 4_500_000) throw new Error(`expected 4,500,000 deduped cache-read tokens, got ${repeatedUsage.cacheReadTokens}`);
+  if (repeatedUsage.totalTokens !== 4_575_300) throw new Error(`expected 4,575,300 deduped total tokens, got ${repeatedUsage.totalTokens}`);
+  if (repeatedUsage.thrash) throw new Error(`repeated-usage fixture must stay silent, got ${JSON.stringify(repeatedUsage.reasons)}`);
+  if (repeatedUsage.structuralSummary.progressSignals.commandExecutionCount !== 30) {
+    throw new Error(`dedup must not drop tool_use blocks, got ${repeatedUsage.structuralSummary.progressSignals.commandExecutionCount}`);
+  }
+
+  const multiblockHeavy = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-multiblock-heavy.jsonl'));
+  if (multiblockHeavy.assistantTurns !== 12) throw new Error(`expected 12 deduped turns, got ${multiblockHeavy.assistantTurns}`);
+  if (multiblockHeavy.totalTokens !== 11_100_000) throw new Error(`expected 11,100,000 deduped total tokens, got ${multiblockHeavy.totalTokens}`);
+  if (!multiblockHeavy.thrash) throw new Error('multiblock heavy fixture must still fire after dedup');
+  if (!multiblockHeavy.reasons.every((r) => r.startsWith('total_tokens='))) {
+    throw new Error(`multiblock heavy fixture must trip only on total tokens, got ${JSON.stringify(multiblockHeavy.reasons)}`);
+  }
 
   const productive = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-productive-long.jsonl'));
   const exploration = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-repeated-exploration.jsonl'));
