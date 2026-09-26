@@ -72,8 +72,15 @@ describe('disk-headroom cleanup deletion log', () => {
     writeFileSync(join(otherDir, 'file.txt'), 'clear-me');
     const scriptPath = join(root, 'cleanup.sh');
     writeFileSync(scriptPath, buildInvokerHomeCleanupScript(invokerHome, []));
+    const stubBin = join(root, 'stub-bin');
+    mkdirSync(stubBin, { recursive: true });
+    const pkillStub = join(stubBin, 'pkill');
+    writeFileSync(pkillStub, '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
 
-    const result = spawnSync('bash', [scriptPath], { encoding: 'utf8', env: { ...process.env, TMPDIR: isolatedTmp } });
+    const result = spawnSync('bash', [scriptPath], {
+      encoding: 'utf8',
+      env: { ...process.env, TMPDIR: isolatedTmp, PATH: `${stubBin}:${process.env.PATH ?? ''}` },
+    });
 
     expect(result.status).toBe(0);
     expect(existsSync(otherDir)).toBe(false);
