@@ -64,6 +64,18 @@ invoker_e2e_allow_repo_git_ops() {
   )
 }
 
+invoker_e2e_ensure_make_pr_skill() {
+  local skill_src="$INVOKER_E2E_REPO_ROOT/skills/make-pr"
+  [ -f "$skill_src/SKILL.md" ] || return 0
+  local config_dir
+  for config_dir in "$HOME/.codex" "$HOME/.claude"; do
+    if [ ! -f "$config_dir/skills/invoker-make-pr/SKILL.md" ]; then
+      mkdir -p "$config_dir/skills" 2>/dev/null || continue
+      cp -r "$skill_src" "$config_dir/skills/invoker-make-pr" 2>/dev/null || true
+    fi
+  done
+}
+
 invoker_e2e_init() {
   # Preserve caller PATH so cleanup can fully restore shell state.
   if [ -z "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then
@@ -102,6 +114,7 @@ invoker_e2e_init() {
   export PATH="$stubdir:$PATH"
   invoker_e2e_allow_repo_git_ops
   invoker_e2e_ensure_branch_aliases
+  invoker_e2e_ensure_make_pr_skill
 }
 
 invoker_e2e_pid_cmdline() {
