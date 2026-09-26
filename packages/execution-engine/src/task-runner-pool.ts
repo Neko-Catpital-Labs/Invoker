@@ -66,6 +66,7 @@ export type PoolSelection = {
   resolvedExecution?: ResolvedExecutionSelection;
   leaseResourceKey?: string;
   leaseHolderId?: string;
+  attemptId?: string;
 };
 
 export type PoolMemberHealth = {
@@ -595,8 +596,12 @@ function reclaimStalePoolSelections(
   for (const [taskId, selection] of [...host.pendingPoolSelections.entries()]) {
     const task = getTask(taskId);
     if (task) {
-      if (!UNLAUNCHABLE_TASK_STATUSES.has(task.status)) continue;
-      releaseStalePoolSelection(host, taskId, selection, task.status);
+      if (UNLAUNCHABLE_TASK_STATUSES.has(task.status)) {
+        releaseStalePoolSelection(host, taskId, selection, task.status);
+        continue;
+      }
+      if (selection.attemptId === undefined || selection.attemptId === task.execution.selectedAttemptId) continue;
+      releaseStalePoolSelection(host, taskId, selection, 'superseded-attempt');
       continue;
     }
     if (allTasks.length === 0 || knownTaskIds.has(taskId)) continue;
@@ -639,6 +644,7 @@ function reservePoolMemberSelection(
     memberKey: poolMemberKey(member),
     selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
     resolvedExecution,
+    attemptId: task.execution.selectedAttemptId,
   };
   host.pendingPoolSelections.set(task.id, selection);
   if (member.type !== 'ssh') return selection;
