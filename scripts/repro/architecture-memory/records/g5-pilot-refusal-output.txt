@@ -1,0 +1,2 @@
+Error: pair pilot-001 already has a committed record; a new pair needs a new id
+exit=2
