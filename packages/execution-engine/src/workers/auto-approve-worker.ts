@@ -316,7 +316,8 @@ function logAutoApproveWorkerEvent(
     ...details,
   };
   options.store.logEvent?.(candidate.taskId, 'debug.autoapprove-worker', payload);
-  options.logger.debug?.(`[worker:${AUTO_APPROVE_WORKER_KIND}] ${phase}`, {
+  const log = phase.endsWith('-submitted') ? options.logger.info : options.logger.debug;
+  log?.call(options.logger, `[worker:${AUTO_APPROVE_WORKER_KIND}] ${phase}`, {
     module: 'auto-approve-worker',
     taskId: candidate.taskId,
     ...payload,
@@ -470,6 +471,9 @@ export function createAutoApproveTick(options: AutoApproveWorkerPolicyOptions): 
       logAutoApproveWorkerEvent(options, candidate, 'worker-autoapprove-submitted', {
         intentId,
         channel: AUTO_APPROVE_COMMAND_CHANNEL,
+        taskStatus: candidate.task.status,
+        pendingFixError: candidate.task.execution.pendingFixError ?? null,
+        error: candidate.task.execution.error ?? null,
       });
     }
   };

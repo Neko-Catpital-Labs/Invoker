@@ -142,6 +142,23 @@ describe('autoapprove worker', () => {
     expect(submitter.submit).not.toHaveBeenCalled();
   });
 
+  it('logs each approval it submits at info level, with the error the fix addressed', async () => {
+    const { store } = makeStore([task({ execution: { pendingFixError: 'file-linear-tickets exited 1' } })]);
+    const info = vi.fn();
+    const submitter = { submit: vi.fn(() => 7) };
+
+    await createAutoApproveTick({ store, submitter, logger: { ...logger, info } as unknown as Logger, enabled: true })({
+      identity: { kind: 'autoapprove', instanceId: 'test' },
+      reason: 'manual',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    const submitted = info.mock.calls.find(([msg]) => String(msg).includes('worker-autoapprove-submitted'));
+    expect(submitted).toBeDefined();
+    expect(submitted![1]).toMatchObject({ taskId: 'wf-1/task-1', pendingFixError: 'file-linear-tickets exited 1' });
+  });
+
   it('skips review-ready tasks with pending fix errors as ambiguous', () => {
     const { store, writes } = makeStore([task({ status: 'review_ready' })]);
 
