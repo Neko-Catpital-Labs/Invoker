@@ -440,6 +440,11 @@ export function createAdminBypassE2eBabysitWorker(
     onTick,
     intervalMs: config.intervalMs ?? DEFAULT_INTERVAL_MS,
     tickOnStart: config.tickOnStart ?? true,
+    listWorkKeys: () => [
+      'admin-bypass-e2e-babysit:worker-lifecycle',
+      'admin-bypass-e2e-babysit:repair-filings',
+      'admin-bypass-e2e-babysit:e2e-regression-watch',
+    ],
   });
 }
 

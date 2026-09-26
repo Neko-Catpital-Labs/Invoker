@@ -19,6 +19,7 @@ import {
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
+import { uniqueWorkKeys } from './worker-key-utils.js';
 
 export const REQUEUE_WORKER_KIND = 'heartbeat-requeue';
 
@@ -139,9 +140,10 @@ export function createRequeueRecoveryTick(options: RequeueWorkerPolicyOptions): 
     const wakeupCandidates: RequeueCandidate[] = wakeups
       .filter((hint): hint is RecoveryWorkerWakeupHint & { taskId: string } => Boolean(hint?.taskId))
       .map((hint) => ({ taskId: hint.taskId, workflowId: hint.workflowId }));
-    const candidates = wakeupCandidates.length > 0 && ctx.reason === 'wake'
+    const candidates = (wakeupCandidates.length > 0 && ctx.reason === 'wake'
       ? wakeupCandidates
-      : listRequeueScanCandidates(options.store);
+      : listRequeueScanCandidates(options.store))
+      .filter((candidate) => ctx.workKey === undefined || candidate.taskId === ctx.workKey);
 
     const handled = new Set<string>();
     for (const candidate of candidates) {
@@ -297,6 +299,16 @@ export function createRequeueWorker(options: RequeueWorkerOptions): WorkerRuntim
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
     onTick,
+    listWorkKeys: options.requeue && !options.onTick
+      ? ({ reason }) => {
+        const wakeupTaskIds = reason === 'wake' ? pendingWakeups.map((hint) => hint.taskId) : [];
+        return uniqueWorkKeys(
+          wakeupTaskIds.length > 0
+            ? wakeupTaskIds
+            : listRequeueScanCandidates(options.requeue!.store).map((candidate) => candidate.taskId),
+        );
+      }
+      : () => [REQUEUE_WORKER_KIND],
   });
   if (!options.messageBus || !options.requeue || options.onTick) {
     return runtime;
