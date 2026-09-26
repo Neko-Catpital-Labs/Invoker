@@ -141,9 +141,10 @@ function validateBody(body) {
   for (const field of ['Repo', 'Goal', 'Motivation', 'Safety invariant', 'Verify', 'Effectiveness measurement']) {
     requireField(body, field);
   }
-  if (/\binvoker-ready\b/i.test(body)) {
-    throw new Error('Ticket body must not mention invoker-ready');
-  }
+}
+
+function neutralizeReadyLabelMentions(text) {
+  return text.replace(/\binvoker-ready\b/gi, 'the intake label');
 }
 
 async function linearGraphql(apiKey, query, variables = {}) {
@@ -251,6 +252,8 @@ async function main() {
 
   if (!title.trim()) throw new Error('title is required');
   assertNoReadyLabel(labels);
+  body = neutralizeReadyLabelMentions(body);
+  title = neutralizeReadyLabelMentions(title);
   validateBody(body);
 
   const apiKey = env('INVOKER_LINEAR_API_KEY') || env('LINEAR_API_KEY');
