@@ -12,6 +12,11 @@ describe('FailureClassifier.classifyAgentQuotaRefusal Claude session limit', () 
     expect(FailureClassifier.classifyAgentQuotaRefusal(output)).toBe('agent-usage-limit');
   });
 
+  it('classifies the local claude weekly-limit refusal as agent-usage-limit', () => {
+    const output = "You've hit your weekly limit · resets Oct 1, 1am (UTC)";
+    expect(FailureClassifier.classifyAgentQuotaRefusal(output)).toBe('agent-usage-limit');
+  });
+
   it('does not classify unrelated session text', () => {
     expect(FailureClassifier.classifyAgentQuotaRefusal('AssertionError: expected session to be closed')).toBeUndefined();
   });

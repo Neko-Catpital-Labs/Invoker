@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import { FailureClassifier, type FailureClass } from '@invoker/workflow-core';
 import { cancelOwnedStartupChild, type ExecutorStartup } from './executor.js';
 import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './executor.js';
 import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePreserveResult, parseMergeError } from './branch-utils.js';
@@ -122,6 +123,11 @@ export function selectFailedTaskStoredError(output: string): string | undefined 
       : errorSpan;
   }
   return failedTaskErrorTail(output);
+}
+
+function classifyFailedTaskOutput(request: WorkRequest, output: string): FailureClass | undefined {
+  if (request.actionType !== 'ai_task') return undefined;
+  return FailureClassifier.classifyAgentQuotaRefusal(output);
 }
 
 /**
@@ -1391,6 +1397,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     if (status === 'failed' && effectiveExitCode === 0 && pushError) {
       error = pushError;
     }
+    const failureClass = effectiveExitCode !== 0
+      ? classifyFailedTaskOutput(request, bufferedOutput)
+      : undefined;
 
     const agentSessionId = opts?.agentSessionId;
 
@@ -1405,6 +1414,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         agentSessionId,
         agentName: opts?.agentName,
         branch: opts?.branch,
+        ...(failureClass ? { failureClass } : {}),
         ...(error ? { error } : {}),
         ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
       },
