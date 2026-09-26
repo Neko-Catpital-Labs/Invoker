@@ -194,6 +194,13 @@ function isAgentTask(task: TaskState): boolean {
  * Marks a task as failed, writes to DB atomically (task + attempt), logs event,
  * publishes delta, checks for newly ready tasks, and returns newly started tasks.
  */
+const FAILURE_LOG_TAIL_CHARS = 4_000;
+
+function tailOfFailureText(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  return text.length > FAILURE_LOG_TAIL_CHARS ? text.slice(-FAILURE_LOG_TAIL_CHARS) : text;
+}
+
 export function finalizeFailedTaskImpl(
   host: TransitionHost,
   taskId: string,
@@ -285,9 +292,12 @@ export function finalizeFailedTaskImpl(
   }
 
   const readyTaskIds = host.stateMachine.findNewlyReadyTasks(taskId);
-  host.logger.info('[orchestrator] finalizeFailedTask', {
+  host.logger.warn('[orchestrator] finalizeFailedTask', {
     taskId,
     eventName,
+    exitCode: executionFields.exitCode,
+    failureClass,
+    error: tailOfFailureText(executionFields.error),
     newlyReadyCount: readyTaskIds.length,
     readyTaskIds,
   });
