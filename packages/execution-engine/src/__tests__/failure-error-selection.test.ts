@@ -92,6 +92,10 @@ class LocalFailureExecutor extends BaseExecutor<BaseEntry> {
 
   async completeFailedRun(output: string): Promise<WorkResponse> {
     const request = makeRequest();
+    return this.completeFailedRunWithRequest(request, output);
+  }
+
+  async completeFailedRunWithRequest(request: WorkRequest, output: string): Promise<WorkResponse> {
     const handle = this.createHandle(request);
     const entry: BaseEntry = {
       request,
@@ -164,5 +168,27 @@ describe('failed task stored error selection', () => {
 
     expect(localResponse.outputs.error).toBe(sshResponse.outputs.error);
     expect(localResponse.outputs.error).toBe(selectFailedTaskStoredError(output));
+  });
+
+  it('classifies AI-task quota refusals from the full output even when stored error starts earlier', async () => {
+    const output = [
+      'Error: dependency provisioning warning that looks failure-shaped',
+      ...Array.from({ length: 400 }, (_, index) => `install chatter ${index}`),
+      "You've hit your weekly limit · resets Oct 1, 1am (UTC)",
+    ].join('\n');
+    const local = new LocalFailureExecutor();
+    const request = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        ...makeRequest().inputs,
+        command: undefined,
+        prompt: 'Reflect on the failed worker session',
+        executionAgent: 'claude',
+      },
+    });
+    const response = await local.completeFailedRunWithRequest(request, output);
+
+    expect(response.outputs.error).not.toContain('weekly limit');
+    expect(response.outputs.failureClass).toBe('agent-usage-limit');
   });
 });
