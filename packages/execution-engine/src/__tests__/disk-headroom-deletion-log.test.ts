@@ -55,6 +55,7 @@ describe('disk-headroom cleanup deletion log', () => {
     const result = await cleanupLocalInvokerHome({ invokerHome: home, userHome: root, store: throwingStore, logger: logger as never });
 
     expect(result.ok).toBe(false);
+    expect(result.reason).toBe('in-use-lookup-failed');
     expect(existsSync(someDir)).toBe(true);
     const errors = messages(logger.error);
     expect(errors.some((m) => m.includes('in-use lookup failed') && m.includes('db unavailable'))).toBe(true);
