@@ -117,6 +117,11 @@ interface QueueHistoryEvent {
   recordedAt?: string;
 }
 
+interface SaveTaskRecord {
+  task: TaskState;
+  values: unknown[];
+}
+
 export class SqliteTaskAttemptRepository {
   constructor(
     private readonly exec: SqliteExecutor,
@@ -177,31 +182,44 @@ export class SqliteTaskAttemptRepository {
   }
 
   private appendQueueHistory(event: QueueHistoryEvent): void {
-    const unknownFields = event.unknownFields ?? [];
-    this.exec.execRun(
-      `INSERT INTO queue_history (
-          recorded_at, event_type, workflow_id, task_id, attempt_id, dispatch_id,
-          resource_key, resource_type, holder_id, from_state, to_state,
-          queue_position, queue_size, payload_json, unknown_fields
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        event.recordedAt ?? new Date().toISOString(),
-        event.eventType,
-        event.workflowId ?? null,
-        event.taskId ?? null,
-        event.attemptId ?? null,
-        event.dispatchId ?? null,
-        event.resourceKey ?? null,
-        event.resourceType ?? null,
-        event.holderId ?? null,
-        event.fromState ?? null,
-        event.toState ?? 'unknown',
-        event.queuePosition ?? null,
-        event.queueSize ?? null,
-        JSON.stringify(event.payload ?? {}),
-        JSON.stringify(unknownFields),
-      ],
-    );
+    this.appendQueueHistoryEvents([event]);
+  }
+
+  private appendQueueHistoryEvents(events: QueueHistoryEvent[]): void {
+    if (events.length === 0) return;
+    const columnsPerRow = 15;
+    const rowsPerInsert = Math.max(1, Math.floor(SQLITE_MAX_VARIABLE_NUMBER / columnsPerRow));
+    for (let offset = 0; offset < events.length; offset += rowsPerInsert) {
+      const chunk = events.slice(offset, offset + rowsPerInsert);
+      const params = chunk.flatMap((event) => {
+        const unknownFields = event.unknownFields ?? [];
+        return [
+          event.recordedAt ?? new Date().toISOString(),
+          event.eventType,
+          event.workflowId ?? null,
+          event.taskId ?? null,
+          event.attemptId ?? null,
+          event.dispatchId ?? null,
+          event.resourceKey ?? null,
+          event.resourceType ?? null,
+          event.holderId ?? null,
+          event.fromState ?? null,
+          event.toState ?? 'unknown',
+          event.queuePosition ?? null,
+          event.queueSize ?? null,
+          JSON.stringify(event.payload ?? {}),
+          JSON.stringify(unknownFields),
+        ];
+      });
+      this.exec.execRun(
+        `INSERT INTO queue_history (
+            recorded_at, event_type, workflow_id, task_id, attempt_id, dispatch_id,
+            resource_key, resource_type, holder_id, from_state, to_state,
+            queue_position, queue_size, payload_json, unknown_fields
+          ) VALUES ${chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}`,
+        params,
+      );
+    }
   }
 
   private hasCrashPreservationTable(): boolean {
@@ -458,16 +476,10 @@ export class SqliteTaskAttemptRepository {
         this.syncCrashPreservationState(record.task.id, undefined, record.task.execution);
       }
 
-      const payloads = this.loadTaskJournalPayloads(records.map((record) => record.task.id));
       this.appendTaskJournalEntries(records.map((record) => {
-        const payload = payloads.get(record.task.id);
-        if (!payload) {
-          throw new Error(`Failed to load task ${record.task.id} after insert for sync journal`);
-        }
-        return { taskId: record.task.id, payload };
+        return { taskId: record.task.id, payload: this.buildTaskJournalPayload(record) };
       }));
-      for (const record of records) {
-        this.appendQueueHistory({
+      this.appendQueueHistoryEvents(records.map((record) => ({
           eventType: 'task_state_transition',
           workflowId,
           taskId: record.task.id,
@@ -475,12 +487,11 @@ export class SqliteTaskAttemptRepository {
           toState: record.task.status,
           payload: { source: 'saveTasks' },
           unknownFields: ['from_state'],
-        });
-      }
+      })));
     });
   }
 
-  private buildSaveTaskRecord(workflowId: string, inputTask: TaskState): { task: TaskState; values: unknown[] } {
+  private buildSaveTaskRecord(workflowId: string, inputTask: TaskState): SaveTaskRecord {
     let task = inputTask;
     const cfg = resolveTaskConfig(task.config);
     if (cfg !== task.config) {
@@ -553,19 +564,12 @@ export class SqliteTaskAttemptRepository {
     return { task, values };
   }
 
-  private loadTaskJournalPayloads(taskIds: string[]): Map<string, Record<string, unknown>> {
-    const payloads = new Map<string, Record<string, unknown>>();
-    for (let offset = 0; offset < taskIds.length; offset += SQLITE_MAX_VARIABLE_NUMBER) {
-      const chunk = taskIds.slice(offset, offset + SQLITE_MAX_VARIABLE_NUMBER);
-      const rows = this.exec.queryAll(
-        `SELECT * FROM tasks WHERE id IN (${chunk.map(() => '?').join(', ')})`,
-        chunk,
-      );
-      for (const row of rows) {
-        payloads.set(String(row.id), row);
-      }
-    }
-    return payloads;
+  private buildTaskJournalPayload(record: SaveTaskRecord): Record<string, unknown> {
+    const payload = Object.fromEntries(
+      SAVE_TASK_COLUMNS.map((column, index) => [column, record.values[index] ?? null]),
+    ) as Record<string, unknown>;
+    payload.claude_session_id = null;
+    return payload;
   }
 
   private appendTaskJournalEntries(entries: Array<{ taskId: string; payload: Record<string, unknown> }>): void {
