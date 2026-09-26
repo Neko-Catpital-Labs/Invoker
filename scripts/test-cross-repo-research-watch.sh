@@ -360,11 +360,61 @@ JSON
 test ! -e "$sb/cwd/runs" || fail "H: run artifacts must not land in the current directory" "$log"
 test -f "$sb/home/.invoker/cross-repo-research/ledger.json" \
   || fail "H: default work dir must be ~/.invoker/cross-repo-research" "$log"
-for tpl in 02-research.template.yaml 03-file-linear.template.yaml; do
+for tpl in 01-discover.yaml 02-research.template.yaml 03-file-linear.template.yaml; do
   f="$(find "$sb/home/.invoker/cross-repo-research/runs" -name "$tpl" | head -1)"
   test -n "$f" || fail "H: missing $tpl" "$log"
   grep -q '^baseBranch:' "$f" || fail "H: $tpl must declare top-level baseBranch for submit-workflow-chain" "$f"
 done
 echo "PASS H: default work dir under home; chain templates declare baseBranch"
+
+mk_sb
+cat > "$sb/activity.json" <<JSON
+{ "https://github.com/stablyai/orca": [ { "date": "$TODAY", "kind": "feat", "title": "feat(live): idea", "url": "u", "body": "" } ] }
+JSON
+cat > "$sb/bin/invoker-cli" <<STUB
+#!/usr/bin/env bash
+n=\$(( \$(ls "$sb/calls" 2>/dev/null | grep -c "\\.args\$") + 1 ))
+mkdir -p "$sb/calls"
+printf '%s\n' "\$*" > "$sb/calls/\$n.args"
+cp "\$2" "$sb/calls/\$n.yaml"
+printf '{"workflow":{"id":"wf-live-%s"}}\n' "\$n"
+STUB
+chmod +x "$sb/bin/invoker-cli"
+log="$sb/i.log"
+env \
+  INVOKER_CROSS_REPO_RESEARCH_CLI="$sb/bin/invoker-cli" \
+  INVOKER_CROSS_REPO_RESEARCH_CONFIG_JSON='{"crossRepoResearch":{"linearTeamId":"team-test","maxCandidatesPerSource":1,"maps":{"https://github.com/Neko-Catpital-Labs/Invoker.git":[{"repoUrl":"https://github.com/stablyai/orca","lookbackDays":30}]}}}' \
+  INVOKER_CROSS_REPO_RESEARCH_ACTIVITY_FIXTURE="$sb/activity.json" \
+  INVOKER_CROSS_REPO_RESEARCH_WORK_DIR="$sb/work" \
+  node "$REPO_ROOT/scripts/cross-repo-research-watch.mjs" > "$log" 2>&1 \
+  || fail "I: watch should exit 0 with a live submit stub" "$log"
+test "$(ls "$sb/calls" | grep -c '\.args$')" = "3" || fail "I: expected three live submits" "$log"
+for n in 1 2 3; do
+  grep -q -- '^run .* --live --json$' "$sb/calls/$n.args" || fail "I: submit $n must use run --live --json" "$sb/calls/$n.args"
+done
+grep -q 'workflowId: "wf-live-1"' "$sb/calls/2.yaml" || fail "I: research must depend on discover workflow id" "$sb/calls/2.yaml"
+grep -q 'workflowId: "wf-live-2"' "$sb/calls/3.yaml" || fail "I: file-linear must depend on research workflow id" "$sb/calls/3.yaml"
+grep -q '^baseBranch: master$' "$sb/calls/1.yaml" || fail "I: discover must stay on master" "$sb/calls/1.yaml"
+grep -q '^baseBranch: master$' "$sb/calls/2.yaml" || fail "I: research must stay on master" "$sb/calls/2.yaml"
+grep -q '^baseBranch: master$' "$sb/calls/3.yaml" || fail "I: file-linear must stay on master" "$sb/calls/3.yaml"
+grep -q '"fingerprints": {}' "$sb/work/ledger.json" && fail "I: ledger must record the submitted candidate" "$sb/work/ledger.json"
+
+mk_sb
+cat > "$sb/activity.json" <<JSON
+{ "https://github.com/stablyai/orca": [ { "date": "$TODAY", "kind": "feat", "title": "feat(live): idea", "url": "u", "body": "" } ] }
+JSON
+printf '#!/usr/bin/env bash\necho "not json"\n' > "$sb/bin/invoker-cli"
+chmod +x "$sb/bin/invoker-cli"
+log="$sb/i-bad.log"
+if env \
+  INVOKER_CROSS_REPO_RESEARCH_CLI="$sb/bin/invoker-cli" \
+  INVOKER_CROSS_REPO_RESEARCH_CONFIG_JSON='{"crossRepoResearch":{"linearTeamId":"team-test","maxCandidatesPerSource":1,"maps":{"https://github.com/Neko-Catpital-Labs/Invoker.git":[{"repoUrl":"https://github.com/stablyai/orca","lookbackDays":30}]}}}' \
+  INVOKER_CROSS_REPO_RESEARCH_ACTIVITY_FIXTURE="$sb/activity.json" \
+  INVOKER_CROSS_REPO_RESEARCH_WORK_DIR="$sb/work" \
+  node "$REPO_ROOT/scripts/cross-repo-research-watch.mjs" > "$log" 2>&1; then
+  fail "I-bad: submit without a workflow id must fail the sweep" "$log"
+fi
+test ! -f "$sb/work/ledger.json" || fail "I-bad: failed submit must not write the ledger" "$sb/work/ledger.json"
+echo "PASS I: chain submits live to the owner on master with upstream ids; missing id fails"
 
 echo "All cross-repo-research fixture tests passed."

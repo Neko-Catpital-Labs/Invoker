@@ -9,7 +9,7 @@
  *   INVOKER_CROSS_REPO_RESEARCH_CONFIG_JSON   inline CrossRepoResearchConfig (tests)
  *   INVOKER_CROSS_REPO_RESEARCH_ACTIVITY_FIXTURE  JSON activity by source repoUrl
  *   INVOKER_CROSS_REPO_RESEARCH_DRY_RUN=1     generate chain only; do not submit
- *   INVOKER_CROSS_REPO_RESEARCH_SUBMIT_CMD    override submit-workflow-chain.sh
+ *   INVOKER_CROSS_REPO_RESEARCH_CLI           invoker-cli path (default: PATH, then `npm prefix -g`/bin)
  *   INVOKER_CROSS_REPO_RESEARCH_WORK_DIR      ledger + generated plans (default ~/.invoker/cross-repo-research)
  *   INVOKER_CROSS_REPO_RESEARCH_GENERATE_ONLY=1  write chain YAML and exit 0 (tests)
  */
@@ -272,6 +272,7 @@ function buildDiscoverWorkflow({ targetRepoUrl, sourceRepoUrl, candidatesPath, l
 onFinish: none
 mergeMode: no_op
 repoUrl: ${yamlQuote(targetRepoUrl)}
+baseBranch: master
 
 tasks:
   - id: discover-candidates
@@ -503,20 +504,57 @@ export function generateChainForPair({
   };
 }
 
-function submitChain(plans, { dryRun, submitCmd }) {
+function resolveOwnerCli() {
+  const explicit = env('INVOKER_CROSS_REPO_RESEARCH_CLI');
+  if (explicit) return explicit;
+  const onPath = spawnSync('bash', ['-c', 'command -v invoker-cli'], { encoding: 'utf8' });
+  if (onPath.status === 0 && onPath.stdout.trim()) return onPath.stdout.trim();
+  const npmPrefix = spawnSync('npm', ['prefix', '-g'], { encoding: 'utf8' });
+  if (npmPrefix.status === 0 && npmPrefix.stdout.trim()) {
+    const candidate = join(npmPrefix.stdout.trim(), 'bin', 'invoker-cli');
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error('invoker-cli not found on PATH or under `npm prefix -g`/bin; set INVOKER_CROSS_REPO_RESEARCH_CLI');
+}
+
+function parseSubmittedWorkflowId(stdout, planPath) {
+  try {
+    return JSON.parse(stdout || '{}')?.workflow?.id ?? '';
+  } catch (err) {
+    log(`submit output for ${planPath} is not JSON: ${err instanceof Error ? err.message : String(err)}`);
+    return '';
+  }
+}
+
+function submitChain(plans, { dryRun, cli }) {
   if (dryRun || env('INVOKER_CROSS_REPO_RESEARCH_GENERATE_ONLY') === '1') {
     log(`dry-run/generate-only chain: ${plans.join(' ')}`);
-    return { status: 0, stdout: plans.join('\n') };
+    return { workflowIds: [] };
   }
-  const cmd = submitCmd || join(REPO_ROOT, 'scripts/submit-workflow-chain.sh');
-  const result = spawnSync('bash', [cmd, '--gate-policy', 'completed', ...plans], {
-    encoding: 'utf8',
-    cwd: REPO_ROOT,
-  });
-  if (result.status !== 0) {
-    throw new Error(`submit chain failed: ${result.stderr || result.stdout}`);
+  const ownerCli = cli || resolveOwnerCli();
+  const workflowIds = [];
+  for (const plan of plans) {
+    let planPath = plan;
+    if (workflowIds.length > 0) {
+      planPath = plan.replace(/\.template\.yaml$/, '.yaml');
+      const upstreamId = workflowIds[workflowIds.length - 1];
+      writeFileSync(planPath, readFileSync(plan, 'utf8').replaceAll('__UPSTREAM_WORKFLOW_ID__', upstreamId));
+    }
+    const result = spawnSync(ownerCli, ['run', planPath, '--live', '--json'], {
+      encoding: 'utf8',
+      cwd: REPO_ROOT,
+    });
+    const workflowId = parseSubmittedWorkflowId(result.stdout, planPath);
+    if (result.status !== 0 || !workflowId) {
+      throw new Error(
+        `submit failed for ${planPath} (exit ${result.status}; already submitted: ${workflowIds.join(', ') || 'none'}): `
+        + `${(result.stderr || result.stdout || '').slice(0, 800)}`,
+      );
+    }
+    log(`submitted ${planPath} -> ${workflowId}`);
+    workflowIds.push(workflowId);
   }
-  return result;
+  return { workflowIds };
 }
 
 export function runCrossRepoResearchWatch(options = {}) {
@@ -561,7 +599,7 @@ export function runCrossRepoResearchWatch(options = {}) {
       });
       submitChain(chain.plans, {
         dryRun,
-        submitCmd: options.submitCmd ?? env('INVOKER_CROSS_REPO_RESEARCH_SUBMIT_CMD'),
+        cli: options.cli,
       });
       for (const fp of chain.fingerprints) {
         ledger.fingerprints[fp] = {
