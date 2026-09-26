@@ -95,8 +95,11 @@ function readLedger(workDir) {
   if (!existsSync(path)) return { fingerprints: {}, watermarks: {} };
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    return { fingerprints: {}, watermarks: {} };
+  } catch (err) {
+    throw new Error(
+      `ledger ${path} is unreadable (${err instanceof Error ? err.message : String(err)}); `
+      + 'refusing to run, because an empty ledger would re-file every candidate',
+    );
   }
 }
 
@@ -146,9 +149,13 @@ function fetchSourceActivity(source, sinceIso) {
     }
     try {
       const parsed = JSON.parse(result.stdout || '[]');
-      if (Array.isArray(parsed)) out.push(...parsed);
-    } catch {
-      // ignore parse errors; treat as empty
+      if (Array.isArray(parsed)) {
+        out.push(...parsed);
+      } else {
+        log(`unparseable gh activity for ${ownerRepo}: expected a JSON array, got ${typeof parsed}`);
+      }
+    } catch (err) {
+      log(`unparseable gh activity for ${ownerRepo}: ${err instanceof Error ? err.message : String(err)}; output starts ${JSON.stringify((result.stdout || '').slice(0, 120))}`);
     }
   }
   return out;
