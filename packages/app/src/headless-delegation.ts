@@ -8,6 +8,7 @@ import {
   type HeadlessTargetLookup,
 } from './headless-command-classification.js';
 import { createDelegatedTaskFeed, trackWorkflow } from './headless-watch.js';
+import { getChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 
 type DelegateTrackingOptions = {
   waitForApproval?: boolean;
@@ -49,6 +50,10 @@ function delegationLog(message: string): void {
 
 function createTraceId(channel: string): string {
   return `${channel}:${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function recordDelegationRequest(channel: string, code: string): void {
+  getChokeBoundaryMetrics().recordRequest('delegation', code, { channel });
 }
 
 export async function tryDelegateRun(
@@ -182,22 +187,27 @@ export async function tryPingHeadlessOwner(
     ]) as { ownerId?: string; mode?: string } | null;
     if (!response || typeof response !== 'object') {
       delegationLog(`${traceId} response elapsedMs=${Date.now() - startedAt} ownerId=<missing> mode=<missing>`);
+      recordDelegationRequest('headless.owner-ping', 'protocol_error');
       return null;
     }
     delegationLog(
       `${traceId} response elapsedMs=${Date.now() - startedAt} ownerId=${response.ownerId ?? '<missing>'} mode=${response.mode ?? '<missing>'}`,
     );
+    recordDelegationRequest('headless.owner-ping', 'success');
     return response;
   } catch (err) {
     if (err === DELEGATION_TIMEOUT) {
       delegationLog(`${traceId} timeout timeoutMs=${timeoutMs}`);
+      recordDelegationRequest('headless.owner-ping', 'timeout');
       return null;
     }
     if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
       delegationLog(`${traceId} no-handler`);
+      recordDelegationRequest('headless.owner-ping', 'no_handler');
       return null;
     }
     delegationLog(`${traceId} error ${(err instanceof Error ? err.message : String(err))}`);
+    recordDelegationRequest('headless.owner-ping', 'error');
     throw err;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -233,17 +243,21 @@ export async function tryDelegateQuery(
       timeoutPromise,
     ]) as Record<string, unknown>;
     delegationLog(`${traceId} response elapsedMs=${Date.now() - startedAt}`);
+    recordDelegationRequest('headless.query', 'success');
     return response;
   } catch (err) {
     if (err === DELEGATION_TIMEOUT) {
       delegationLog(`${traceId} timeout timeoutMs=${timeoutMs}`);
+      recordDelegationRequest('headless.query', 'timeout');
       return null;
     }
     if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
       delegationLog(`${traceId} no-handler`);
+      recordDelegationRequest('headless.query', 'no_handler');
       return null;
     }
     delegationLog(`${traceId} error ${(err instanceof Error ? err.message : String(err))}`);
+    recordDelegationRequest('headless.query', 'error');
     throw err;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -284,13 +298,16 @@ async function tryDelegate(
       delegationLog(
         `${traceId} timeout channel=${channel} timeoutMs=${options.timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS}`,
       );
+      recordDelegationRequest(channel, 'timeout');
       return { kind: 'timeout' };
     }
     if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
       delegationLog(`${traceId} no-handler channel=${channel}`);
+      recordDelegationRequest(channel, 'no_handler');
       return { kind: 'no-handler' };
     }
     delegationLog(`${traceId} error channel=${channel} ${(err instanceof Error ? err.message : String(err))}`);
+    recordDelegationRequest(channel, 'error');
     throw err;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -305,6 +322,7 @@ async function tryDelegate(
   if (raw == null || typeof raw !== 'object') {
     const msg = `expected object response, got ${raw === null ? 'null' : typeof raw}`;
     delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
+    recordDelegationRequest(channel, 'protocol_error');
     return { kind: 'protocol-error', message: msg };
   }
 
@@ -318,12 +336,14 @@ async function tryDelegate(
       if (!Array.isArray(response.tasks)) {
         const msg = `response has workflowId but tasks is ${typeof response.tasks}, expected array`;
         delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
+        recordDelegationRequest(channel, 'protocol_error');
         return { kind: 'protocol-error', message: msg };
       }
     } else {
       const keys = Object.keys(response).join(', ');
       const msg = `response has neither workflowId (string) nor ok (true); keys: [${keys}]`;
       delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
+      recordDelegationRequest(channel, 'protocol_error');
       return { kind: 'protocol-error', message: msg };
     }
   }
@@ -338,6 +358,7 @@ async function tryDelegate(
   const outcome: DelegationOutcome = hasWorkflowId && Array.isArray(response.tasks)
     ? { kind: 'delegated', workflowId: response.workflowId as string, tasks: response.tasks as TaskState[] }
     : { kind: 'delegated' };
+  recordDelegationRequest(channel, 'success');
 
   if (options.noTrack) {
     process.stdout.write('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
