@@ -307,7 +307,9 @@ export class PersistedWorkflowMutationCoordinator {
       void this.runWorkflowDrain(nextWorkflowId)
         .catch((error) => {
           const message = error instanceof Error ? error.stack ?? error.message : String(error);
-          process.stderr.write(`[workflow-mutation-coordinator] drain failed for ${nextWorkflowId}: ${message}\n`);
+          this.reportCoordinatorEvent('error', `[workflow-mutation-coordinator] drain failed for ${nextWorkflowId}: ${message}`, {
+            workflowId: nextWorkflowId,
+          });
         })
         .finally(() => {
           void this.processPendingDrains();
@@ -322,6 +324,11 @@ export class PersistedWorkflowMutationCoordinator {
     this.drainingWorkflows.add(workflowId);
     try {
       if (!this.persistence.claimWorkflowMutationLease(workflowId, this.ownerId)) {
+        this.options?.logger?.info('[workflow-mutation-coordinator] drain skipped: lease held elsewhere', {
+          workflowId,
+          ownerId: this.ownerId,
+          module: 'workflow-mutation-coordinator',
+        });
         return;
       }
       this.createTiming(workflowId, 'workflow-mutation-drain')
@@ -514,8 +521,10 @@ export class PersistedWorkflowMutationCoordinator {
         deferred.reject(new Error(`Superseded by ${fenceKind} intent #${intent.id}`));
         this.inFlightPromises.delete(evictedId);
       }
-      process.stderr.write(
-        `[workflow-mutation-coordinator] evicted ${evictedIds.length} queued intent(s) before fence ${intent.channel}#${intent.id} for ${workflowId}\n`,
+      this.reportCoordinatorEvent(
+        'warn',
+        `[workflow-mutation-coordinator] evicted ${evictedIds.length} queued intent(s) before fence ${intent.channel}#${intent.id} for ${workflowId}`,
+        { workflowId, evictedIntentIds: evictedIds, fenceIntentId: intent.id, fenceChannel: intent.channel },
       );
     }
   }
@@ -588,10 +597,21 @@ export class PersistedWorkflowMutationCoordinator {
       const invalidation = this.runningIntentInvalidations.get(activeIntentId);
       invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
       invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
-      process.stderr.write(
-        `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
+      this.reportCoordinatorEvent(
+        'warn',
+        `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}`,
+        { workflowId, invalidatedIntentId: activeIntentId, fenceKind, newIntentId, reason },
       );
     }
+  }
+
+  private reportCoordinatorEvent(
+    level: 'warn' | 'error',
+    message: string,
+    fields: Record<string, unknown>,
+  ): void {
+    process.stderr.write(`${message}\n`);
+    this.options?.logger?.[level](message, { ...fields, ownerId: this.ownerId, module: 'workflow-mutation-coordinator' });
   }
 
   private hardPreemptFenceKind(channel: string, args: unknown[]): string | null {
