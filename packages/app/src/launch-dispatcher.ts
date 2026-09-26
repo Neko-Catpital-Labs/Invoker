@@ -724,6 +724,18 @@ export class LaunchDispatcher {
       accepted: ok,
       module: 'launch-dispatcher',
     });
+    if (!ok) {
+      const row = this.persistence.loadLaunchDispatchById(dispatchId);
+      this.logger?.warn?.('[launch-dispatcher] complete rejected', {
+        ownerId: this.ownerId,
+        dispatchId,
+        rowState: row?.state ?? 'missing',
+        taskId: row?.taskId,
+        attemptId: row?.attemptId,
+        lastError: row?.lastError,
+        module: 'launch-dispatcher',
+      });
+    }
     return ok;
   }
 

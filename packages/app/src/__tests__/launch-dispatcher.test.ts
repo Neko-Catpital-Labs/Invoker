@@ -123,6 +123,31 @@ describe('LaunchDispatcher', () => {
       expect(dispatcher.completeDispatch(enqueued.id)).toBe(false);
     });
 
+    it('logs why a completion was rejected: the row state it found, or missing', () => {
+      seedWorkflowAndTask();
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-1/t1',
+        attemptId: 'attempt-rejected-reason',
+        workflowId: 'wf-1',
+        generation: 0,
+      });
+      const { dispatcher, logger } = makeDispatcher();
+      dispatcher.completeDispatch(enqueued.id);
+      expect(dispatcher.completeDispatch(enqueued.id)).toBe(false);
+      expect(dispatcher.completeDispatch(987_654)).toBe(false);
+
+      const rejected = logger.records.filter((entry) => entry.msg === '[launch-dispatcher] complete rejected');
+      expect(rejected).toHaveLength(2);
+      expect(rejected[0]!.level).toBe('warn');
+      expect(rejected[0]!.fields).toMatchObject({
+        dispatchId: enqueued.id,
+        rowState: 'completed',
+        taskId: 'wf-1/t1',
+        attemptId: 'attempt-rejected-reason',
+      });
+      expect(rejected[1]!.fields).toMatchObject({ dispatchId: 987_654, rowState: 'missing' });
+    });
+
     it('uses a fixed dispatch TTL long enough for normal executor startup', () => {
       seedWorkflowAndTask('attempt-fixed-ttl');
       const enqueued = adapter.enqueueLaunchDispatch({
