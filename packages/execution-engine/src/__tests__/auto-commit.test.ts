@@ -2117,6 +2117,41 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     expect(remoteSha).toBe(taskSha);
   });
 
+  it('retries once when GitHub rejects a branch update with generic failed status', async () => {
+    const branch = 'invoker/remote-rejected-failed-retry';
+    execSync(`git checkout -b ${branch}`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'task.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit"', { cwd: cloneDir });
+    const taskSha = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+
+    const originalExecGitSimpleWithNetworkTimeout = (executor as any).execGitSimpleWithNetworkTimeout.bind(executor);
+    let pushAttempts = 0;
+    vi.spyOn(executor as any, 'execGitSimpleWithNetworkTimeout').mockImplementation(
+      async (args: string[], cwdPath: string) => {
+        if (args[0] === 'push') {
+          pushAttempts += 1;
+          if (pushAttempts === 1) {
+            throw new Error(
+              `git push --force-with-lease origin ${taskSha}:refs/heads/${branch} failed (code 1): ` +
+              `To ${originDir}\n ! [remote rejected] ${taskSha} -> ${branch} (failed)\n` +
+              "error: failed to push some refs",
+            );
+          }
+        }
+        return originalExecGitSimpleWithNetworkTimeout(args, cwdPath);
+      },
+    );
+
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, branch);
+    expect(pushErr).toBeUndefined();
+    expect(pushAttempts).toBe(2);
+
+    const remoteSha = execSync(`git --git-dir="${originDir}" rev-parse "refs/heads/${branch}"`)
+      .toString()
+      .trim();
+    expect(remoteSha).toBe(taskSha);
+  });
+
   it('pushes the recorded commit when current checkout is not the task branch', async () => {
     const taskBranch = 'invoker/task-stale';
     const prBranch = 'pr/head';
@@ -2279,6 +2314,29 @@ describe('BaseExecutor.handleProcessExit push semantics', () => {
     expect(response?.status).toBe('failed');
     expect(response?.outputs.exitCode).toBe(1);
     expect(response?.outputs.error).toBe('push denied');
+  });
+
+  it('keeps safe-push command completed when exit 0 but bookkeeping branch push fails', async () => {
+    execSync('git checkout -b invoker/safe-push', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 't.txt'), 'x');
+    execSync('git add -A && git commit -m task', { cwd: cloneDir });
+
+    const req = makeRequest('wf-1/safe-push', { description: 'Safely push PR only if head did not move' });
+    const entry = executor.registerTestEntry('e-safe-push', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue(
+      'git push --force-with-lease origin abc:refs/heads/experiment/wf-1/safe-push failed (code 1): ' +
+      'remote rejected abc -> experiment/wf-1/safe-push (failed)',
+    );
+
+    await executor.testHandleProcessExit('e-safe-push', req, cloneDir, 0, { branch: 'invoker/safe-push' });
+
+    expect(response?.status).toBe('completed');
+    expect(response?.outputs.exitCode).toBe(0);
+    expect(response?.outputs.error).toBeUndefined();
+    expect(entry.outputBuffer.join('')).toContain('preserving non-repeatable command result');
   });
 
   it('keeps task completed when exit 0 but push fails due to transient network transport', async () => {

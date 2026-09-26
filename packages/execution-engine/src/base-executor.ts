@@ -1146,7 +1146,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         if (!this.isRetryableLeasePublishError(err)) {
           throw err;
         }
-        await this.fetchRemoteBranchForLease(cwd, remoteName, branch);
+        if (!this.isGenericRemoteRejectedFailure(err instanceof Error ? err.message : String(err))) {
+          await this.fetchRemoteBranchForLease(cwd, remoteName, branch);
+        }
         await this.execGitSimpleWithNetworkTimeout(
           ['push', '--force-with-lease', remoteName, branchRef],
           cwd,
@@ -1171,7 +1173,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
   private isRetryableLeasePublishError(err: unknown): boolean {
     const message = err instanceof Error ? err.message : String(err);
-    return isGitRefLockRace(err) || /\bstale info\b/i.test(message);
+    return isGitRefLockRace(err) || /\bstale info\b/i.test(message) || this.isGenericRemoteRejectedFailure(message);
+  }
+
+  private isGenericRemoteRejectedFailure(message: string): boolean {
+    return /remote rejected[\s\S]*\(\s*failed\s*\)/i.test(message);
   }
 
   private async fetchRemoteBranchForLease(
@@ -1239,6 +1245,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
   protected isNoRefspecPushError(error: string): boolean {
     return /src refspec .* does not match any/i.test(error);
+  }
+
+  protected isSafePushCommandTask(request: WorkRequest): boolean {
+    if (request.actionType !== 'command') return false;
+    return request.actionId.split('/').at(-1) === 'safe-push';
   }
 
   // ── Shared command building ─────────────────────────────
@@ -1369,6 +1380,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         this.emitOutput(
           executionId,
           `[${this.type}] Branch push had no local ref to publish; preserving successful command result.\n`,
+        );
+      } else if (this.isSafePushCommandTask(request)) {
+        this.emitOutput(
+          executionId,
+          `[${this.type}] Branch push failed after successful safe-push command; preserving non-repeatable command result.\n`,
         );
       } else {
         status = 'failed';
