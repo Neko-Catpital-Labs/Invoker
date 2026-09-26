@@ -87,7 +87,7 @@ describe('buildWorkerMutationHandlers', () => {
             updatedAt: '2026-08-01T00:00:00.000Z',
           }],
           loadTasks: () => [
-            { id: 'wf-failed-old/filer', status: 'failed', execution: { exitCode: 1, error: 'pushBranchToRemote failed: remote hung up' } },
+            { id: 'wf-failed-old/filer', status: 'failed', execution: { exitCode: 1, error: 'pushBranchToRemote failed: token=ghp_supersecret hung up' } },
             { id: 'wf-failed-old/done', status: 'completed', execution: {} },
           ] as never,
         },
@@ -104,8 +104,12 @@ describe('buildWorkerMutationHandlers', () => {
         taskId: 'wf-failed-old/filer',
         status: 'failed',
         exitCode: 1,
-        error: 'pushBranchToRemote failed: remote hung up',
+        error: '[redacted]',
       }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ error: expect.stringContaining('ghp_supersecret') }),
     );
     expect(warn).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ taskId: 'wf-failed-old/done' }));
     expect(calls.indexOf('delete')).toBeGreaterThan(calls.findIndex((c) => c.startsWith('warn:')));

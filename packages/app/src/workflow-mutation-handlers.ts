@@ -141,7 +141,7 @@ export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Ma
         taskId: task.id,
         status: task.status,
         exitCode: task.execution?.exitCode,
-        error: task.execution?.error,
+        error: task.execution?.error ? '[redacted]' : undefined,
       });
     }
     const result = await commandService.deleteWorkflow(
