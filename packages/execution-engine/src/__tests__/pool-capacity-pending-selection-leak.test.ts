@@ -59,6 +59,16 @@ function reserve(runner: TaskRunner, taskId: string): void {
   });
 }
 
+function reserveForAttempt(runner: TaskRunner, taskId: string, attemptId: string): void {
+  pendingSelections(runner).set(taskId, {
+    poolId: 'local-only',
+    member: MEMBER,
+    memberKey: 'worktree:local-only',
+    selectionStrategy: 'leastLoaded',
+    attemptId,
+  });
+}
+
 function hasCapacity(runner: TaskRunner): boolean {
   return poolMemberHasCapacity(runner as never, 'local-only', POOL as never, MEMBER as never);
 }
@@ -101,6 +111,29 @@ describe('pending pool selections held by unlaunchable tasks', () => {
 
     expect(pendingSelections(runner).size).toBe(2);
     expect(hasCapacity(runner)).toBe(false);
+  });
+
+  it.fails('frees a reservation left by an earlier launch attempt of a task that is still queued', () => {
+    const task = makeTask('wf-5/fix-ci', 'queued');
+    task.execution.selectedAttemptId = 'wf-5/fix-ci-new';
+    const runner = makeRunner([task]);
+    reserveForAttempt(runner, 'wf-5/fix-ci', 'wf-5/fix-ci-old');
+
+    reclaimOrphanedExecutionSlots(runner as never);
+
+    expect(pendingSelections(runner).has('wf-5/fix-ci')).toBe(false);
+    expect(hasCapacity(runner)).toBe(true);
+  });
+
+  it('keeps a reservation made by the task\'s current launch attempt', () => {
+    const task = makeTask('wf-6/fix-ci', 'queued');
+    task.execution.selectedAttemptId = 'wf-6/fix-ci-live';
+    const runner = makeRunner([task]);
+    reserveForAttempt(runner, 'wf-6/fix-ci', 'wf-6/fix-ci-live');
+
+    reclaimOrphanedExecutionSlots(runner as never);
+
+    expect(pendingSelections(runner).has('wf-6/fix-ci')).toBe(true);
   });
 
   it('does not wipe reservations when the orchestrator reports no tasks', () => {
