@@ -95,6 +95,37 @@ def _is_ancestor(ancestor: str, descendant: str, *, cwd: Path | str | None = Non
     return completed.returncode == 0
 
 
+def _commit_exists(commit: str, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return completed.returncode == 0
+
+
+def _has_content_diff(base: str, head: str, *, cwd: Path | str | None = None) -> bool:
+    completed = subprocess.run(
+        ["git", "diff", "--quiet", base, head],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode == 0:
+        return False
+    if completed.returncode == 1:
+        return True
+    details = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    raise SafePushError(
+        f"git diff --quiet {base} {head} failed with exit code {completed.returncode}"
+        + (f":\n{details}" if details else ""),
+        exit_code=completed.returncode,
+    )
+
+
 # The remote branch can move between the caller capturing --expected-head and
 # this script running for a reason unrelated to the local repair itself --
 # e.g. an unrelated rebase-onto-base maintenance pass rewinding the branch
@@ -198,10 +229,13 @@ def safe_push(
             )
         if live != expected:
             head_before = local_head(cwd=cwd)
-            if head_before == expected:
+            if (
+                not _has_content_diff(expected, head_before, cwd=cwd)
+                or (_commit_exists(live, cwd=cwd) and not _has_content_diff(live, head_before, cwd=cwd))
+            ):
                 raise NothingToPushError(
-                    f"noop: refs/heads/{branch_name} moved to {live} while local HEAD has no "
-                    f"work beyond the captured {expected}; nothing to push",
+                    f"noop: refs/heads/{branch_name} moved to {live} while local HEAD has no unpublished "
+                    f"content beyond the captured {expected}; nothing to push",
                     exit_code=0,
                 )
             replayed = None

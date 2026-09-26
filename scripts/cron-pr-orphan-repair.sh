@@ -192,8 +192,16 @@ scan_repo() {
         printf 'key=%s\n' "$q_key"
         printf 'marker=%s\n' "$q_fingerprint"
         printf 'ref="refs/heads/$branch"\n'
+        printf 'if git diff --quiet "$expected" HEAD; then\n'
+        printf '  echo "pr-worker-safe-push: noop: $ref has no local content changes beyond $expected; nothing to push"\n'
+        printf '  exit 0\n'
+        printf 'fi\n'
         printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
         printf 'if [ "$live" != "$expected" ]; then\n'
+        printf '  if [ -n "$live" ] && git cat-file -e "$live^{commit}" 2>/dev/null && git diff --quiet "$live" HEAD; then\n'
+        printf '    echo "pr-worker-safe-push: noop: $ref moved to $live while local HEAD has no unpublished content; nothing to push"\n'
+        printf '    exit 0\n'
+        printf '  fi\n'
         printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
         printf '  exit 20\n'
         printf 'fi\n'

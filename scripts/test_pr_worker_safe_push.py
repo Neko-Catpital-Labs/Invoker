@@ -164,6 +164,50 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_moved_remote_head_with_empty_local_commit_settles_as_noop(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        git(self.repo, "commit", "--allow-empty", "-m", "empty repair bookkeeping")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertEqual(self.remote_head(), remote_after_race)
+        self.assertFalse(ledger.exists())
+
+    def test_empty_local_commit_on_moved_remote_head_settles_as_noop(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        git(self.repo, "fetch", "origin", "main")
+        git(self.repo, "checkout", "--detach", remote_after_race)
+        git(self.repo, "commit", "--allow-empty", "-m", "empty repair bookkeeping")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertEqual(self.remote_head(), remote_after_race)
+        self.assertFalse(ledger.exists())
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")
