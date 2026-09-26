@@ -224,6 +224,8 @@ interface SQLiteAdapterOptions {
   slowQueryThresholdMs?: number;
   logCheckpointTiming?: boolean;
   onSlowQuery?: (info: SlowQueryInfo) => void;
+  onTransactionDuration?: (info: SQLiteTransactionDurationInfo) => void;
+  onBusyFailure?: (info: SQLiteBusyFailureInfo) => void;
 }
 
 export interface SlowQueryInfo {
@@ -232,9 +234,21 @@ export interface SlowQueryInfo {
   rowCount?: number;
 }
 
+export interface SQLiteTransactionDurationInfo {
+  durationMs: number;
+  outcome: 'committed' | 'rolled_back';
+}
+
+export interface SQLiteBusyFailureInfo {
+  operation: 'transaction_begin';
+  durationMs: number;
+  message: string;
+  errcode?: number;
+}
+
 export type EphemeralSQLiteAdapterOptions = Pick<
   SQLiteAdapterOptions,
-  'outputTailLimit' | 'outputDir' | 'activityLogMaxRows'
+  'outputTailLimit' | 'outputDir' | 'activityLogMaxRows' | 'onTransactionDuration' | 'onBusyFailure'
 >;
 
 const DEFAULT_SLOW_QUERY_SUMMARY_TOP_N = 10;
@@ -351,10 +365,17 @@ function sqlStringLiteral(value: string): string {
  */
 const SQLITE_CORRUPT = 11;
 const SQLITE_NOTADB = 26;
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
 // Extended result codes pack the primary code in the low 8 bits (e.g.
 // SQLITE_CORRUPT_VTAB = 267 -> 267 & 0xff = 11), so mask before comparing or
 // extended corruption variants slip through as "not corruption".
 const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
+
+function sqlitePrimaryResultCode(err: unknown): number | undefined {
+  const errcode = (err as { errcode?: unknown } | null)?.errcode;
+  return typeof errcode === 'number' ? errcode & SQLITE_PRIMARY_RESULT_CODE_MASK : undefined;
+}
 
 /**
  * True when `err` is a SQLite open failure caused by an unreadable database file
@@ -362,14 +383,20 @@ const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
  * class of failure for which destructive backup-and-recreate recovery is safe.
  */
 export function isDatabaseCorruptionError(err: unknown): boolean {
-  const errcode = (err as { errcode?: unknown } | null)?.errcode;
-  if (typeof errcode === 'number') {
-    const primary = errcode & SQLITE_PRIMARY_RESULT_CODE_MASK;
+  const primary = sqlitePrimaryResultCode(err);
+  if (primary !== undefined) {
     return primary === SQLITE_CORRUPT || primary === SQLITE_NOTADB;
   }
   // Fallback for runtimes that do not surface a numeric errcode.
   const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return message.includes('malformed') || message.includes('not a database');
+}
+
+function isSQLiteBusyFailure(err: unknown): boolean {
+  const primary = sqlitePrimaryResultCode(err);
+  if (primary !== undefined) return primary === SQLITE_BUSY || primary === SQLITE_LOCKED;
+  const message = err instanceof Error ? err.message : String(err);
+  return /locked|busy/i.test(message);
 }
 
 export function isCorruptionRecoveryEligible(
@@ -879,6 +906,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readonly slowQueryThresholdMs: number;
   private readonly logCheckpointTiming: boolean;
   private readonly onSlowQuery: ((info: SlowQueryInfo) => void) | null;
+  private readonly onTransactionDuration: ((info: SQLiteTransactionDurationInfo) => void) | null;
+  private readonly onBusyFailure: ((info: SQLiteBusyFailureInfo) => void) | null;
 
   /**
    * Non-null only when this adapter was opened via the corruption-recovery
@@ -909,6 +938,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       ?? (this.slowQueryThresholdMs > 0
         ? createDefaultSlowQuerySink(this.slowQueryThresholdMs)
         : null);
+    this.onTransactionDuration = options?.onTransactionDuration ?? null;
+    this.onBusyFailure = options?.onBusyFailure ?? null;
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
       updateTask: (taskId, changes, opts) => this.updateTask(taskId, changes, opts),
@@ -1114,6 +1145,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.onSlowQuery({ durationMs, sql, ...(rowCount === undefined ? {} : { rowCount }) });
   }
 
+  private warnTimingCallbackFailure(callbackName: string, err: unknown): void {
+    console.warn(
+      `[SQLiteAdapter] ${callbackName} callback failed; ignoring observer failure to preserve SQLite mutation result: ` +
+      (err instanceof Error ? err.message : String(err)),
+    );
+  }
+
+  private noteTransactionDuration(info: SQLiteTransactionDurationInfo): void {
+    if (!this.onTransactionDuration) return;
+    try {
+      this.onTransactionDuration(info);
+    } catch (err) {
+      this.warnTimingCallbackFailure('onTransactionDuration', err);
+    }
+  }
+
+  private noteBusyFailure(info: SQLiteBusyFailureInfo): void {
+    if (!this.onBusyFailure) return;
+    try {
+      this.onBusyFailure(info);
+    } catch (err) {
+      this.warnTimingCallbackFailure('onBusyFailure', err);
+    }
+  }
+
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
     const startedAt = performance.now();
@@ -1154,13 +1210,28 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (this.writeTransactionDepth > 0) {
       return work();
     }
-    this.db.run(this.writeTransactionDepth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT invoker_nested_${this.writeTransactionDepth}`);
+    const startedAt = performance.now();
+    try {
+      this.db.run(this.writeTransactionDepth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT invoker_nested_${this.writeTransactionDepth}`);
+    } catch (err) {
+      if (isSQLiteBusyFailure(err)) {
+        this.noteBusyFailure({
+          operation: 'transaction_begin',
+          durationMs: performance.now() - startedAt,
+          message: err instanceof Error ? err.message : String(err),
+          ...(sqlitePrimaryResultCode(err) === undefined ? {} : { errcode: sqlitePrimaryResultCode(err) }),
+        });
+      }
+      throw err;
+    }
     this.writeTransactionDepth += 1;
+    let outcome: SQLiteTransactionDurationInfo['outcome'] = 'rolled_back';
     try {
       const result = work();
       this.writeTransactionDepth -= 1;
       this.db.run(this.writeTransactionDepth === 0 ? 'COMMIT' : `RELEASE invoker_nested_${this.writeTransactionDepth}`);
       this.dirty = true;
+      outcome = 'committed';
       return result;
     } catch (err) {
       this.writeTransactionDepth = Math.max(0, this.writeTransactionDepth - 1);
@@ -1171,6 +1242,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
         // transaction before we reached this cleanup path.
       }
       throw err;
+    } finally {
+      this.noteTransactionDuration({
+        durationMs: performance.now() - startedAt,
+        outcome,
+      });
     }
   }
 
