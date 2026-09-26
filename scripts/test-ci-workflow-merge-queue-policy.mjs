@@ -424,4 +424,15 @@ for (const checkName of requiredChecks) {
   );
 }
 
+const STALE_GIT_LOCK_CLEANUP = `find "$GITHUB_WORKSPACE/.git" -name '*.lock' -delete 2>/dev/null || true`;
+for (const [jobName, job] of Object.entries(jobs)) {
+  for (const step of job.steps ?? []) {
+    if (step.name !== 'Reclaim workspace') continue;
+    assert(
+      String(step.run ?? '').includes(STALE_GIT_LOCK_CLEANUP),
+      `${jobName} Reclaim workspace must delete stale .git lock files before checkout`,
+    );
+  }
+}
+
 console.log('CI merge-queue policy is valid.');
