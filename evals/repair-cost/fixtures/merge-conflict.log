@@ -1,0 +1,2508 @@
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+CONFLICT (content): Merge conflict in packages/app/src/main.ts
+Auto-merging packages/app/src/main.ts
+CONFLICT (content): Merge conflict in packages/workflow-core/src/orchestrator.ts
+error: could not apply abc1234... fix: repair merge base
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+Could not apply abc1234... fix: repair merge base
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
+<<<<<<< HEAD
+  const x = 1;
+=======
+  const x = 2;
+>>>>>>> origin/master
