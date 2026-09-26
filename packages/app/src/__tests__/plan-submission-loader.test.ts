@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PlanDefinition } from '@invoker/workflow-core';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SQLiteAdapter } from '@invoker/data-store';
+import { InMemoryBus } from '@invoker/test-kit';
+import { Orchestrator, type PlanDefinition } from '@invoker/workflow-core';
 import { AgentRegistry, type ExecutionAgent } from '@invoker/execution-engine';
 
 vi.mock('../plan-backup.js', () => ({
@@ -243,5 +248,47 @@ workflows:
 
     expect(deps.orchestrator.loadPlan).not.toHaveBeenCalled();
     expect(loadedPlans).toHaveLength(0);
+  });
+
+  it('rolls back the submitted workflow when intake fails after task writes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-plan-intake-rollback-'));
+    const dbPath = join(dir, 'invoker.db');
+    let persistence: SQLiteAdapter | undefined;
+    try {
+      persistence = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+      const saveTasks = persistence.saveTasks.bind(persistence);
+      persistence.saveTasks = (workflowId, tasks) => {
+        saveTasks(workflowId, tasks);
+        throw new Error('intake failure after task writes');
+      };
+      const orchestrator = new Orchestrator({
+        persistence,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 1,
+        resolveRepoDefaultBranch: () => 'master',
+      });
+
+      await expect(loadPlanSubmissionBundle(`
+name: Rollback Intake
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: first
+    description: First task
+  - id: second
+    description: Second task
+    dependencies: [first]
+`, {
+        persistence,
+        orchestrator,
+        allowGraphMutation: true,
+        executionAgentRegistry: makeFixedModelRegistry(),
+      })).rejects.toThrow(/intake failure after task writes/);
+
+      expect(persistence.listWorkflows()).toHaveLength(0);
+      expect(persistence.getAllTaskIds()).toHaveLength(0);
+    } finally {
+      persistence?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
