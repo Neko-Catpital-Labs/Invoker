@@ -342,4 +342,29 @@ grep -q '"teamId":"team-from-config"' "$sb/creates.jsonl" \
   || fail "G-one: create payload must carry the configured team id" "$sb/creates.jsonl"
 echo "PASS G: file-linear carries configured team id and fails with no research"
 
+mk_sb
+mkdir -p "$sb/home" "$sb/cwd"
+log="$sb/h.log"
+cat > "$sb/activity.json" <<JSON
+{ "https://github.com/stablyai/orca": [ { "date": "$TODAY", "kind": "feat", "title": "feat(y): idea", "url": "u", "body": "" } ] }
+JSON
+(
+  cd "$sb/cwd"
+  env -u INVOKER_CROSS_REPO_RESEARCH_WORK_DIR \
+    HOME="$sb/home" \
+    INVOKER_CROSS_REPO_RESEARCH_CONFIG_JSON='{"crossRepoResearch":{"linearTeamId":"team-test","maxCandidatesPerSource":1,"maps":{"https://github.com/Neko-Catpital-Labs/Invoker.git":[{"repoUrl":"https://github.com/stablyai/orca","lookbackDays":30}]}}}' \
+    INVOKER_CROSS_REPO_RESEARCH_ACTIVITY_FIXTURE="$sb/activity.json" \
+    INVOKER_CROSS_REPO_RESEARCH_GENERATE_ONLY=1 \
+    node "$REPO_ROOT/scripts/cross-repo-research-watch.mjs"
+) > "$log" 2>&1 || fail "H: watch should exit 0" "$log"
+test ! -e "$sb/cwd/runs" || fail "H: run artifacts must not land in the current directory" "$log"
+test -f "$sb/home/.invoker/cross-repo-research/ledger.json" \
+  || fail "H: default work dir must be ~/.invoker/cross-repo-research" "$log"
+for tpl in 02-research.template.yaml 03-file-linear.template.yaml; do
+  f="$(find "$sb/home/.invoker/cross-repo-research/runs" -name "$tpl" | head -1)"
+  test -n "$f" || fail "H: missing $tpl" "$log"
+  grep -q '^baseBranch:' "$f" || fail "H: $tpl must declare top-level baseBranch for submit-workflow-chain" "$f"
+done
+echo "PASS H: default work dir under home; chain templates declare baseBranch"
+
 echo "All cross-repo-research fixture tests passed."
