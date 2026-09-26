@@ -1345,12 +1345,13 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
     let commitHash: string | undefined;
     let status: 'completed' | 'failed' = effectiveExitCode === 0 ? 'completed' : 'failed';
+    let recordError: string | undefined;
     try {
       const hash = await this.recordTaskResult(cwd, request, effectiveExitCode);
       commitHash = hash ?? undefined;
     } catch (err) {
-      this.emitOutput(executionId,
-        `[${this.type}] recordTaskResult error: ${err}\n`);
+      recordError = `[${this.type}] recordTaskResult error: ${err}`;
+      this.emitOutput(executionId, `${recordError}\n`);
       if (effectiveExitCode === 0) status = 'failed';
     }
 
@@ -1390,6 +1391,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
     if (status === 'failed' && effectiveExitCode === 0 && pushError) {
       error = pushError;
+    }
+    if (status === 'failed' && effectiveExitCode === 0 && recordError && !error) {
+      error = recordError;
     }
 
     const agentSessionId = opts?.agentSessionId;
