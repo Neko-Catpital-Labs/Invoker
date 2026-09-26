@@ -225,7 +225,7 @@ function lensPrompt(lens, slot, targetRepoUrl, sourceRepoUrl, artifactDir) {
   const noop = !candidate;
   return [
     `You are the ${lens.label} lens in a parallel research swarm evaluating whether a source-repo idea should be stolen into the target repo.`,
-    'Do not implement product code. Do not open PRs. Do not label Linear tickets invoker-ready.',
+    'Do not implement product code. Do not open PRs. Do not add or change Linear labels.',
     noop
       ? 'No candidate was assigned to this slot. Write a JSON artifact with lensId, verdict "skip", and an empty findings field, then exit.'
       : `Candidate: ${candidate.title}`,
@@ -247,7 +247,7 @@ function synthesisPrompt(slot, targetRepoUrl, sourceRepoUrl, artifactDir) {
     .join(', ');
   return [
     'You are synthesizing five parallel research lenses (Fit, Peers, Implementations, Adversarial, Effectiveness) into one verdict.',
-    'Do not implement product code. Do not open PRs. Do not label Linear tickets invoker-ready.',
+    'Do not implement product code. Do not open PRs. Do not add or change Linear labels.',
     noop
       ? 'No candidate was assigned to this slot. Write a JSON artifact with verdict skip and title "noop-slot", then exit.'
       : `Candidate: ${candidate.title}`,
@@ -320,7 +320,7 @@ function buildSynthesisTask(slot, targetRepoUrl, sourceRepoUrl, artifactDir) {
     description: |
       Synthesize the five research lenses for candidate slot ${slot.index} into a steal/skip verdict.
       Goal: Produce research-${slot.index}.json with plan-to-invoker fields plus lens findings.
-      Motivation: Human triage needs full Goal/Motivation/Safety/Verify before invoker-ready.
+      Motivation: Human triage needs full Goal/Motivation/Safety/Verify before a ticket is queued for work.
       Safety invariant: No product commits; artifact write only under ${artifactDir}.
       Review claim: The artifact records a justified steal or skip verdict backed by all five lenses.
       Review lane: docs
