@@ -62,7 +62,7 @@ grep -qx 'repoUrl: https://github.com/fake/repo.git' "$primary_plan" \
   || fail "primary plan must target fake/repo" "$(cat "$primary_plan")"
 grep -qx 'repoUrl: https://github.com/other/tools.git' "$other_plan" \
   || fail "second plan must target other/tools" "$(cat "$other_plan")"
-grep -q "key='other/tools#801'" "$other_plan" \
+grep -q -- "--tsv-key 'other/tools#801'" "$other_plan" \
   || fail "second repo ledger key must carry the repo" "$(cat "$other_plan")"
 
 runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
