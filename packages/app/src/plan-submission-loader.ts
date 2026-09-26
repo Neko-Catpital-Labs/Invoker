@@ -90,7 +90,7 @@ export async function loadPlanSubmissionBundle(
         ],
       };
     }
-    backupPlan(plan, undefined, deps.logger);
+    backupPlan(plan, submission.isStack ? undefined : planText, deps.logger);
     const loadedWorkflowId = deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation, staged: options?.staged });
     const workflow = deps.persistence.loadWorkflow?.(loadedWorkflowId)
       ?? deps.persistence.listWorkflows().find((candidate) => candidate.id === loadedWorkflowId);
