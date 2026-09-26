@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe('a launch whose executor returns no workspace path', () => {
-  it.fails('leaves no pool reservation behind', async () => {
+  it('leaves no pool reservation behind', async () => {
     const task = makeTask();
     const start = vi.spyOn(WorktreeExecutor.prototype, 'start').mockResolvedValue({
       executionId: 'exec-1',
