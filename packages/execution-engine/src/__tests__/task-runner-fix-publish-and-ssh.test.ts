@@ -1478,7 +1478,7 @@ describe('TaskRunner', () => {
       expect(getReviewBody).toHaveBeenCalledWith({ identifier: '1', cwd: '/tmp' });
     });
 
-    it('publishReviewStackWithMakePrSkill uses the workflow declared agent, not a fallback chain', async () => {
+    it('publishReviewStackWithMakePrSkill tries the workflow declared agent before fallback agents', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
       process.env.HOME = tempHome;
@@ -1553,7 +1553,7 @@ describe('TaskRunner', () => {
           expect.objectContaining({
             level: 'info',
             message: 'Preparing make-pr review stack publisher',
-            agentCount: 1,
+            agentCount: 2,
           }),
         );
         expect(logEvent).toHaveBeenCalledWith(
@@ -1565,6 +1565,96 @@ describe('TaskRunner', () => {
             artifactCount: 2,
           }),
         );
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('publishReviewStackWithMakePrSkill falls back when the declared agent is usage-limited', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const attempts: string[] = [];
+        const body = [
+          '## Summary', '', 'Published by fallback.', '',
+          '## Review Claim', '', 'The fallback agent can publish after the preferred agent is quota-limited.', '',
+          '## Review Lane', '', 'cleanup', '',
+          '## Review Unit', '', 'routing', '',
+          '## Safety Invariant', '', 'Fallback only runs after an agent availability failure.', '',
+          '## Slice Rationale', '', 'Keeps the merge gate moving without changing merge semantics.', '',
+          '## Non-goals', '', '- No schema relaxation.', '',
+          '## Test Plan', '', '<details>', '<summary>Test Plan</summary>', '', '- [x] pnpm test', '', '</details>', '',
+          '## Revert Plan', '', '<details>', '<summary>Revert Plan</summary>', '', '- Safe to revert? Yes', '', '</details>',
+        ].join('\n');
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attempts.push('claude');
+            return {
+              cmd: 'node',
+              args: ['-e', 'process.stderr.write("You\\u0027ve hit your weekly limit · resets Oct 1, 1am (UTC)");process.exit(1)'],
+              sessionId: 'sess-claude-limit',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attempts.push('codex');
+            return {
+              cmd: 'node',
+              args: ['-e', `var b=${JSON.stringify(body)};process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))`],
+              sessionId: 'sess-codex-ok',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: { logEvent: vi.fn() } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => (name === 'claude' ? claudeAgent : name === 'codex' ? codexAgent : undefined),
+            getOrThrow: vi.fn(),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
+          } as any,
+          cwd: '/tmp',
+        });
+
+        const result = await (executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-1',
+          title: 'Stack',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: 'summary',
+          cwd: '/tmp',
+          mergeNodeTaskId: '__merge__wf-1',
+          expectedGeneration: 28,
+        });
+
+        expect(attempts).toEqual(['claude', 'codex']);
+        expect(result.agentName).toBe('codex');
+        expect(result.artifacts).toEqual([
+          expect.objectContaining({ id: 'only', providerId: '1', generation: 28 }),
+        ]);
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;

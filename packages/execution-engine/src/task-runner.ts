@@ -113,6 +113,10 @@ function failureClassFromThrownError(err: unknown): FailureClass | undefined {
   return undefined;
 }
 
+function isRecoverablePrAuthoringAgentFailure(failureClass: FailureClass | undefined): boolean {
+  return failureClass === 'agent-usage-limit' || failureClass === 'agent-spend-gate';
+}
+
 function isCausedByCodexSpendGate(err: unknown): boolean {
   const seen = new Set<unknown>();
   let current: unknown = err;
@@ -1621,9 +1625,10 @@ export class TaskRunner {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
     }
 
-    const preferredAgentName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
-    const preferredAgent = this.executionAgentRegistry.get(preferredAgentName);
-    const orderedAgents = preferredAgent ? [preferredAgent] : [];
+    const orderedAgents = this.buildAgentFallbackOrder(
+      this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId),
+      this.executionAgentRegistry.listWithCapability('make-pr'),
+    );
     const logProgress = (
       level: 'debug' | 'info' | 'warn' | 'error',
       message: string,
@@ -1820,7 +1825,7 @@ export class TaskRunner {
             errors: bodyErrors,
           });
           errors.push(`${agent.name}: invalid PR body — ${bodyErrors.join('; ')}`);
-          continue;
+          break;
         }
 
         const nowIso = new Date().toISOString();
@@ -1844,13 +1849,17 @@ export class TaskRunner {
         );
         return { artifacts, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
-        failureClass ??= failureClassFromThrownError(err);
+        const agentFailureClass = failureClassFromThrownError(err);
+        failureClass ??= agentFailureClass;
         const message = err instanceof Error ? err.message : String(err);
         logProgress('warn', `${agent.name} make-pr agent failed`, {
           agentName: agent.name,
           error: message,
         });
         errors.push(`${agent.name}: ${message}`);
+        if (!isRecoverablePrAuthoringAgentFailure(agentFailureClass)) {
+          break;
+        }
       }
     }
 
