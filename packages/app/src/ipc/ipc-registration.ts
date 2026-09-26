@@ -6,6 +6,7 @@ import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationAcceptedResult } from '@invoker/contracts';
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
 import type { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
+import type { ChokeBoundaryMetrics } from '../choke-boundary-metrics.js';
 
 export interface GuiMutationPayload {
   channel: string;
@@ -24,6 +25,7 @@ export interface GuiMutationRegistrationContext {
   onMutationOwnerUnavailable?: (reason: string) => void;
   translateGuiMutationToHeadless: (payload: GuiMutationPayload) => TranslatedGuiMutation;
   guiMutationHandlers: OwnerCapabilityRegistry;
+  chokeMetrics?: ChokeBoundaryMetrics;
 }
 
 function throwMutationOwnerUnavailable(
@@ -42,17 +44,27 @@ export function registerGuiMutationHandler<TResult = unknown>(
   context.guiMutationHandlers.register(channel, handler);
   context.ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
     if (context.getOwnerMode()) {
-      return context.guiMutationHandlers.invoke<TResult>(channel, args);
+      try {
+        const result = await context.guiMutationHandlers.invoke<TResult>(channel, args);
+        context.chokeMetrics?.recordRequest('ipc', 'success', { channel });
+        return result;
+      } catch (err) {
+        context.chokeMetrics?.recordRequest('ipc', 'error', { channel });
+        throw err;
+      }
     }
     const translated = context.translateGuiMutationToHeadless({ channel, args });
     if (!translated) {
+      context.chokeMetrics?.recordRequest('ipc', 'no_route', { channel });
       throw new Error(`No owner delegation route is available for ${channel}`);
     }
     try {
-      return await context.getMessageBus().request<typeof translated.request, TResult>(
+      const result = await context.getMessageBus().request<typeof translated.request, TResult>(
         translated.channel,
         translated.request,
       );
+      context.chokeMetrics?.recordRequest('ipc', 'delegated', { channel });
+      return result;
     } catch (err) {
       if (
         err instanceof TransportError
@@ -64,14 +76,18 @@ export function registerGuiMutationHandler<TResult = unknown>(
       ) {
         await context.refreshOwnerRoute();
         try {
-          return await context.getMessageBus().request<typeof translated.request, TResult>(
+          const result = await context.getMessageBus().request<typeof translated.request, TResult>(
             translated.channel,
             translated.request,
           );
+          context.chokeMetrics?.recordRequest('ipc', 'delegated', { channel });
+          return result;
         } catch (retryErr) {
           if (retryErr instanceof TransportError && retryErr.code === TransportErrorCode.NO_HANDLER) {
+            context.chokeMetrics?.recordRequest('ipc', 'owner_unavailable', { channel });
             throwMutationOwnerUnavailable(context, String(retryErr.message ?? retryErr.code));
           }
+          context.chokeMetrics?.recordRequest('ipc', 'error', { channel });
           throw retryErr;
         }
       }
@@ -82,8 +98,10 @@ export function registerGuiMutationHandler<TResult = unknown>(
           || err.code === TransportErrorCode.DISCONNECTED
         )
       ) {
+        context.chokeMetrics?.recordRequest('ipc', 'owner_unavailable', { channel });
         throwMutationOwnerUnavailable(context, String(err.message ?? err.code));
       }
+      context.chokeMetrics?.recordRequest('ipc', 'error', { channel });
       throw err;
     }
   });
@@ -166,6 +184,7 @@ export interface BootstrapStateIpcContext {
     startedAtMs: number,
     extra?: Record<string, unknown>,
   ) => void;
+  chokeMetrics?: ChokeBoundaryMetrics;
 }
 
 export function registerBootstrapStateIpc(context: BootstrapStateIpcContext): void {
@@ -180,6 +199,7 @@ export function registerBootstrapStateIpc(context: BootstrapStateIpcContext): vo
         jsonSizeBytes,
         light: true,
       });
+      context.chokeMetrics?.recordRequest('ipc', 'success', { channel: 'invoker:get-bootstrap-state-sync' });
       event.returnValue = payload;
       return;
     }
@@ -201,6 +221,7 @@ export function registerBootstrapStateIpc(context: BootstrapStateIpcContext): vo
       workflowCount: workflows.length,
       jsonSizeBytes,
     });
+    context.chokeMetrics?.recordRequest('ipc', 'success', { channel: 'invoker:get-bootstrap-state-sync' });
     event.returnValue = payload;
   });
 }
