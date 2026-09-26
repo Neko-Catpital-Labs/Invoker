@@ -40,6 +40,7 @@ import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-co
 import type { WorkerRuntimeController } from './worker-control.js';
 import type { TaskHandleMap } from './execution/task-runner-wiring.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
+import { getChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 
 
 export interface HeadlessDeps {
@@ -347,6 +348,7 @@ export async function dispatchHeadlessRunnableTasks(
     taskRunnerProvider: () => taskExecutor,
     ownerId: `headless-${process.pid}`,
     logger: deps.logger,
+    chokeMetrics: getChokeBoundaryMetrics(),
   });
   deps.logger?.debug?.(
     `[headless] ${context}: polling local launch dispatcher for ${runnable.length} runnable task(s)`,
