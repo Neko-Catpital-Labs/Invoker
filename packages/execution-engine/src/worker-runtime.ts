@@ -32,6 +32,7 @@ export interface WorkerTickContext {
   readonly identity: WorkerIdentity;
   /** What triggered this tick. */
   readonly reason: WorkerTickReason;
+  readonly workKey?: string;
   /** 1-based count of ticks that have started for this runtime. */
   readonly tickNumber: number;
   /** Aborted when `stop()` is requested; ticks should check between units of work. */
@@ -44,8 +45,19 @@ export type WorkerTick = (ctx: WorkerTickContext) => void | Promise<void>;
 
 interface WorkerRuntimeWorkPayload {
   readonly reason: WorkerTickReason;
+  readonly workKey?: string;
   readonly args?: string[];
 }
+
+export interface WorkerRuntimeWorkKeyContext {
+  readonly identity: WorkerIdentity;
+  readonly reason: WorkerTickReason;
+  readonly args?: string[];
+}
+
+export type WorkerRuntimeWorkKeySource = (
+  ctx: WorkerRuntimeWorkKeyContext,
+) => readonly string[];
 
 export interface WorkerHealth {
   consecutiveFailedTicks: number;
@@ -70,6 +82,7 @@ export interface WorkerRuntimeOptions {
   logger: Logger;
   /** Work performed on every tick. */
   onTick: WorkerTick;
+  listWorkKeys?: WorkerRuntimeWorkKeySource;
   workQueueRegistry?: MetricRegistry;
   workQueueName?: string;
   /** Periodic poll interval in ms. `<= 0` disables polling (wakeup-only). */
@@ -217,7 +230,8 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let interval: ReturnType<typeof setInterval> | null = null;
   let startDelayTimer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<boolean> | null = null;
-  let pendingAfterCurrent: WorkerRuntimeWorkPayload | null = null;
+  let activeWorkKey: string | null = null;
+  const pendingAfterCurrent = new Map<string, WorkerRuntimeWorkPayload>();
   let tickNumber = 0;
   let lastTickActivityAt = Date.now();
   let watchdogTimer: NodeJS.Timeout | null = null;
@@ -263,6 +277,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     const ctx: WorkerTickContext = {
       identity,
       reason: payload.reason,
+      workKey: payload.workKey,
       tickNumber,
       signal: abortController.signal,
       args: payload.args,
@@ -286,10 +301,25 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     }
   };
 
+  const listWorkKeys = (payload: WorkerRuntimeWorkPayload): readonly string[] => {
+    if (!options.listWorkKeys) return [UNMIGRATED_WORKER_KEY];
+    try {
+      const keys = options.listWorkKeys({ identity, reason: payload.reason, args: payload.args });
+      return Array.from(new Set(keys.filter((key) => key.length > 0)));
+    } catch (err) {
+      options.logger.error(`[worker:${identity.kind}] listWorkKeys failed`, { ...logFields, reason: payload.reason, err });
+      recordTickFailure(err);
+      return [];
+    }
+  };
+
   const enqueueWork = (payload: WorkerRuntimeWorkPayload): void => {
-    const enqueued = workQueue.enqueue(UNMIGRATED_WORKER_KEY, payload);
-    if (!enqueued) {
-      pendingAfterCurrent = payload;
+    for (const key of listWorkKeys(payload)) {
+      const keyedPayload = { ...payload, workKey: key };
+      const enqueued = workQueue.enqueue(key, keyedPayload);
+      if (!enqueued && activeWorkKey === key) {
+        pendingAfterCurrent.set(key, keyedPayload);
+      }
     }
   };
 
@@ -305,18 +335,22 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       while (!stopped) {
         const work = workQueue.take();
         if (!work) break;
-        pendingAfterCurrent = null;
+        activeWorkKey = work.key;
+        pendingAfterCurrent.delete(work.key);
         succeeded = await runOnce(work.payload);
+        activeWorkKey = null;
         consecutiveFailures = succeeded ? 0 : consecutiveFailures + 1;
         if (succeeded) {
           workQueue.complete(work.key);
         } else {
           workQueue.fail(work.key);
         }
-        if (pendingAfterCurrent && !stopped) {
-          workQueue.enqueue(work.key, pendingAfterCurrent);
+        const followUp = pendingAfterCurrent.get(work.key);
+        if (followUp && !stopped) {
+          pendingAfterCurrent.delete(work.key);
+          workQueue.enqueue(work.key, followUp);
         }
-        if (pendingAfterCurrent !== null && !succeeded && !stopped) {
+        if (followUp !== undefined && !succeeded && !stopped) {
           const backoffMs = Math.min(
             (options.backoffBaseMs ?? 250) * 2 ** (consecutiveFailures - 1),
             options.backoffMaxMs ?? 30_000,
@@ -347,7 +381,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const beginStop = (): void => {
     if (stopped) return;
     stopped = true;
-    pendingAfterCurrent = null;
+    pendingAfterCurrent.clear();
     if (!abortController.signal.aborted) {
       if (inFlight) {
         options.logger.warn(`[worker:${identity.kind}] aborting in-flight tick`, {
