@@ -121,6 +121,31 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
     expect(retryRow?.status).toBe('queued');
   });
 
+  it('logs the failure it is retrying at info level, with the task error', async () => {
+    const harness = makeHarness(makeFailedTask({
+      execution: { exitCode: 1, error: 'pushBranchToRemote failed: remote hung up' } as never,
+    }));
+    const info = vi.fn();
+    const tick = createAutoFixRecoveryTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger: { ...logger, info },
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 3,
+      getAutoFixAgent: () => 'codex',
+    });
+
+    await tick({ reason: 'poll' } as never);
+
+    const submitted = info.mock.calls.find(([msg]) => String(msg).includes('worker-autofix-bare-retry-submitted'));
+    expect(submitted).toBeDefined();
+    expect(submitted![1]).toMatchObject({
+      taskId: 'wf-1/build',
+      failureExitCode: 1,
+      failureError: 'pushBranchToRemote failed: remote hung up',
+    });
+  });
+
   it('escalates to invoker:fix-with-agent on the next tick once the bare retry row exists', async () => {
     const harness = makeHarness();
     const tick = createAutoFixRecoveryTick({
