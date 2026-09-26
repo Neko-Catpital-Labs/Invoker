@@ -132,6 +132,7 @@ import {
   resolveE2eAutoFixWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
   resolveSpendCircuitBreakerWorkerConfig,
+  resolveThrashDetectorWorkerConfig,
   type InvokerConfig,
 } from './config.js';
 import {
@@ -518,6 +519,10 @@ function buildRegisteredOwnerWorkerDeps(
         name: target.name,
         connection: target.connection,
       })),
+    },
+    thrashDetector: {
+      ...resolveThrashDetectorWorkerConfig(invokerConfig),
+      classifyAutoFixRecoveryPhase,
     },
     agentLoginWatch: {
       ...resolveAgentLoginWatchWorkerConfig(invokerConfig),

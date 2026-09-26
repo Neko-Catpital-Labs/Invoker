@@ -4,6 +4,7 @@ import {
   resolveHeadlessDiskHeadroomConfig,
   resolveHeadlessInfraRepairConfig,
   resolveHeadlessCatstackDeployConfig,
+  resolveHeadlessThrashDetectorConfig,
   resolveHeadlessSelfDeployConfig,
   runHeadless,
 } from '../headless.js';
@@ -146,6 +147,25 @@ describe('headless worker registry', () => {
     const config = resolveHeadlessCatstackDeployConfig({});
     expect(config.intervalMs).toBe(15 * 60_000);
     expect(config.remoteTargets).toEqual([]);
+  });
+
+  it('maps configured thrash-detector fields and classifier into worker dependencies', () => {
+    const config = resolveHeadlessThrashDetectorConfig({
+      thrashDetector: {
+        enabled: true,
+        intervalMinutes: 7,
+        thresholdCount: 4,
+        windowHours: 18,
+      },
+    });
+
+    expect(config).toEqual({
+      enabled: true,
+      intervalMs: 7 * 60_000,
+      thresholdCount: 4,
+      windowMs: 18 * 3_600_000,
+      classifyAutoFixRecoveryPhase: expect.any(Function),
+    });
   });
 
   it('maps configured intervalMinutes and paths into self-deploy worker dependencies', () => {

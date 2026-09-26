@@ -25,6 +25,7 @@ import {
   DEFAULT_PR_MAINTENANCE_TARGET_REPO,
   DEFAULT_E2E_AUTOFIX_TARGET_REPO,
   resolveSpendCircuitBreakerWorkerConfig,
+  resolveThrashDetectorWorkerConfig,
 } from '../config.js';
 import { validateInvokerConfig } from '../config-validation.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -1027,6 +1028,59 @@ describe('catstackDeploy config', () => {
     expect(() => validateInvokerConfig({
       catstackDeploy: { intervalMinutes: 1.5 },
     })).toThrow(/catstackDeploy.intervalMinutes must be an integer > 0/);
+  });
+});
+
+describe('thrashDetector config', () => {
+  it('accepts enabled, intervalMinutes, thresholdCount, and windowHours', () => {
+    const config = validateInvokerConfig({
+      thrashDetector: {
+        enabled: true,
+        intervalMinutes: 30,
+        thresholdCount: 4,
+        windowHours: 12,
+      },
+    });
+    expect(config.thrashDetector).toEqual({
+      enabled: true,
+      intervalMinutes: 30,
+      thresholdCount: 4,
+      windowHours: 12,
+    });
+  });
+
+  it('rejects invalid numeric fields', () => {
+    expect(() => validateInvokerConfig({
+      thrashDetector: { intervalMinutes: 0 },
+    })).toThrow(/thrashDetector.intervalMinutes must be an integer > 0/);
+    expect(() => validateInvokerConfig({
+      thrashDetector: { thresholdCount: 1.5 },
+    })).toThrow(/thrashDetector.thresholdCount must be an integer > 0/);
+    expect(() => validateInvokerConfig({
+      thrashDetector: { windowHours: -1 },
+    })).toThrow(/thrashDetector.windowHours must be an integer > 0/);
+  });
+
+  it('resolves defaults and configured values for worker runtime deps', () => {
+    expect(resolveThrashDetectorWorkerConfig({})).toEqual({
+      enabled: undefined,
+      intervalMs: 60 * 60_000,
+      thresholdCount: 3,
+      windowMs: 24 * 3_600_000,
+    });
+    expect(resolveThrashDetectorWorkerConfig({
+      thrashDetector: {
+        enabled: true,
+        intervalMinutes: 5,
+        thresholdCount: 2,
+        windowHours: 6,
+      },
+    })).toEqual({
+      enabled: true,
+      intervalMs: 5 * 60_000,
+      thresholdCount: 2,
+      windowMs: 6 * 3_600_000,
+    });
   });
 });
 

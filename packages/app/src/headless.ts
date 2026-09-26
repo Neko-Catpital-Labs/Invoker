@@ -41,7 +41,9 @@ import {
   resolveAgentLoginWatchWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
   resolveSpendCircuitBreakerWorkerConfig,
+  resolveThrashDetectorWorkerConfig,
 } from './config.js';
+import { classifyAutoFixRecoveryPhase } from './recovery-worker-observability.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
 import {
   isDispatchableLaunch,
@@ -521,6 +523,15 @@ export function resolveHeadlessCatstackDeployConfig(
   };
 }
 
+export function resolveHeadlessThrashDetectorConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['thrashDetector']> {
+  return {
+    ...resolveThrashDetectorWorkerConfig(invokerConfig),
+    classifyAutoFixRecoveryPhase,
+  };
+}
+
 export function resolveHeadlessAgentLoginWatchConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
 ): NonNullable<WorkerRuntimeDependencies['agentLoginWatch']> {
@@ -720,6 +731,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      thrashDetector: resolveHeadlessThrashDetectorConfig(deps.invokerConfig),
       agentLoginWatch: resolveHeadlessAgentLoginWatchConfig(deps.invokerConfig),
       messageBus: deps.messageBus,
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),

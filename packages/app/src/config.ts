@@ -15,6 +15,7 @@ import type {
   E2eAutoFixWorkerConfig,
   PrMaintenanceWorkerConfig,
   SpendCircuitBreakerWorkerConfig,
+  ThrashDetectorWorkerConfig,
 } from '@invoker/execution-engine';
 import { DEFAULT_CODEX_DAILY_TOKEN_BUDGET } from '@invoker/execution-engine';
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
@@ -234,6 +235,17 @@ export interface CatstackDeployConfig {
 
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
+
+export interface ThrashDetectorConfig {
+  enabled?: boolean;
+  intervalMinutes?: number;
+  thresholdCount?: number;
+  windowHours?: number;
+}
+
+export const DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES = 60;
+export const DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT = 3;
+export const DEFAULT_THRASH_DETECTOR_WINDOW_HOURS = 24;
 
 export interface AgentLoginWatchConfig {
   intervalMinutes?: number;
@@ -645,6 +657,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  thrashDetector?: ThrashDetectorConfig;
   agentLoginWatch?: AgentLoginWatchConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
@@ -934,6 +947,18 @@ export function resolveSpendCircuitBreakerWorkerConfig(
         },
       })),
     },
+  };
+}
+
+export function resolveThrashDetectorWorkerConfig(
+  invokerConfig: InvokerConfig,
+): ThrashDetectorWorkerConfig {
+  const configured = invokerConfig.thrashDetector;
+  return {
+    enabled: configured?.enabled,
+    intervalMs: (configured?.intervalMinutes ?? DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES) * 60_000,
+    thresholdCount: configured?.thresholdCount ?? DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+    windowMs: (configured?.windowHours ?? DEFAULT_THRASH_DETECTOR_WINDOW_HOURS) * 3_600_000,
   };
 }
 
