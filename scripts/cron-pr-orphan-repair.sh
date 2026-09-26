@@ -153,6 +153,7 @@ scan_repo() {
     {
       printf 'name: repair-pr-%s-%s\n' "$num" "$fingerprint"
       printf 'onFinish: none\n'
+      printf 'mergeMode: no_op\n'
       printf 'repoUrl: https://github.com/%s.git\n' "$repo"
       printf 'baseBranch: %s\n' "$base_ref"
       printf 'tasks:\n'

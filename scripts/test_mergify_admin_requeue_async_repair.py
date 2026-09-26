@@ -81,8 +81,8 @@ class AsyncRepairPlanTests(unittest.TestCase):
             pr(), "tbot", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
         )
         for plan, expected_task_ids, expected_merge_mode, expected_on_finish in (
-            (checks_plan, ["repair", "normalize", "safe-push"], "manual", "none"),
-            (rebase_plan, ["repair", "safe-push"], "manual", "none"),
+            (checks_plan, ["repair", "normalize", "safe-push"], "no_op", "none"),
+            (rebase_plan, ["repair", "safe-push"], "no_op", "none"),
             (bot_thread_plan, ["repair", "safe-push", "resolve-thread"], "external_review", "pull_request"),
         ):
             with self.subTest(plan=plan.plan_name):
