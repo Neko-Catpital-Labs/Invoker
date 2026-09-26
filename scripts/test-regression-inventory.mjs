@@ -62,6 +62,7 @@ const REQUIRED_MANUAL_IDS = [
   'drift-battery',
   'e2e-regression-watch-live-sweep',
   'sqljs-oom-diagnostic',
+  'repair-cost-eval-live',
 ];
 
 const nightly = candidatesForTier(candidates, 'nightly');
