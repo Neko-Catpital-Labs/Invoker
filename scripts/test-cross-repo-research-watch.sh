@@ -360,7 +360,7 @@ JSON
 test ! -e "$sb/cwd/runs" || fail "H: run artifacts must not land in the current directory" "$log"
 test -f "$sb/home/.invoker/cross-repo-research/ledger.json" \
   || fail "H: default work dir must be ~/.invoker/cross-repo-research" "$log"
-for tpl in 02-research.template.yaml 03-file-linear.template.yaml; do
+for tpl in 01-discover.yaml 02-research.template.yaml 03-file-linear.template.yaml; do
   f="$(find "$sb/home/.invoker/cross-repo-research/runs" -name "$tpl" | head -1)"
   test -n "$f" || fail "H: missing $tpl" "$log"
   grep -q '^baseBranch:' "$f" || fail "H: $tpl must declare top-level baseBranch for submit-workflow-chain" "$f"
@@ -394,6 +394,7 @@ for n in 1 2 3; do
 done
 grep -q 'workflowId: "wf-live-1"' "$sb/calls/2.yaml" || fail "I: research must depend on discover workflow id" "$sb/calls/2.yaml"
 grep -q 'workflowId: "wf-live-2"' "$sb/calls/3.yaml" || fail "I: file-linear must depend on research workflow id" "$sb/calls/3.yaml"
+grep -q '^baseBranch: master$' "$sb/calls/1.yaml" || fail "I: discover must stay on master" "$sb/calls/1.yaml"
 grep -q '^baseBranch: master$' "$sb/calls/2.yaml" || fail "I: research must stay on master" "$sb/calls/2.yaml"
 grep -q '^baseBranch: master$' "$sb/calls/3.yaml" || fail "I: file-linear must stay on master" "$sb/calls/3.yaml"
 grep -q '"fingerprints": {}' "$sb/work/ledger.json" && fail "I: ledger must record the submitted candidate" "$sb/work/ledger.json"

@@ -272,6 +272,7 @@ function buildDiscoverWorkflow({ targetRepoUrl, sourceRepoUrl, candidatesPath, l
 onFinish: none
 mergeMode: no_op
 repoUrl: ${yamlQuote(targetRepoUrl)}
+baseBranch: master
 
 tasks:
   - id: discover-candidates
