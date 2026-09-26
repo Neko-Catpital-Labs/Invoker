@@ -226,8 +226,12 @@ async function delegateGenericReadQuery(
   args: string[],
   bus: MessageBus,
   refreshMessageBus?: () => Promise<MessageBus>,
+  standaloneMode = false,
 ): Promise<boolean> {
   if (!isGenericDelegatableReadCommand(args)) return false;
+
+  const liveWritableOwner = hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'));
+  if (standaloneMode && !liveWritableOwner && bus instanceof IpcBus) return false;
 
   let messageBus = bus;
   let owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
@@ -235,7 +239,7 @@ async function delegateGenericReadQuery(
     messageBus = await refreshMessageBus();
     owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
   }
-  if (!owner && !hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))) return false;
+  if (!owner && !liveWritableOwner) return false;
 
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -343,7 +347,7 @@ async function delegateReadOnlyQuery(
   const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
   const isActionGraph = args[0] === 'query' && args[1] === 'action-graph';
   if (!isUiPerf && !isQueue && !isActionGraph) {
-    return delegateGenericReadQuery(args, bus, refreshMessageBus);
+    return delegateGenericReadQuery(args, bus, refreshMessageBus, process.env.INVOKER_HEADLESS_STANDALONE === '1');
   }
   if (isUiPerf && args.includes('--reset')) {
     throw new Error('query ui-perf --reset is not a read-only query');
