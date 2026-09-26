@@ -16,3 +16,4 @@ bash scripts/repro/repro-pr-orphan-admin-bypass-race.sh
 bash scripts/test-pr-orphan-repair-scan-budget.sh
 bash scripts/test-pr-orphan-repair-latest-check-run.sh
 bash scripts/test-pr-orphan-repair-plans-validate.sh
+bash scripts/test-pr-orphan-repair-missing-head-ref.sh

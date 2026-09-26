@@ -15,7 +15,8 @@ State schema (see scripts/repro/fixtures/fake-gh/scenarios/*.json):
       "isDraft": false, "baseRefName": "master", "headRefName": "stack/501",
       "headRefOid": "<40-hex>", "mergeStateStatus": "DIRTY",
       "mergeable": "CONFLICTING", "labels": ["admin-bypass"],
-      "reviewThreads": [], "checks": {"*": "SUCCESS", "PR Body": "FAILURE"}
+      "reviewThreads": [], "checks": {"*": "SUCCESS", "PR Body": "FAILURE"},
+      "headRefMissing": false
     }],
     "issue_comments": {"501": [ ...gh api issues/N/comments shape... ]},
     "job_logs": {"2": "job log text"}
@@ -226,6 +227,22 @@ def main() -> None:
             status = state.get("compare_status", {}).get(f"{base_ref}...{head_sha}", "identical")
             print(json.dumps({"status": status}))
             return
+        ref_match = re.fullmatch(r"repos/[^/]+/[^/]+/git/ref/heads/(.+)", path)
+        if ref_match and flag_value("--method") in (None, "GET"):
+            head_ref = ref_match.group(1)
+            for pr in state.get("prs", []):
+                if pr.get("headRefName") != head_ref:
+                    continue
+                if pr.get("headRefMissing", False):
+                    print(f"fake gh: ref not found: heads/{head_ref}", file=sys.stderr)
+                    sys.exit(1)
+                print(json.dumps({
+                    "ref": f"refs/heads/{head_ref}",
+                    "object": {"sha": pr.get("headRefOid", "")},
+                }))
+                return
+            print(f"fake gh: ref not found: heads/{head_ref}", file=sys.stderr)
+            sys.exit(1)
         pulls_match = re.fullmatch(r"repos/[^/]+/[^/]+/pulls", path)
         if pulls_match and flag_value("--method") == "POST":
             payload = json.loads(STDIN or "{}")

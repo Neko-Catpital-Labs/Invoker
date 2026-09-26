@@ -44,6 +44,14 @@ JSON
 cat > "$TMP/bin/gh" <<EOF
 #!/usr/bin/env bash
 if [ "\$1 \$2" = "pr list" ]; then cat "$TMP/prs.json"; exit 0; fi
+if [ "\$1" = "api" ] && [ "\$2" = "repos/fake/repo/git/ref/heads/feature/901" ]; then
+  printf '{"object":{"sha":"9010000000000000000000000000000000000000"}}\n'
+  exit 0
+fi
+if [ "\$1" = "api" ] && [ "\$2" = "repos/fake/repo/git/ref/heads/feature/902" ]; then
+  printf '{"object":{"sha":"9020000000000000000000000000000000000000"}}\n'
+  exit 0
+fi
 exit 0
 EOF
 chmod +x "$TMP/bin/gh"
@@ -66,6 +74,7 @@ out="$(
   PATH="$TMP/bin:$PATH" \
   HOME="$TMP/home" \
   INVOKER_GITHUB_TARGET_REPO="fake/repo" \
+  INVOKER_GITHUB_TARGET_REPOS="fake/repo" \
   INVOKER_PR_CRON_AUTHOR="fake-bot" \
   INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \

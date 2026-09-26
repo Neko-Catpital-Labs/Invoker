@@ -141,6 +141,18 @@ scan_repo() {
     url="$(jq -r '.url' <<<"$pr")"
     head_ref="$(jq -r '.headRefName' <<<"$pr")"
     base_ref="$(jq -r '.baseRefName' <<<"$pr")"
+    if ! remote_ref_json="$(gh api "repos/$repo/git/ref/heads/$head_ref" </dev/null 2>/dev/null)"; then
+      log_line "$label: head branch $head_ref is unavailable on $repo; skipping"
+      continue
+    fi
+    if ! remote_head_oid="$(jq -er '.object.sha // empty' <<<"$remote_ref_json" 2>/dev/null)"; then
+      log_line "$label: head branch $head_ref did not resolve to a commit on $repo; skipping"
+      continue
+    fi
+    if [ "$remote_head_oid" != "$head_oid" ]; then
+      log_line "$label: head branch $head_ref is $remote_head_oid on $repo; expected $head_oid; skipping"
+      continue
+    fi
     summary="$(printf '%s; ' "${blockers[@]}")"
     q_head_ref="$(shell_quote "$head_ref")"
     q_head_oid="$(shell_quote "$head_oid")"
