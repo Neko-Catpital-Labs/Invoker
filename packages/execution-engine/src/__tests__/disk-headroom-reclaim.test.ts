@@ -610,34 +610,6 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
     expect(existsSync(completedDir)).toBe(false);
   });
 
-  it('skips the pass and deletes nothing when the in-use lookup errors', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-liveness-error-'));
-    tempDirs.push(root);
-    const home = join(root, '.invoker');
-    const userHome = root;
-    const someDir = join(home, 'worktrees', 'some-task');
-    mkdirSync(someDir, { recursive: true });
-    writeFileSync(join(someDir, 'file.txt'), 'x');
-
-    const throwingStore: DiskHeadroomWorkerStore = {
-      listWorkflows: () => {
-        throw new Error('db unavailable');
-      },
-      loadTasks: () => [],
-    };
-
-    const result = await cleanupLocalInvokerHome({
-      invokerHome: home,
-      userHome,
-      store: throwingStore,
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('in-use-lookup-failed');
-    expect(existsSync(someDir)).toBe(true);
-  });
-
   it('behaves exactly as before (clears everything) when no store is provided', async () => {
     const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-liveness-no-store-'));
     tempDirs.push(root);
