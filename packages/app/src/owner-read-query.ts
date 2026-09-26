@@ -8,6 +8,7 @@ import type {
   WorkerDecisionsResponse,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
+import type { ChokeBoundarySnapshot } from './choke-boundary-metrics.js';
 import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
@@ -36,6 +37,7 @@ export interface OwnerReadQueryHandlers {
   onActivity?: () => void;
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
+  getChokeSnapshot: () => ChokeBoundarySnapshot;
   getQueueStatus: () => Record<string, unknown>;
   listWorkerActionHistory: (request: WorkerActionHistoryRequest) => WorkerActionHistoryResponse;
   listWorkerDecisions: (request: WorkerDecisionsRequest) => WorkerDecisionsResponse;
@@ -113,6 +115,9 @@ export function answerOwnerReadQuery(
     case 'ui-perf':
       if (reset) handlers.resetUiPerfStats();
       return { ownerMode: handlers.ownerModeLabel, ...handlers.getUiPerfStats() };
+    case 'choke':
+      if (reset) throw new Error('query choke --reset is not supported by the choke metrics registry');
+      return { ownerMode: handlers.ownerModeLabel, ...handlers.getChokeSnapshot() };
     case 'queue':
       return handlers.getQueueStatus();
     case 'worker-status':
@@ -219,6 +224,7 @@ export interface OwnerReadQueryDeps {
   onActivity?: () => void;
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
+  getChokeSnapshot: () => ChokeBoundarySnapshot;
   getStreamSequence: () => number;
   getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkers: () => WorkerStatusSnapshot;
@@ -238,6 +244,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     onActivity: deps.onActivity,
     getUiPerfStats: deps.getUiPerfStats,
     resetUiPerfStats: deps.resetUiPerfStats,
+    getChokeSnapshot: deps.getChokeSnapshot,
     getQueueStatus: () => orchestrator.getQueueStatus({ refresh: false }) as unknown as Record<string, unknown>,
     getWorkerStatus: deps.getWorkerStatus,
     getWorkers: deps.getWorkers,

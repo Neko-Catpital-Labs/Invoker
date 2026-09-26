@@ -2123,6 +2123,7 @@ function startHeadlessMode(): void {
             onActivity: noteStandaloneOwnerActivity,
             getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
             resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
+            getChokeSnapshot: () => getChokeBoundaryMetrics().getSnapshot(),
             getStreamSequence: () => 0,
             getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
               registry: createRegisteredWorkerRegistry(),
@@ -3398,6 +3399,7 @@ startMainProcessBootstrap({
           ownerModeLabel: 'gui',
           getUiPerfStats: () => getUiPerfStats(),
           resetUiPerfStats: () => resetUiPerfStats(),
+          getChokeSnapshot: () => getChokeBoundaryMetrics().getSnapshot(),
           getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
             registry: createRegisteredWorkerRegistry(),
             persistence,
