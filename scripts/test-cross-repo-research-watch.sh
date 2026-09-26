@@ -477,4 +477,47 @@ test "$(grep -c '"teamId"' "$sb/creates.jsonl")" = "1" || fail "L: a retried fil
 grep -q "STUB-7" "$sb/l-2.log" || fail "L: the skipped retry must name the ticket already filed" "$sb/l-2.log"
 echo "PASS L: retrying the filing step does not create a duplicate ticket"
 
+mk_sb
+cat > "$sb/activity.json" <<JSON
+{ "https://github.com/stablyai/orca": [ { "date": "$TODAY", "kind": "feat", "title": "feat(m): idea", "url": "u", "body": "" } ] }
+JSON
+mkdir -p "$sb/work"
+printf '{ "fingerprints": { "abc": ' > "$sb/work/ledger.json"
+cp "$sb/work/ledger.json" "$sb/ledger.before"
+cat > "$sb/bin/invoker-cli" <<STUB
+#!/usr/bin/env bash
+echo called >> "$sb/cli-calls"
+echo '{"workflow":{"id":"wf-should-not-happen"}}'
+STUB
+chmod +x "$sb/bin/invoker-cli"
+log="$sb/m.log"
+if env \
+  INVOKER_CROSS_REPO_RESEARCH_CLI="$sb/bin/invoker-cli" \
+  INVOKER_CROSS_REPO_RESEARCH_CONFIG_JSON='{"crossRepoResearch":{"linearTeamId":"team-test","maxCandidatesPerSource":1,"maps":{"https://github.com/Neko-Catpital-Labs/Invoker.git":[{"repoUrl":"https://github.com/stablyai/orca","lookbackDays":30}]}}}' \
+  INVOKER_CROSS_REPO_RESEARCH_ACTIVITY_FIXTURE="$sb/activity.json" \
+  INVOKER_CROSS_REPO_RESEARCH_WORK_DIR="$sb/work" \
+  node "$REPO_ROOT/scripts/cross-repo-research-watch.mjs" > "$log" 2>&1; then
+  fail "M: a corrupt ledger must stop the sweep instead of re-filing everything" "$log"
+fi
+test ! -e "$sb/cli-calls" || fail "M: nothing may be submitted when the ledger is unreadable" "$log"
+cmp -s "$sb/work/ledger.json" "$sb/ledger.before" || fail "M: the corrupt ledger must be left untouched for inspection" "$log"
+grep -q "ledger" "$log" || fail "M: the failure must name the ledger" "$log"
+echo "PASS M: a corrupt ledger stops the sweep and submits nothing"
+
+mk_sb
+cat > "$sb/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+echo "<html>rate limited</html>"
+STUB
+chmod +x "$sb/bin/gh"
+log="$sb/n.log"
+env PATH="$sb/bin:$PATH" \
+  INVOKER_CROSS_REPO_RESEARCH_CONFIG_JSON='{"crossRepoResearch":{"linearTeamId":"team-test","maxCandidatesPerSource":1,"maps":{"https://github.com/Neko-Catpital-Labs/Invoker.git":[{"repoUrl":"https://github.com/stablyai/orca","lookbackDays":30}]}}}' \
+  INVOKER_CROSS_REPO_RESEARCH_WORK_DIR="$sb/work" \
+  INVOKER_CROSS_REPO_RESEARCH_GENERATE_ONLY=1 \
+  node "$REPO_ROOT/scripts/cross-repo-research-watch.mjs" > "$log" 2>&1 \
+  || fail "N: an unreadable activity response should not crash the sweep" "$log"
+grep -q "unparseable gh activity" "$log" || fail "N: an unreadable activity response must be logged" "$log"
+echo "PASS N: unreadable GitHub activity is logged, not silently treated as empty"
+
 echo "All cross-repo-research fixture tests passed."
