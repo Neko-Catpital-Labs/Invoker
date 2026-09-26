@@ -101,9 +101,11 @@ _WORKFLOW_ID_RE = re.compile(r"(?:Workflow ID:|workflow:)\s*(wf-[^\s\\'\",]+)")
 
 
 def _write_plan_header(
-    *, name: str, base_branch: str, repo: str, merge_mode: str = "manual", on_finish: str = "none",
+    *, name: str, base_branch: str, repo: str, merge_mode: str | None = None, on_finish: str = "none",
     description: str | None = None,
 ) -> str:
+    if merge_mode is None:
+        merge_mode = "no_op" if on_finish == "none" else "manual"
     description_line = f"description: {_yaml_str(description)}\n" if description else ""
     return (
         f"name: {name}\n"
