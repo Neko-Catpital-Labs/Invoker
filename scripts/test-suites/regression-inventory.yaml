@@ -200,3 +200,17 @@ candidates:
       Calls the live Discord API with a real bot token and writes to a
       dedicated test guild, so it needs credentials a CI job does not hold;
       without them it exits 2 (UNCHECKED), never 0.
+
+  - id: repair-cost-eval-live
+    tier: manual
+    hermetic: false
+    description: >-
+      Opt-in N=5 A/B canary comparing split repair prompts vs a combined-status
+      coordinator that only reads bash status lines. Measures real Codex
+      inclusive token medians; never cats raw failure logs into the session.
+    script: scripts/run-repair-cost-eval-live.sh
+    command: INVOKER_REPAIR_COST_EVAL_LIVE=1 bash scripts/run-repair-cost-eval-live.sh
+    reason: >-
+      Spends real Codex API tokens (default N=5 per arm). Inert unless
+      INVOKER_REPAIR_COST_EVAL_LIVE=1 is set by a human; must never run from
+      pnpm test, nightly tooling, or required CI.
