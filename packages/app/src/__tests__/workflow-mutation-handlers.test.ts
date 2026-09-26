@@ -70,6 +70,47 @@ describe('buildWorkerMutationHandlers', () => {
     expect(deleteWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it('logs each unfinished task and its error before retiring the workflow', async () => {
+    const calls: string[] = [];
+    const warn = vi.fn((msg: string) => { calls.push(`warn:${msg}`); });
+    const deleteWorkflow = vi.fn(async () => { calls.push('delete'); return { ok: true, data: undefined }; });
+    const handlers = buildWorkerMutationHandlers({
+      ...fakeDeps(),
+      logger: { info: () => {}, error: () => {}, warn, debug: () => {} } as never,
+      commandService: { deleteWorkflow } as never,
+      idleTaskCleanup: {
+        store: {
+          listWorkflows: () => [{
+            id: 'wf-failed-old',
+            name: 'failed old',
+            status: 'failed',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+          }],
+          loadTasks: () => [
+            { id: 'wf-failed-old/filer', status: 'failed', execution: { exitCode: 1, error: 'pushBranchToRemote failed: remote hung up' } },
+            { id: 'wf-failed-old/done', status: 'completed', execution: {} },
+          ] as never,
+        },
+        now: () => new Date('2026-08-31T00:00:00.000Z').getTime(),
+        idleThresholdMs: 48 * 60 * 60_000,
+      },
+    });
+
+    await handlers.get(IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL)!('wf-failed-old');
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('retiring workflow wf-failed-old'),
+      expect.objectContaining({
+        taskId: 'wf-failed-old/filer',
+        status: 'failed',
+        exitCode: 1,
+        error: 'pushBranchToRemote failed: remote hung up',
+      }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ taskId: 'wf-failed-old/done' }));
+    expect(calls.indexOf('delete')).toBeGreaterThan(calls.findIndex((c) => c.startsWith('warn:')));
+  });
+
   it.each(['running', 'fixing_with_ai', 'future_task_state'])(
     'revalidates a queued age-based retirement against current %s task state',
     async (currentStatus) => {
