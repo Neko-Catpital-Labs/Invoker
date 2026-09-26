@@ -270,5 +270,13 @@ describe('FailureClassifier.agentUsageResetAtMs', () => {
   it('returns undefined when the message names no reset time', () => {
     expect(FailureClassifier.agentUsageResetAtMs('rate_limit_exceeded', failedAt)).toBeUndefined();
   });
+
+  it('returns undefined for an out-of-range hour', () => {
+    expect(FailureClassifier.agentUsageResetAtMs('resets 13:50am (UTC)', failedAt)).toBeUndefined();
+  });
+
+  it('returns undefined for an out-of-range minute', () => {
+    expect(FailureClassifier.agentUsageResetAtMs('resets 3:99am (UTC)', failedAt)).toBeUndefined();
+  });
 });
 
