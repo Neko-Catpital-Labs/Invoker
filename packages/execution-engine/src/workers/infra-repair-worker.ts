@@ -105,8 +105,8 @@ export interface InfraRepairWorkerStore {
   updateTask?(taskId: string, changes: TaskStateChanges): void;
   /** Bounded, newest-first lookup — see SQLiteAdapter.getRecentEventsOfType. */
   getRecentEventsOfType?(taskId: string, eventType: string, limit: number): TaskEvent[];
-  getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
-  upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
