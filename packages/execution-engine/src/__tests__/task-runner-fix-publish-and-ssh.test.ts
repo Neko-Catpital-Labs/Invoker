@@ -1478,7 +1478,7 @@ describe('TaskRunner', () => {
       expect(getReviewBody).toHaveBeenCalledWith({ identifier: '1', cwd: '/tmp' });
     });
 
-    it('publishReviewStackWithMakePrSkill uses the workflow declared agent, not a fallback chain', async () => {
+    it('publishReviewStackWithMakePrSkill tries the workflow declared agent before fallback agents', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
       process.env.HOME = tempHome;
@@ -1498,7 +1498,7 @@ describe('TaskRunner', () => {
             attempts.push('claude');
             return {
               cmd: 'node',
-              args: ['-e', 'var b=["## Summary","","Slice prose.","","## Review Claim","","c","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","s","","## Slice Rationale","","r","","## Non-goals","- none","","## Test Plan","- [x] pnpm test","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master",body:b},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"],body:b}]}))'],
+              args: ['-e', 'process.stderr.write("You have hit your weekly limit; resets Oct 1, 1am UTC");process.exit(1)'],
               sessionId: 'sess-claude',
             };
           },
@@ -1511,7 +1511,11 @@ describe('TaskRunner', () => {
           bundledSkills: ['make-pr'],
           buildCommand: () => {
             attempts.push('codex');
-            throw new Error('codex must not be invoked when claude is the declared agent');
+            return {
+              cmd: 'node',
+              args: ['-e', 'var b=["## Summary","","Slice prose.","","## Review Claim","","c","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","s","","## Slice Rationale","","r","","## Non-goals","- none","","## Test Plan","- [x] pnpm test","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master",body:b},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"],body:b}]}))'],
+              sessionId: 'sess-codex',
+            };
           },
           buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
         };
@@ -1543,8 +1547,8 @@ describe('TaskRunner', () => {
           expectedGeneration: 26,
         });
 
-        expect(attempts).toEqual(['claude']);
-        expect(result.agentName).toBe('claude');
+        expect(attempts).toEqual(['claude', 'codex']);
+        expect(result.agentName).toBe('codex');
         expect(result.artifacts[1].dependsOn).toEqual(['contracts']);
         expect(result.artifacts.map((a: any) => a.generation)).toEqual([26, 26]);
         expect(logEvent).toHaveBeenCalledWith(
@@ -1553,7 +1557,7 @@ describe('TaskRunner', () => {
           expect.objectContaining({
             level: 'info',
             message: 'Preparing make-pr review stack publisher',
-            agentCount: 1,
+            agentCount: 2,
           }),
         );
         expect(logEvent).toHaveBeenCalledWith(

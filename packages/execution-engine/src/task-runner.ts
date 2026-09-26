@@ -1621,9 +1621,10 @@ export class TaskRunner {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
     }
 
-    const preferredAgentName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
-    const preferredAgent = this.executionAgentRegistry.get(preferredAgentName);
-    const orderedAgents = preferredAgent ? [preferredAgent] : [];
+    const orderedAgents = this.buildAgentFallbackOrder(
+      this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId),
+      this.executionAgentRegistry.listWithCapability('make-pr'),
+    );
     const logProgress = (
       level: 'debug' | 'info' | 'warn' | 'error',
       message: string,
