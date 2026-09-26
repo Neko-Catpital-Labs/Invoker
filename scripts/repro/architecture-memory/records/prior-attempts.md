@@ -42,3 +42,14 @@ It ran no new trial and wrote no new evaluator code. It cherry-picked `g3.t15`'s
 unchanged onto base `2107253a6`, then re-ran `self-test` (68 passed, 0 failed), `verify-recorded`
 (OK, exit 0), and `pilot` (refused, exit 2). The `pilot-001` ledger still has 8 events, the same as
 before this attempt. The outputs are in `g4-*-output.txt`. This attempt made no model calls.
+
+## What attempts `g5.t17.a-aa730476c` and `g5.t19.a-a89da2560` did
+
+`g5.t17` committed only an empty failed-task marker (exit 1). It has no apparatus and no ledger
+events. `g5.t19` ran no new trial and wrote no new evaluator code. It cherry-picked `g4.t16`'s
+commits unchanged onto base `1b7ddfbbb` and re-ran the same three commands. The results were
+`self-test` (68 passed, 0 failed), `verify-recorded` (OK, exit 0), and `pilot` (refused, exit 2).
+The `pilot-001` ledger still has 8 events. The self-test config hash differs from g4's because the
+installed harness CLI moved from 2.1.282 to 2.1.283. That self-test pins whatever CLI is installed
+now. The recorded pair keeps its own pinned configuration, which `verify-recorded` checks. The
+outputs are in `g5-*-output.txt`. This attempt made no model calls.
