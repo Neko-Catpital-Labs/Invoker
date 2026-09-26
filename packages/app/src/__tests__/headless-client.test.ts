@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { LocalBus } from '@invoker/transport';
+import { IpcBus, LocalBus } from '@invoker/transport';
 import {
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
@@ -203,6 +203,31 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalledTimes(1);
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(runElectronHeadless).toHaveBeenCalledWith(argv);
+  });
+
+  it('does not wait on owner discovery for generic standalone reads without a live owner marker', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    const ipcDir = mkdtempSync(join(tmpdir(), 'headless-client-ipc-'));
+    const ipcBus = new IpcBus(join(ipcDir, 'missing-owner.sock'), { allowServe: false });
+    await ipcBus.ready();
+    const runElectronHeadless = vi.fn(async () => 0);
+    try {
+      const exitCode = await Promise.race([
+        runHeadlessClientCommand(['query', 'task', 'wf-1/task-a'], {
+          messageBus: ipcBus,
+          ensureStandaloneOwner: vi.fn(async () => {}),
+          refreshMessageBus: vi.fn(async () => ipcBus),
+          runElectronHeadless,
+        }),
+        new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 100)),
+      ]);
+
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'task', 'wf-1/task-a']);
+    } finally {
+      ipcBus.disconnect();
+      rmSync(ipcDir, { recursive: true, force: true });
+    }
   });
 
   it('runs a named worker directly in standalone mode', async () => {
