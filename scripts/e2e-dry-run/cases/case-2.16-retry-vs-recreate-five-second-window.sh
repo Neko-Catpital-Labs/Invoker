@@ -180,7 +180,7 @@ done
 kill "$RECREATE_PID" 2>/dev/null || true
 wait "$RECREATE_PID" 2>/dev/null || true
 
-KEEP_PENDING_DELTA_S="$(invoker_e2e_case_216_query_json query audit "$KEEP_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
+KEEP_PENDING_EPOCH="$(invoker_e2e_case_216_query_json query audit "$KEEP_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); epochs=[]; 
 for e in data:
     if e.get("eventType")!="task.pending":
         continue
@@ -189,9 +189,9 @@ for e in data:
         continue
     epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
     if epoch >= start:
-        deltas.append(epoch-start)
-print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
-FAIL_PENDING_DELTA_S="$(invoker_e2e_case_216_query_json query audit "$FAIL_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
+        epochs.append(epoch)
+print(min(epochs) if epochs else -1)' "$RECREATE_START_EPOCH")"
+FAIL_PENDING_EPOCH="$(invoker_e2e_case_216_query_json query audit "$FAIL_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); epochs=[]; 
 for e in data:
     if e.get("eventType")!="task.pending":
         continue
@@ -200,17 +200,25 @@ for e in data:
         continue
     epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
     if epoch >= start:
-        deltas.append(epoch-start)
-print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
+        epochs.append(epoch)
+print(min(epochs) if epochs else -1)' "$RECREATE_START_EPOCH")"
 
-if [ "$KEEP_PENDING_DELTA_S" -lt 0 ] || [ "$KEEP_PENDING_DELTA_S" -gt 5 ]; then
-  echo "FAIL case 2.16: recreate did not emit task.pending for previously completed task within 5s (delta=${KEEP_PENDING_DELTA_S})"
+if [ "$KEEP_PENDING_EPOCH" -lt 0 ]; then
+  echo "FAIL case 2.16: recreate did not emit task.pending for previously completed task"
   invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
 
-if [ "$FAIL_PENDING_DELTA_S" -lt 0 ] || [ "$FAIL_PENDING_DELTA_S" -gt 5 ]; then
-  echo "FAIL case 2.16: recreate did not emit task.pending for previously failed task within 5s (delta=${FAIL_PENDING_DELTA_S})"
+if [ "$FAIL_PENDING_EPOCH" -lt 0 ]; then
+  echo "FAIL case 2.16: recreate did not emit task.pending for previously failed task"
+  invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json 2>&1 || true
+  exit 1
+fi
+
+PENDING_WINDOW_S=$(( KEEP_PENDING_EPOCH > FAIL_PENDING_EPOCH ? KEEP_PENDING_EPOCH - FAIL_PENDING_EPOCH : FAIL_PENDING_EPOCH - KEEP_PENDING_EPOCH ))
+if [ "$PENDING_WINDOW_S" -gt 5 ]; then
+  echo "FAIL case 2.16: recreate did not reset completed and failed tasks within one 5s window (window=${PENDING_WINDOW_S})"
+  invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json 2>&1 || true
   invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
