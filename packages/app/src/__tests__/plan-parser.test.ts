@@ -479,6 +479,7 @@ workflows:
     tasks:
       - id: inherited
         description: Inherits stack dependency
+        command: echo ok
   - name: Workflow Repair
     externalDependencies:
       - workflowId: wf-workflow
@@ -487,6 +488,7 @@ workflows:
     tasks:
       - id: workflow
         description: Adds workflow dependency
+        command: echo ok
 `;
     const bundle = parsePlanSubmissionBundle(yaml);
 
@@ -512,11 +514,13 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: top
     description: Top task
+    command: echo ok
 workflows:
   - name: Child
     tasks:
       - id: child
         description: Child task
+        command: echo ok
 `)).toThrow('Plan stack must put tasks inside each workflow');
 
     expect(() => parsePlanSubmissionBundle(`
@@ -528,6 +532,7 @@ workflows:
     tasks:
       - id: child
         description: Child task
+        command: echo ok
 `)).toThrow('Plan stack-level "autoFixRetries" is no longer supported');
 
     expect(() => parsePlanSubmissionBundle(`
@@ -539,6 +544,7 @@ workflows:
     tasks:
       - id: child
         description: Child task
+        command: echo ok
 `)).toThrow('Plan stack "externalDependencies" must be an array');
 
     expect(() => parsePlan(`
@@ -549,6 +555,7 @@ workflows:
     tasks:
       - id: child
         description: Child task
+        command: echo ok
 `)).toThrow('Stacked workflow YAML must be loaded with parsePlanSubmissionBundle()');
   });
 
@@ -1113,6 +1120,7 @@ featureBranch: feat/x
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('merge');
@@ -1129,6 +1137,7 @@ featureBranch: feat/pr
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('pull_request');
@@ -1141,6 +1150,7 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('pull_request');
@@ -1159,6 +1169,7 @@ featureBranch: feat/x
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.baseBranch).toBe('master');
@@ -1175,6 +1186,7 @@ featureBranch: feat/x
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.baseBranch).toBe('origin/release');
@@ -1195,6 +1207,7 @@ externalDependencies:
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.baseBranch).toBe('plan/upstream-step');
@@ -1216,6 +1229,7 @@ onFinish: explode
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       expect(() => parsePlan(yaml)).toThrow(PlanParseError);
       expect(() => parsePlan(yaml)).toThrow(/onFinish/);
@@ -1229,6 +1243,7 @@ onFinish: merge
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('merge');
@@ -1243,6 +1258,7 @@ onFinish: none
 tasks:
   - id: build
     description: Build the project
+    command: echo ok
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('none');
@@ -1425,6 +1441,7 @@ workflows:
     tasks:
       - id: a
         description: A
+        command: echo ok
 `);
 
     await expect(parsePlanSubmissionBundleFile(planPath)).rejects.toThrow(
@@ -1474,5 +1491,38 @@ describe('detectDefaultBranch', () => {
     });
 
     expect(detectDefaultBranch()).toBe('master');
+  });
+});
+
+describe('parsePlan runnable action validation', () => {
+  const planWithTask = (taskFields: string) => `
+name: Runnable Action
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: step
+    description: The instructions were written here instead of in prompt
+${taskFields}
+`;
+
+  it('rejects a task whose prompt is an empty string', () => {
+    expect(() => parsePlan(planWithTask('    prompt: ""'))).toThrow(
+      'Task "step" must have at least one of "command" or "prompt"',
+    );
+  });
+
+  it('rejects a task with neither command nor prompt', () => {
+    expect(() => parsePlan(planWithTask(''))).toThrow(PlanParseError);
+  });
+
+  it('rejects a whitespace-only command with no prompt', () => {
+    expect(() => parsePlan(planWithTask('    command: "   "'))).toThrow(PlanParseError);
+  });
+
+  it('accepts a task with only a prompt', () => {
+    expect(parsePlan(planWithTask('    prompt: Do the work')).tasks[0].prompt).toBe('Do the work');
+  });
+
+  it('accepts a task with only a command', () => {
+    expect(parsePlan(planWithTask('    command: echo ok')).tasks[0].command).toBe('echo ok');
   });
 });
