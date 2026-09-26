@@ -82,7 +82,7 @@ function toRecord(write: WorkerActionWrite): WorkerActionRecord {
 
 function makeHarness(
   tasksInput: TaskState[] = [makeTask()],
-  options: { defaultAutoFixRetries?: number; localAgentLoginRenewedAtMs?: () => number | undefined } = {},
+  options: { defaultAutoFixRetries?: number; localAgentLoginRenewedAtMs?: () => number | undefined; workflowName?: string } = {},
 ) {
   const tasks = new Map(tasksInput.map((task) => [task.id, task]));
   const actions = new Map<string, WorkerActionRecord>();
@@ -104,7 +104,7 @@ function makeHarness(
     });
   });
   const store = {
-    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    listWorkflows: vi.fn(() => [{ id: 'wf-1', ...(options.workflowName ? { name: options.workflowName } : {}) }]),
     loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
     loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
     updateTask,
@@ -864,6 +864,70 @@ describe('infra-repair worker', () => {
     expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
       expect.objectContaining({ subjectId: 'local-agent-cli', status: 'failed' }),
     ]));
+  });
+
+  it('recreates a usage-limit task once after the reset time named in its error has passed', async () => {
+    const failedAt = new Date('2026-01-01T02:14:00.000Z');
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', prompt: 'investigate' },
+        execution: { error: "You've hit your session limit · resets 3:50am (UTC)", completedAt: failedAt, failureClass: 'agent-usage-limit' },
+      }),
+    ]);
+    h.setNow(Date.parse('2026-01-01T03:51:00.000Z'));
+
+    await h.tick(POLL_CTX);
+    await h.tick({ ...POLL_CTX, tickNumber: 2 });
+
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
+    expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+  });
+
+  it('waits while the usage window named in the error is still closed', async () => {
+    const failedAt = new Date('2026-01-01T02:14:00.000Z');
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', prompt: 'investigate' },
+        execution: { error: "You've hit your session limit · resets 3:50am (UTC)", completedAt: failedAt, failureClass: 'agent-usage-limit' },
+      }),
+    ]);
+    h.setNow(Date.parse('2026-01-01T03:40:00.000Z'));
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
+  it('leaves usage-limit tasks in admin-bypass workflows to the requeue worker', async () => {
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', prompt: 'repair' },
+        execution: { error: "You've hit your session limit · resets 3:50am (UTC)", completedAt: new Date('2026-01-01T02:14:00.000Z'), failureClass: 'agent-usage-limit' },
+      }),
+    ], { workflowName: 'admin-bypass-rebase-onto-master-pr-1041-abc1234' });
+    h.setNow(Date.parse('2026-01-01T05:00:00.000Z'));
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
+  it('recreates a usage-limit task an hour after failure when the error names no reset time', async () => {
+    const failedAt = new Date('2026-01-01T02:00:00.000Z');
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', prompt: 'investigate' },
+        execution: { error: 'Error: rate_limit_exceeded', completedAt: failedAt },
+      }),
+    ]);
+    h.setNow(failedAt.getTime() + 59 * 60 * 1000);
+    await h.tick(POLL_CTX);
+    expect(h.submit).not.toHaveBeenCalled();
+
+    h.setNow(failedAt.getTime() + 61 * 60 * 1000);
+    await h.tick({ ...POLL_CTX, tickNumber: 2 });
+    expect(h.submit).toHaveBeenCalledTimes(1);
   });
 
   it('does not record a second local OAuth-session-expired alert within the cooldown window', async () => {
