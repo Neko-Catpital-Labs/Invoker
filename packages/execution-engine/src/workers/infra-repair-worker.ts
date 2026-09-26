@@ -51,6 +51,7 @@ function buildPortableBase64DecodeFunction(functionName = 'invoker_base64_decode
 }
 import { resolveClaudeWorkerConfigDir } from '../agents/claude-execution-agent.js';
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
+import { isAdminBypassNamedWorkflow } from '../workflow-name-gates.js';
 import { recordWorkerDecisionRow } from '../worker-decision-ledger.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
@@ -71,7 +72,7 @@ const MAX_OUTPUT_TAIL_CHARS = 400;
 type InfraRepairTaskDecisionStatus = Extract<WorkerActionStatus, 'completed' | 'failed' | 'skipped'>;
 type InfraRepairTargetActionStatus = Extract<WorkerActionStatus, 'running' | 'completed' | 'failed'>;
 
-export type InfraRepairReason = SshInfraFailureClass;
+export type InfraRepairReason = SshInfraFailureClass | 'agent-usage-limit';
 
 export interface InfraRepairRemoteTargetConfig {
   host: string;
@@ -98,7 +99,7 @@ export interface InfraRepairRecreateTaskMutationArgs {
 }
 
 export interface InfraRepairWorkerStore {
-  listWorkflows(): ReadonlyArray<{ id: string }>;
+  listWorkflows(): ReadonlyArray<{ id: string; name?: string | null }>;
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   updateTask?(taskId: string, changes: TaskStateChanges): void;
@@ -1369,6 +1370,73 @@ async function handleValidatedGenericSshInfraCandidate(
   await handleInvalidReferenceRecovery(options, candidate);
 }
 
+export const DEFAULT_USAGE_LIMIT_RETRY_WAIT_MS = 60 * 60 * 1000;
+
+type UsageLimitCandidate = InfraRepairScanCandidate & { readonly task: TaskState };
+
+function isUsageLimitTask(task: TaskState): boolean {
+  return FailureClassifier.isUsageLimit(task.execution.failureClass)
+    || FailureClassifier.classifyAgentQuotaRefusal(task.execution.error) === 'agent-usage-limit';
+}
+
+export function usageWindowReopensAtMs(error: string | undefined, failedAtMs: number): number {
+  return FailureClassifier.agentUsageResetAtMs(error, failedAtMs) ?? failedAtMs + DEFAULT_USAGE_LIMIT_RETRY_WAIT_MS;
+}
+
+export function listUsageLimitRecoveryCandidates(
+  store: Pick<InfraRepairWorkerStore, 'listWorkflows' | 'loadTasks'>,
+): UsageLimitCandidate[] {
+  const candidates: UsageLimitCandidate[] = [];
+  for (const workflow of store.listWorkflows()) {
+    if (isAdminBypassNamedWorkflow(workflow.name)) continue;
+    for (const task of store.loadTasks(workflow.id)) {
+      if (task.status !== 'failed' || !isUsageLimitTask(task)) continue;
+      const workflowId = workflowIdForTask(task);
+      if (!workflowId) continue;
+      candidates.push({
+        taskId: task.id,
+        workflowId,
+        generation: task.execution.generation ?? 0,
+        taskStateVersion: task.taskStateVersion ?? 0,
+        source: 'scan',
+        task,
+      });
+    }
+  }
+  return candidates;
+}
+
+async function handleUsageLimitRecovery(
+  options: InfraRepairWorkerPolicyOptions,
+  candidate: UsageLimitCandidate,
+): Promise<void> {
+  const existingDecision = options.store.getWorkerAction?.(
+    INFRA_REPAIR_WORKER_KIND,
+    taskDecisionExternalKey(candidate, 'agent-usage-limit'),
+  );
+  if (existingDecision && isSettledTaskDecision(existingDecision)) return;
+  const failedAtMs = timestampMs(candidate.task.execution.completedAt);
+  if (failedAtMs === undefined) {
+    options.logger.warn(`[${INFRA_REPAIR_WORKER_KIND}] usage-limit task ${candidate.taskId} has no completedAt; cannot tell when its usage window reopens`, {
+      module: INFRA_REPAIR_WORKER_KIND,
+      taskId: candidate.taskId,
+    });
+    return;
+  }
+  const reopensAtMs = usageWindowReopensAtMs(candidate.task.execution.error, failedAtMs);
+  const nowMs = options.now?.() ?? Date.now();
+  if (nowMs < reopensAtMs) return;
+  await submitFollowUpMutation(
+    options,
+    candidate,
+    'agent-usage-limit',
+    INFRA_REPAIR_RECREATE_TASK_CHANNEL,
+    buildInfraRepairRecreateTaskMutationArgs(candidate.taskId),
+    { usageWindowReopenedAt: new Date(reopensAtMs).toISOString(), failedAt: new Date(failedAtMs).toISOString() },
+    'Queued recreate-task: the agent usage window this task hit has reopened',
+  );
+}
+
 export function createInfraRepairTick(options: InfraRepairWorkerPolicyOptions): WorkerTick {
   return async (ctx) => {
     const wakeups = options.drainWakeupHints?.() ?? [];
@@ -1393,6 +1461,11 @@ export function createInfraRepairTick(options: InfraRepairWorkerPolicyOptions): 
       const localOauthValidated = validateLocalOauthInfraCandidate(candidate, options);
       if (localOauthValidated) {
         await handleLocalOauthSessionExpiredRecovery(options, localOauthValidated);
+      }
+    }
+    if (ctx.reason !== 'wake' || wakeupCandidates.length === 0) {
+      for (const candidate of listUsageLimitRecoveryCandidates(options.store)) {
+        await handleUsageLimitRecovery(options, candidate);
       }
     }
   };
