@@ -388,7 +388,7 @@ function buildFileLinearWorkflow({
   for (let i = 1; i <= slotCount; i += 1) {
     fileCommands.push(
       `if [ -f ${artifactDir}/research-${i}.json ]; then `
-      + `node ${join(REPO_ROOT, 'scripts', 'linear-issue-create.mjs')} --artifact ${artifactDir}/research-${i}.json || exit 1; `
+      + `node ${shellQuote(join(REPO_ROOT, 'scripts', 'linear-issue-create.mjs'))} --artifact ${artifactDir}/research-${i}.json || exit 1; `
       + 'filed=$((filed + 1)); '
       + 'fi',
     );
