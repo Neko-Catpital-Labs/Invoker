@@ -451,4 +451,30 @@ grep -qF "node '$REPO_ROOT/scripts/linear-issue-create.mjs' --artifact" "$file_l
   || fail "K: file-linear must run the generating checkout's linear-issue-create.mjs by shell-quoted absolute path" "$file_lin"
 echo "PASS K: file-linear runs the generator's own filing script with a shell-quoted path"
 
+mk_sb
+cat > "$sb/research-1.json" <<'JSON'
+{
+  "title": "Retry must not duplicate",
+  "verdict": "skip",
+  "repo": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+  "goal": "g", "motivation": "m", "safetyInvariant": "s", "verify": "true",
+  "effectivenessMeasurement": { "leadingSignals": ["l"], "laggingSignals": ["l"] }
+}
+JSON
+cat > "$sb/bin/create-stub" <<STUB
+#!/usr/bin/env bash
+cat >> "$sb/creates.jsonl"
+echo >> "$sb/creates.jsonl"
+echo '{"id":"stub-id","identifier":"STUB-7"}'
+STUB
+chmod +x "$sb/bin/create-stub"
+for attempt in 1 2; do
+  env INVOKER_LINEAR_CREATE_CMD="$sb/bin/create-stub" INVOKER_LINEAR_TEAM_ID=team-test \
+    node "$REPO_ROOT/scripts/linear-issue-create.mjs" --artifact "$sb/research-1.json" > "$sb/l-$attempt.log" 2>&1 \
+    || fail "L: filing attempt $attempt should exit 0" "$sb/l-$attempt.log"
+done
+test "$(grep -c '"teamId"' "$sb/creates.jsonl")" = "1" || fail "L: a retried filing must create the ticket only once" "$sb/creates.jsonl"
+grep -q "STUB-7" "$sb/l-2.log" || fail "L: the skipped retry must name the ticket already filed" "$sb/l-2.log"
+echo "PASS L: retrying the filing step does not create a duplicate ticket"
+
 echo "All cross-repo-research fixture tests passed."
