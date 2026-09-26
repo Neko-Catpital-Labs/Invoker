@@ -1,5 +1,5 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
@@ -51,7 +51,6 @@ import {
   type InvokerConfig,
 } from '../config.js';
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
-import { backupPlan } from '../plan-backup.js';
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
 import { assertRemoteRepoUrlCloneable, isRemoteRepoUrl } from '../plan-parser.js';
 import { repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
@@ -757,65 +756,61 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     }
   }
 
-  async function executeHeadlessRun(
-    payload: HeadlessRunMutationPayload,
-  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
-    const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
-    const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-    taskHandles.clear();
-    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-    const workflowIds: string[] = [];
-    let upstream: { workflowId: string; featureBranch: string } | undefined;
+  let headlessRunStartExecutionScheduled = false;
+  const pendingHeadlessRunWorkflowIds = new Set<string>();
+  let pendingHeadlessRunPrimaryWorkflowId = '';
+  let pendingHeadlessRunPlanName = '';
 
-    for (const parsedPlan of submission.plans) {
-      let plan = applyConfiguredPlanDefaults(parsedPlan);
-      if (upstream) {
-        plan = {
-          ...plan,
-          baseBranch: upstream.featureBranch,
-          externalDependencies: [
-            ...(plan.externalDependencies ?? []),
-            {
-              workflowId: upstream.workflowId,
-              taskId: '__merge__',
-              requiredStatus: 'completed',
-              gatePolicy: 'review_ready',
-            } as const,
-          ],
-        };
-      }
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-      if (!workflow) {
-        throw new Error('Loaded plan did not create a workflow.');
-      }
-      existingWorkflowIds.add(workflow.id);
-      workflowIds.push(workflow.id);
-      upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-    }
-
-    const workflowId = workflowIds[workflowIds.length - 1];
-    if (!workflowId) {
-      throw new Error('Loaded plan did not create a workflow.');
-    }
-    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-    setImmediate(() => {
+  function scheduleHeadlessRunStartExecution(workflowIds: string[], workflowId: string, planName: string): void {
+    for (const id of workflowIds) pendingHeadlessRunWorkflowIds.add(id);
+    pendingHeadlessRunPrimaryWorkflowId = workflowId;
+    pendingHeadlessRunPlanName = planName;
+    if (headlessRunStartExecutionScheduled) return;
+    headlessRunStartExecutionScheduled = true;
+    setTimeout(() => {
+      const pendingWorkflowIds = [...pendingHeadlessRunWorkflowIds];
+      const primaryWorkflowId = pendingHeadlessRunPrimaryWorkflowId;
+      const plan = pendingHeadlessRunPlanName;
+      pendingHeadlessRunWorkflowIds.clear();
+      pendingHeadlessRunPrimaryWorkflowId = '';
+      pendingHeadlessRunPlanName = '';
+      headlessRunStartExecutionScheduled = false;
       try {
-        const started = orchestrator.startExecution();
+        const started = orchestrator.startExecution({ limit: 32 });
         logger.info(
-          `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+          `started ${started.length} task(s) across ${pendingWorkflowIds.length} accepted workflow(s), primary "${primaryWorkflowId}"`,
           { module: 'ipc-delegate' },
         );
       } catch (err) {
         logger.error(
-          `headless.run deferred startExecution failed workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+          `headless.run deferred startExecution failed planName="${plan}" workflow="${primaryWorkflowId}": ${err instanceof Error ? err.message : String(err)}`,
           { module: 'ipc-delegate' },
         );
       }
+    }, 50);
+  }
+
+  async function executeHeadlessRun(
+    payload: HeadlessRunMutationPayload,
+  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
+    const planText = readFileSync(payload.planPath, 'utf8');
+    const result = await loadPlanSubmissionBundle(planText, {
+      persistence,
+      orchestrator,
+      allowGraphMutation: invokerConfig.allowGraphMutation,
+      logger,
+      executionAgentRegistry: agentRegistry,
+    }, {
+      logLabel: 'headless.run',
+      taskHandles,
+      backupMode: 'defer',
     });
+    const workflowIds = result.workflowIds ?? [result.workflowId];
+    const workflowId = result.workflowId;
+    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+    scheduleHeadlessRunStartExecution(workflowIds, workflowId, result.planName);
     scheduleRemoteRepoUrlProbes(workflowIds);
-    return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
+    return { workflowId, tasks, workflowIds, workflowCount: result.workflowCount ?? workflowIds.length, planName: result.planName };
   }
 
   async function executeHeadlessResume(payload: HeadlessResumeMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {

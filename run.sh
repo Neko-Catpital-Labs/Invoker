@@ -5,6 +5,28 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
+if [ "${1:-}" = "--headless" ] \
+  && [ "${INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER:-0}" = "1" ] \
+  && [ "${2:-}" = "--no-track" ] \
+  && [ "${3:-}" = "run" ] \
+  && [ -n "${4:-}" ] \
+  && [ -z "${5:-}" ]; then
+  _invoker_ipc_socket="${INVOKER_IPC_SOCKET:-}"
+  if [ -z "$_invoker_ipc_socket" ]; then
+    _invoker_db_root="${INVOKER_DB_DIR:-}"
+    if [ -z "$_invoker_db_root" ]; then
+      _invoker_db_root="${HOME:-$PWD}/.invoker"
+      if [ "${NODE_ENV:-}" = "test" ]; then
+        _invoker_db_root="${HOME:-$PWD}/.invoker/test"
+      fi
+    fi
+    _invoker_ipc_socket="$_invoker_db_root/ipc-transport.sock"
+  fi
+  if [ -S "$_invoker_ipc_socket.headless-run" ]; then
+    exec "$REPO_ROOT/scripts/headless-run-ipc.sh" "$_invoker_ipc_socket.headless-run" "$4"
+  fi
+fi
+
 if [ "${INVOKER_DEVELOPMENT_PROFILE_ACTIVE:-0}" != "1" ]; then
   exec node "$REPO_ROOT/scripts/with-invoker-development-profile.mjs" -- bash "$0" "$@"
 fi

@@ -2,7 +2,8 @@
 
 import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { createServer as createNetServer, type Server as NetServer, type Socket as NetSocket } from 'node:net';
 import { homedir } from 'node:os';
 import { config as loadDotenv } from 'dotenv';
 import {
@@ -159,7 +160,7 @@ import {
   isRemovedHeadlessCommandAlias,
 } from './headless-command-registry.js';
 import { backupPlan } from './plan-backup.js';
-import { loadPlanSubmissionBundle } from './plan-submission-loader.js';
+import { loadPlanSubmissionBundle, loadPlanSubmissionBundleSync } from './plan-submission-loader.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { assertAllWorkerMutationChannelsRegistered, buildWorkerMutationHandlers } from './workflow-mutation-handlers.js';
@@ -1281,9 +1282,12 @@ function startHeadlessMode(): void {
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     let headlessWebBridge: WebBridge | null = null;
+    let headlessRunFastSocketServer: NetServer | null = null;
 
     const runHeadlessShutdownCleanup = async (forcedStopReason: string): Promise<void> => {
       ownerSocketSentinel?.stop();
+      headlessRunFastSocketServer?.close();
+      headlessRunFastSocketServer = null;
       await headlessWebBridge?.close();
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
@@ -2034,51 +2038,61 @@ function startHeadlessMode(): void {
         }
 
 
+        let standaloneHeadlessRunStartExecutionScheduled = false;
+        const pendingStandaloneHeadlessRunWorkflowIds = new Set<string>();
+        let pendingStandaloneHeadlessRunPrimaryWorkflowId = '';
+        let pendingStandaloneHeadlessRunPlanName = '';
+        const scheduleStandaloneHeadlessRunStartExecution = (
+          workflowIds: string[],
+          workflowId: string,
+          planName: string,
+        ): void => {
+          for (const id of workflowIds) pendingStandaloneHeadlessRunWorkflowIds.add(id);
+          pendingStandaloneHeadlessRunPrimaryWorkflowId = workflowId;
+          pendingStandaloneHeadlessRunPlanName = planName;
+          if (standaloneHeadlessRunStartExecutionScheduled) return;
+          standaloneHeadlessRunStartExecutionScheduled = true;
+          setTimeout(() => {
+            const pendingWorkflowIds = [...pendingStandaloneHeadlessRunWorkflowIds];
+            const primaryWorkflowId = pendingStandaloneHeadlessRunPrimaryWorkflowId;
+            const plan = pendingStandaloneHeadlessRunPlanName;
+            pendingStandaloneHeadlessRunWorkflowIds.clear();
+            pendingStandaloneHeadlessRunPrimaryWorkflowId = '';
+            pendingStandaloneHeadlessRunPlanName = '';
+            standaloneHeadlessRunStartExecutionScheduled = false;
+            try {
+              const started = orchestrator.startExecution({ limit: 32 });
+              logger.info(
+                `started ${started.length} task(s) across ${pendingWorkflowIds.length} accepted workflow(s), primary "${primaryWorkflowId}"`,
+                { module: 'ipc-delegate' },
+              );
+            } catch (err) {
+              logger.error(
+                `headless.run deferred startExecution failed planName="${plan}" workflow="${primaryWorkflowId}": ${err instanceof Error ? err.message : String(err)}`,
+                { module: 'ipc-delegate' },
+              );
+            }
+          }, 50);
+        };
+
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> => {
-          const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
-          const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-          const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
-          const workflowIds: string[] = [];
-          let upstream: { workflowId: string; featureBranch: string } | undefined;
-
-          for (const parsedPlan of submission.plans) {
-            let plan = applyConfiguredPlanDefaults(parsedPlan);
-            if (upstream) {
-              plan = {
-                ...plan,
-                baseBranch: upstream.featureBranch,
-                externalDependencies: [
-                  ...(plan.externalDependencies ?? []),
-                  {
-                    workflowId: upstream.workflowId,
-                    taskId: '__merge__',
-                    requiredStatus: 'completed',
-                    gatePolicy: 'review_ready',
-                  } as const,
-                ],
-              };
-            }
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-            const workflowId = orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id))!;
-            existingWorkflowIds.add(workflowId);
-            workflowIds.push(workflowId);
-            upstream = { workflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
-          }
-
-          const workflowId = workflowIds[workflowIds.length - 1];
-          if (!workflowId) {
-            throw new Error('Loaded plan did not create a workflow.');
-          }
-          const started = orchestrator.startExecution();
-          logger.info(
-            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
-            { module: 'ipc-delegate' },
-          );
+          const result = await loadPlanSubmissionBundle(readFileSync(payload.planPath, 'utf8'), {
+            persistence,
+            orchestrator,
+            allowGraphMutation: invokerConfig.allowGraphMutation,
+            logger,
+            executionAgentRegistry: agentRegistry,
+          }, {
+            logLabel: 'headless.run',
+            backupMode: 'defer',
+          });
+          const workflowIds = result.workflowIds ?? [result.workflowId];
+          const workflowId = result.workflowId;
+          scheduleStandaloneHeadlessRunStartExecution(workflowIds, workflowId, result.planName);
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-          return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
+          return { workflowId, tasks, workflowIds, workflowCount: result.workflowCount ?? workflowIds.length, planName: result.planName };
         };
 
 
@@ -2105,6 +2119,102 @@ function startHeadlessMode(): void {
             { module: 'ipc-delegate' },
           );
           return result;
+        });
+        type HeadlessRunFastSocketRequest = {
+          planPath: string;
+          socket: NetSocket;
+        };
+        let pendingHeadlessRunFastSocketRequests: HeadlessRunFastSocketRequest[] = [];
+        let headlessRunFastSocketFlushTimer: ReturnType<typeof setTimeout> | null = null;
+        const flushHeadlessRunFastSocketRequests = (): void => {
+          const batch = pendingHeadlessRunFastSocketRequests;
+          pendingHeadlessRunFastSocketRequests = [];
+          headlessRunFastSocketFlushTimer = null;
+          if (batch.length === 0) return;
+
+          const results = new Map<HeadlessRunFastSocketRequest, { workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }>();
+          try {
+            persistence.runInTransaction(() => {
+              for (const request of batch) {
+                const result = loadPlanSubmissionBundleSync(readFileSync(request.planPath, 'utf8'), {
+                  persistence,
+                  orchestrator,
+                  allowGraphMutation: invokerConfig.allowGraphMutation,
+                  logger,
+                  executionAgentRegistry: agentRegistry,
+                }, {
+                  logLabel: 'headless.run',
+                  backupMode: 'defer',
+                });
+                const workflowIds = result.workflowIds ?? [result.workflowId];
+                const workflowId = result.workflowId;
+                scheduleStandaloneHeadlessRunStartExecution(workflowIds, workflowId, result.planName);
+                const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+                results.set(request, {
+                  workflowId,
+                  tasks,
+                  workflowIds,
+                  workflowCount: result.workflowCount ?? workflowIds.length,
+                  planName: result.planName,
+                });
+              }
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            for (const request of batch) {
+              logger.error(
+                `headless.run fast socket failed planPath="${request.planPath}" workflowId="<none>": ${message}`,
+                { module: 'ipc-delegate' },
+              );
+              request.socket.end(`err ${message}\n`);
+            }
+            return;
+          }
+
+          for (const request of batch) {
+            const result = results.get(request);
+            if (!result) {
+              const message = 'headless.run fast socket accepted no workflow';
+              logger.error(
+                `headless.run fast socket failed planPath="${request.planPath}" workflowId="<none>": ${message}`,
+                { module: 'ipc-delegate' },
+              );
+              request.socket.end(`err ${message}\n`);
+              continue;
+            }
+            logger.info(
+              `headless.run fast socket accepted workflow="${result.workflowId}" tasks=${result.tasks.length} mode=standalone`,
+              { module: 'ipc-delegate' },
+            );
+            request.socket.end(`ok ${result.workflowId}\n`);
+          }
+        };
+        const headlessRunFastSocketPath = `${resolveInvokerIpcSocketPath()}.headless-run`;
+        rmSync(headlessRunFastSocketPath, { force: true });
+        headlessRunFastSocketServer = createNetServer((socket) => {
+          let buffer = '';
+          socket.setEncoding('utf8');
+          socket.on('data', (chunk) => {
+            buffer += chunk;
+            const newlineIndex = buffer.indexOf('\n');
+            if (newlineIndex < 0) return;
+            const planPath = buffer.slice(0, newlineIndex);
+            socket.pause();
+            noteStandaloneOwnerActivity();
+            pendingHeadlessRunFastSocketRequests.push({ planPath, socket });
+            if (!headlessRunFastSocketFlushTimer) {
+              headlessRunFastSocketFlushTimer = setTimeout(flushHeadlessRunFastSocketRequests, 50);
+            }
+          });
+          socket.on('error', (err) => {
+            logger.warn(`headless.run fast socket client error: ${err.message}`, { module: 'ipc-delegate' });
+          });
+        });
+        headlessRunFastSocketServer.on('error', (err) => {
+          logger.error(`headless.run fast socket server error: ${err.message}`, { module: 'ipc-delegate' });
+        });
+        headlessRunFastSocketServer.listen(headlessRunFastSocketPath, () => {
+          logger.info(`headless.run fast socket listening at ${headlessRunFastSocketPath}`, { module: 'ipc-delegate' });
         });
         messageBus.onRequest('headless.owner-ping', async () => {
           noteStandaloneOwnerActivity();
