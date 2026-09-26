@@ -136,6 +136,52 @@ test_detects_stale_app_ui_build_artifacts() {
   rm -rf "$tmp"
 }
 
+test_installs_make_pr_skill_outside_inherited_home() {
+  local tmp repo home skill_dest agent_home
+  tmp="$(mktemp -d)"
+  repo="$tmp/repo"
+  home="$tmp/home"
+  mkdir -p "$repo/skills/make-pr/scripts" "$home"
+  printf '# make-pr\n' > "$repo/skills/make-pr/SKILL.md"
+  printf 'echo nested\n' > "$repo/skills/make-pr/scripts/helper.sh"
+
+  agent_home="$(
+    INVOKER_E2E_REPO_ROOT="$repo"
+    HOME="$home"
+    export INVOKER_E2E_REPO_ROOT HOME
+    unset INVOKER_E2E_AGENT_HOME INVOKER_CLAUDE_CONFIG_DIR
+    invoker_e2e_ensure_make_pr_skill
+
+    [ -n "${INVOKER_CLAUDE_CONFIG_DIR:-}" ] || fail "expected INVOKER_CLAUDE_CONFIG_DIR to be exported"
+    skill_dest="$INVOKER_CLAUDE_CONFIG_DIR/skills/invoker-make-pr"
+    [ -f "$skill_dest/SKILL.md" ] || fail "expected SKILL.md at the resolved skill root"
+    [ -f "$skill_dest/scripts/helper.sh" ] || fail "expected nested skill files to be copied"
+    [ ! -e "$skill_dest/make-pr" ] || fail "expected no nested make-pr/ directory inside the destination"
+    [ -f "$INVOKER_CLAUDE_CONFIG_DIR/.claude.json" ] || fail "expected a seeded worker .claude.json"
+    [ ! -e "$HOME/.codex/skills" ] || fail "expected \$HOME/.codex/skills to be untouched"
+    [ ! -e "$HOME/.claude/skills" ] || fail "expected \$HOME/.claude/skills to be untouched"
+
+    printf '%s' "$INVOKER_E2E_AGENT_HOME"
+  )" || exit 1
+  [ -d "$agent_home" ] || fail "expected the per-run agent home to exist after install"
+
+  (
+    INVOKER_E2E_REPO_ROOT="$repo"
+    HOME="$home"
+    export INVOKER_E2E_REPO_ROOT HOME
+    unset INVOKER_DB_DIR INVOKER_API_PORT INVOKER_E2E_MARKER_ROOT INVOKER_E2E_STUB_DIR
+    unset INVOKER_REPO_CONFIG_PATH
+    INVOKER_E2E_AGENT_HOME="$agent_home"
+    INVOKER_CLAUDE_CONFIG_DIR="$agent_home/claude-worker"
+    export INVOKER_E2E_AGENT_HOME INVOKER_CLAUDE_CONFIG_DIR
+    invoker_e2e_cleanup
+    [ -z "${INVOKER_CLAUDE_CONFIG_DIR:-}" ] || fail "expected cleanup to unset INVOKER_CLAUDE_CONFIG_DIR"
+  ) || exit 1
+  [ ! -e "$agent_home" ] || fail "expected cleanup to delete the per-run agent home"
+
+  rm -rf "$tmp"
+}
+
 run_case() {
   case "${1:-all}" in
     wal-guard)
@@ -150,11 +196,15 @@ run_case() {
     build-freshness)
       test_detects_stale_app_ui_build_artifacts
       ;;
+    make-pr-skill-home)
+      test_installs_make_pr_skill_outside_inherited_home
+      ;;
     all)
       test_retries_wal_guard_once
       test_ignores_electron_helper_processes
       test_waits_for_owned_process_exit
       test_detects_stale_app_ui_build_artifacts
+      test_installs_make_pr_skill_outside_inherited_home
       ;;
     *)
       fail "unknown test case: ${1:-}"
@@ -164,4 +214,4 @@ run_case() {
 
 run_case "${1:-all}"
 
-echo 'PASS: headless e2e helper retries WAL guard, ignores Electron helpers, and detects stale builds'
+echo 'PASS: headless e2e helper retries WAL guard, ignores Electron helpers, detects stale builds, and installs make-pr outside HOME'
