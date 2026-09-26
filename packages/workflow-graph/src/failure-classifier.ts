@@ -158,6 +158,18 @@ export class FailureClassifier {
       || errorText.startsWith('Terminated by user') || errorText.startsWith('Terminated:');
   }
 
+  static agentUsageResetAtMs(agentOutput: string | undefined, failedAtMs: number): number | undefined {
+    const match = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(UTC\)/i.exec(agentOutput ?? '');
+    if (!match) return undefined;
+    const clockHour = Number(match[1]);
+    const minute = Number(match[2] ?? '0');
+    if (clockHour < 1 || clockHour > 12 || minute > 59) return undefined;
+    const hour = (clockHour % 12) + (match[3].toLowerCase() === 'pm' ? 12 : 0);
+    const failedAt = new Date(failedAtMs);
+    const resetMs = Date.UTC(failedAt.getUTCFullYear(), failedAt.getUTCMonth(), failedAt.getUTCDate(), hour, minute);
+    return resetMs > failedAtMs ? resetMs : resetMs + 24 * 60 * 60 * 1000;
+  }
+
   static isUsageLimit(failureClass: FailureClass | undefined): boolean {
     return failureClass === 'agent-usage-limit';
   }
