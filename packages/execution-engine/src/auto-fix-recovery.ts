@@ -378,11 +378,24 @@ function logAutoFixWorkerEvent(
     });
   }
 
-  options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] ${phase}`, {
+  const log = phase.endsWith('-submitted') ? options.logger.info : options.logger.debug;
+  log?.call(options.logger, `[worker:${RECOVERY_WORKER_KIND}] ${phase}`, {
     module: 'auto-fix-recovery',
     taskId,
     ...details,
   });
+}
+
+const FAILURE_CONTEXT_TAIL_CHARS = 4_000;
+
+function failureContext(task: TaskState): { failureExitCode: number | null; failureError: string | null } {
+  const error = task.execution.error;
+  return {
+    failureExitCode: task.execution.exitCode ?? null,
+    failureError: error === undefined
+      ? null
+      : error.length > FAILURE_CONTEXT_TAIL_CHARS ? error.slice(-FAILURE_CONTEXT_TAIL_CHARS) : error,
+  };
 }
 
 function autoFixDecisionExternalKey(candidate: AutoFixRecoveryCandidate): string {
@@ -712,6 +725,7 @@ export function createAutoFixRecoveryTick(baseOptions: AutoFixRecoveryPolicyOpti
         }
         submittedThisTick.add(candidate.taskId);
         logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-bare-retry-submitted', {
+          ...failureContext(candidate.task),
           workflowId: candidate.workflowId,
           intentId,
           channel: AUTO_FIX_BARE_RETRY_CHANNEL,
@@ -753,6 +767,7 @@ export function createAutoFixRecoveryTick(baseOptions: AutoFixRecoveryPolicyOpti
         }
         submittedThisTick.add(candidate.taskId);
         logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-recreate-submitted', {
+          ...failureContext(candidate.task),
           workflowId: candidate.workflowId,
           intentId,
           channel: AUTO_FIX_RECREATE_CHANNEL,
@@ -818,6 +833,7 @@ export function createAutoFixRecoveryTick(baseOptions: AutoFixRecoveryPolicyOpti
       }
       submittedThisTick.add(candidate.taskId);
       logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-submitted', {
+        ...failureContext(candidate.task),
         workflowId: candidate.workflowId,
         intentId,
         channel: AUTO_FIX_COMMAND_CHANNEL,
