@@ -688,8 +688,11 @@ export class TaskRunner {
             },
           });
         }
-      } catch {
-        // best effort; preserve original startup/execution failure flow
+      } catch (metadataErr) {
+        this.logger.warn(
+          `[TaskRunner] could not record launch-failure timestamps for task=${task.id}`,
+          { err: metadataErr },
+        );
       }
       // Clean up per-task Docker executor on startup/execution failure
       await this.cleanupPerTaskDockerExecutor(task);
