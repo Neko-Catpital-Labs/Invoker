@@ -118,8 +118,9 @@ export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Ma
   handlers.set(IDLE_TASK_CLEANUP_RETIRE_WORKFLOW_CHANNEL, async (...retireArgs: unknown[]) => {
     const { workflowId } = parseIdleTaskCleanupRetireWorkflowMutationArgs(retireArgs);
     const workflow = idleTaskCleanup.store.listWorkflows().find((candidate) => candidate.id === workflowId);
+    const retirementTasks = workflow ? idleTaskCleanup.store.loadTasks(workflowId) : [];
     const decision = workflow
-      ? decideWorkflowRetirement(workflow, idleTaskCleanup.store.loadTasks(workflowId), {
+      ? decideWorkflowRetirement(workflow, retirementTasks, {
           now: idleTaskCleanup.now(),
           idleThresholdMs: idleTaskCleanup.idleThresholdMs,
         })
@@ -130,6 +131,18 @@ export function buildWorkerMutationHandlers(deps: WorkerMutationHandlerDeps): Ma
         { module: 'idle-task-cleanup', workflowId },
       );
       return { ok: true };
+    }
+    for (const task of retirementTasks) {
+      if (task.status === 'completed' && !task.execution?.error) continue;
+      logger.warn(`[idle-task-cleanup] retiring workflow ${workflowId}; recording unfinished task before delete`, {
+        module: 'idle-task-cleanup',
+        workflowId,
+        workflowStatus: workflow?.status,
+        taskId: task.id,
+        status: task.status,
+        exitCode: task.execution?.exitCode,
+        error: task.execution?.error,
+      });
     }
     const result = await commandService.deleteWorkflow(
       makeEnvelope('idle-task-cleanup-retire-workflow', 'surface', 'workflow', { workflowId }),
