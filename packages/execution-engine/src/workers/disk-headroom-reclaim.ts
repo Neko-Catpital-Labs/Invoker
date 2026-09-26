@@ -214,6 +214,7 @@ df -h / | tail -1
 remove_path() {
   local path="$1"
   if [ -e "$path" ]; then
+    echo "[disk-headroom-cleanup] remove $path"
     local staged="\${path}.deleting.$$"
     if mv "$path" "$staged" 2>/dev/null; then
       rm -rf "$staged" 2>/dev/null || true
@@ -365,11 +366,14 @@ const TERMINAL_TASK_STATUS_SET = new Set<string>(DISK_HEADROOM_TERMINAL_TASK_STA
 /**
  * Resolved workspacePaths for every non-terminal task across all workflows.
  * These are "in use" regardless of whether any OS process currently touches
- * them, so the cleaner must never delete them. Fails safe to an empty set
- * (protects nothing) on any store error -- see cleanupLocalInvokerHome for
- * why that is the safer failure mode for this worker.
+ * them, so the cleaner must never delete them. Returns an empty set on a
+ * store error and reports it through onStoreError; cleanupLocalInvokerHome
+ * then skips the pass rather than delete with no protection.
  */
-export function computeProtectedLocalPaths(store: DiskHeadroomWorkerStore): Set<string> {
+export function computeProtectedLocalPaths(
+  store: DiskHeadroomWorkerStore,
+  onStoreError?: (err: unknown) => void,
+): Set<string> {
   try {
     const protectedPaths = new Set<string>();
     for (const workflow of store.listWorkflows()) {
@@ -381,7 +385,8 @@ export function computeProtectedLocalPaths(store: DiskHeadroomWorkerStore): Set<
       }
     }
     return protectedPaths;
-  } catch {
+  } catch (err) {
+    onStoreError?.(err);
     return new Set();
   }
 }
@@ -392,7 +397,10 @@ export function computeProtectedLocalPaths(store: DiskHeadroomWorkerStore): Set<
  * own liveness check alongside computeProtectedLocalPaths. Fails safe to an
  * empty set (protects nothing) on any store error, same rationale as above.
  */
-export function computeProtectedRepoHashes(store: DiskHeadroomWorkerStore): Set<string> {
+export function computeProtectedRepoHashes(
+  store: DiskHeadroomWorkerStore,
+  onStoreError?: (err: unknown) => void,
+): Set<string> {
   try {
     const protectedHashes = new Set<string>();
     for (const workflow of store.listWorkflows()) {
@@ -404,7 +412,8 @@ export function computeProtectedRepoHashes(store: DiskHeadroomWorkerStore): Set<
       }
     }
     return protectedHashes;
-  } catch {
+  } catch (err) {
+    onStoreError?.(err);
     return new Set();
   }
 }
@@ -429,7 +438,15 @@ function pathIsProtected(candidate: string, protectedPaths: ReadonlySet<string>)
  * (`rm -rf` via execFile) so a large tree does not block the event loop;
  * falls back to the async fs.rm if the rename or the subprocess fails.
  */
-async function eraseLocalPath(path: string, errors: string[]): Promise<void> {
+async function eraseLocalPath(path: string, errors: string[], logger?: Logger, targetKey?: string): Promise<void> {
+  const errorsBefore = errors.length;
+  await eraseLocalPathQuietly(path, errors);
+  if (errors.length === errorsBefore) {
+    logger?.info?.(`[disk-headroom-cleanup] removed ${path}`, { module: 'disk-headroom', targetKey, path });
+  }
+}
+
+async function eraseLocalPathQuietly(path: string, errors: string[]): Promise<void> {
   const removeWithNode = async (deletePath: string) => {
     await rmAsync(deletePath, {
       recursive: true,
@@ -551,7 +568,7 @@ async function removeLocalDir(
     recordProtectedSkip(path, protectedSkips, 'fresh-in-use-mark', logger, targetKey);
     return;
   }
-  await eraseLocalPath(path, errors);
+  await eraseLocalPath(path, errors, logger, targetKey);
 }
 
 function ensureLocalDir(path: string, errors: string[]): void {
@@ -677,7 +694,7 @@ async function sweepRepoChildren(
       recordProtectedSkip(childPath, protectedSkips, 'fresh-in-use-mark', logger, targetKey);
       continue;
     }
-    await eraseLocalPath(childPath, errors);
+    await eraseLocalPath(childPath, errors, logger, targetKey);
   }
 }
 
@@ -750,8 +767,26 @@ export async function cleanupLocalInvokerHome(
       targetKey,
     });
 
-    const protectedPaths = opts.store ? computeProtectedLocalPaths(opts.store) : new Set<string>();
-    const protectedRepoHashes = opts.store ? computeProtectedRepoHashes(opts.store) : new Set<string>();
+    let lookupFailure: string | undefined;
+    const reportLookupFailure = (err: unknown) => {
+      lookupFailure ??= err instanceof Error ? err.message : String(err);
+      opts.logger?.error?.(
+        `[disk-headroom-cleanup] in-use lookup failed; skipping this pass so no running task loses its folder: ${lookupFailure}`,
+        { module: 'disk-headroom', targetKey, err },
+      );
+    };
+    const protectedPaths = opts.store ? computeProtectedLocalPaths(opts.store, reportLookupFailure) : new Set<string>();
+    const protectedRepoHashes = opts.store ? computeProtectedRepoHashes(opts.store, reportLookupFailure) : new Set<string>();
+    if (lookupFailure !== undefined) {
+      return {
+        targetKey,
+        ok: false,
+        reason: 'in-use-lookup-failed',
+        detail: lookupFailure,
+        protectedSkipCount: 0,
+        protectedSkipBytes: 0,
+      };
+    }
     const errors: string[] = [];
     const protectedSkips: ProtectedSkipAccounting = {
       paths: [],
@@ -1000,6 +1035,10 @@ export async function cleanupRemoteInvokerHome(opts: {
     opts.logger?.info?.(`[disk-headroom-cleanup] remote ${mode === 'stale-only' ? 'stale-only ' : ''}done ${targetKey}`, {
       module: 'disk-headroom',
       targetKey,
+      removedPaths: output
+        .split('\n')
+        .filter((line) => line.startsWith('[disk-headroom-cleanup] remove '))
+        .map((line) => line.slice('[disk-headroom-cleanup] remove '.length)),
       outputTail: output.slice(-400),
     });
     return {

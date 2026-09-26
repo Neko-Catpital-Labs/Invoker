@@ -610,7 +610,7 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
     expect(existsSync(completedDir)).toBe(false);
   });
 
-  it('fails safe by clearing normally (protects nothing) when the store errors', async () => {
+  it('skips the pass and deletes nothing when the in-use lookup errors', async () => {
     const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-liveness-error-'));
     tempDirs.push(root);
     const home = join(root, '.invoker');
@@ -633,9 +633,9 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.reason).toBe('critical-cleanup');
-    expect(existsSync(someDir)).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('in-use-lookup-failed');
+    expect(existsSync(someDir)).toBe(true);
   });
 
   it('behaves exactly as before (clears everything) when no store is provided', async () => {
