@@ -64,19 +64,6 @@ invoker_e2e_allow_repo_git_ops() {
   )
 }
 
-invoker_e2e_ensure_make_pr_skill() {
-  local skill_src="$INVOKER_E2E_REPO_ROOT/skills/make-pr"
-  [ -f "$skill_src/SKILL.md" ] || return 0
-  local run_scoped_agent_home
-  run_scoped_agent_home="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-agent-home.XXXXXX")" || return 0
-  export INVOKER_E2E_AGENT_HOME="$run_scoped_agent_home"
-  export INVOKER_CLAUDE_CONFIG_DIR="$run_scoped_agent_home/claude-worker"
-  local skill_dest="$INVOKER_CLAUDE_CONFIG_DIR/skills/invoker-make-pr"
-  mkdir -p "$skill_dest" 2>/dev/null || return 0
-  cp -R "$skill_src/." "$skill_dest/" 2>/dev/null || true
-  printf '{\n  "enabledPlugins": {}\n}\n' > "$INVOKER_CLAUDE_CONFIG_DIR/.claude.json" 2>/dev/null || true
-}
-
 invoker_e2e_init() {
   # Preserve caller PATH so cleanup can fully restore shell state.
   if [ -z "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then
@@ -115,7 +102,6 @@ invoker_e2e_init() {
   export PATH="$stubdir:$PATH"
   invoker_e2e_allow_repo_git_ops
   invoker_e2e_ensure_branch_aliases
-  invoker_e2e_ensure_make_pr_skill
 }
 
 invoker_e2e_pid_cmdline() {
@@ -217,12 +203,6 @@ invoker_e2e_cleanup() {
   fi
   rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
   rm -f "${INVOKER_REPO_CONFIG_PATH:-}" 2>/dev/null || true
-
-  if [ -n "${INVOKER_E2E_AGENT_HOME:-}" ]; then
-    rm -rf "$INVOKER_E2E_AGENT_HOME" 2>/dev/null || true
-    unset INVOKER_E2E_AGENT_HOME
-    unset INVOKER_CLAUDE_CONFIG_DIR
-  fi
 
   # Restore original PATH so claude/gh/codex stubs never leak into user shells.
   if [ -n "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then

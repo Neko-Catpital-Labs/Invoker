@@ -46,6 +46,7 @@ run_cron() {
   PATH="$TMP/bin:$PATH" \
   HOME="$TMP/home" \
   INVOKER_GITHUB_TARGET_REPO="fake/repo" \
+  INVOKER_GITHUB_TARGET_REPOS="fake/repo" \
   INVOKER_PR_CRON_AUTHOR="fake-bot" \
   INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
@@ -53,6 +54,20 @@ run_cron() {
   INVOKER_PR_ORPHAN_PLAN_DIR="$TMP/plans" \
   INVOKER_PR_ORPHAN_MAX_ATTEMPTS=3 \
   "$@" \
+  bash "$ROOT/scripts/cron-pr-orphan-repair.sh" 2>&1
+}
+
+run_cron_invoker_repo() {
+  PATH="$TMP/bin:$PATH" \
+  HOME="$TMP/home" \
+  INVOKER_GITHUB_TARGET_REPO="Neko-Catpital-Labs/Invoker" \
+  INVOKER_GITHUB_TARGET_REPOS="Neko-Catpital-Labs/Invoker" \
+  INVOKER_PR_CRON_AUTHOR="fake-bot" \
+  INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
+  INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
+  INVOKER_PR_ORPHAN_STATE_FILE="$TMP/invoker-ledger.tsv" \
+  INVOKER_PR_ORPHAN_PLAN_DIR="$TMP/invoker-plans" \
+  INVOKER_PR_ORPHAN_MAX_ATTEMPTS=3 \
   bash "$ROOT/scripts/cron-pr-orphan-repair.sh" 2>&1
 }
 
@@ -115,5 +130,21 @@ echo "$out" | grep -q "PR #801: DRY-RUN would submit repair task" \
   || fail "dry-run: expected the would-submit log" "$out"
 runs_after="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 [ "$runs_before" -eq "$runs_after" ] || fail "dry-run submitted a task"
+
+# ── Invoker repo plans: use the helper so merged/closed PRs settle as noops ──
+rm -rf "$TMP/invoker-plans"
+mkdir -p "$TMP/invoker-plans"
+: > "$TMP/invoker-ledger.tsv"
+out="$(run_cron_invoker_repo)" || fail "invoker-repo tick exited non-zero" "$out"
+invoker_plan="$TMP/invoker-plans/repair-pr-801.yaml"
+[ -f "$invoker_plan" ] || fail "invoker-repo: plan file missing at $invoker_plan" "$out"
+grep -q "python3 scripts/pr_worker_safe_push.py" "$invoker_plan" \
+  || fail "invoker-repo plan: must use safe-push helper" "$(cat "$invoker_plan")"
+grep -q -- "--json-pr '801'" "$invoker_plan" \
+  || fail "invoker-repo plan: helper must receive the exact PR number" "$(cat "$invoker_plan")"
+grep -q -- "--record-tsv-ledger" "$invoker_plan" \
+  || fail "invoker-repo plan: helper must own orphan-attempt recording" "$(cat "$invoker_plan")"
+grep -q "git push --force-with-lease" "$invoker_plan" \
+  && fail "invoker-repo plan: must not use reduced inline safe-push" "$(cat "$invoker_plan")"
 
 echo "[repro] passed"

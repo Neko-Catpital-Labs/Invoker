@@ -47,12 +47,12 @@ def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
     return completed.stdout.strip()
 
 
-def normalize_branch(branch: str) -> str:
+def normalize_branch(branch: str, *, cwd: Path | str | None = None) -> str:
     name = branch.removeprefix("refs/heads/").strip()
     if not name:
         raise SafePushError("branch is required")
     try:
-        run_git(["check-ref-format", "--branch", name])
+        run_git(["check-ref-format", "--branch", name], cwd=cwd)
     except SafePushError as exc:
         raise SafePushError(f"invalid branch name {branch!r}: {exc}", exit_code=2) from exc
     return name
@@ -66,7 +66,7 @@ def validate_expected_head(expected_head: str) -> str:
 
 
 def remote_branch_sha(branch: str, *, remote: str = "origin", cwd: Path | str | None = None) -> str | None:
-    ref = f"refs/heads/{normalize_branch(branch)}"
+    ref = f"refs/heads/{normalize_branch(branch, cwd=cwd)}"
     out = run_git(["ls-remote", remote, ref], cwd=cwd)
     if not out:
         return None
@@ -178,7 +178,7 @@ def safe_push(
     remote: str = "origin",
     cwd: Path | str | None = None,
 ) -> str:
-    branch_name = normalize_branch(branch)
+    branch_name = normalize_branch(branch, cwd=cwd)
     if expect_missing and expected_head is not None:
         raise SafePushError("--expect-missing cannot be combined with --expected-head", exit_code=2)
     expected = None if expect_missing else validate_expected_head(expected_head or "")
@@ -345,7 +345,7 @@ def _settled_via_pr_merge_or_close(args: argparse.Namespace) -> str | None:
     repo = repo_slug(args.remote, cwd=Path(args.cwd))
     if repo is None:
         return None
-    pr_identifier: int | str = args.json_pr if args.json_pr is not None else normalize_branch(args.branch)
+    pr_identifier: int | str = args.json_pr if args.json_pr is not None else normalize_branch(args.branch, cwd=Path(args.cwd))
     state = pr_state(pr_identifier, repo=repo, cwd=Path(args.cwd))
     return state if state in ("MERGED", "CLOSED") else None
 
@@ -361,7 +361,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cwd=Path(args.cwd),
         )
         _record_ledgers(args)
-        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
+        print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch, cwd=Path(args.cwd))} to {pushed}")
         return 0
     except NothingToPushError as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
@@ -372,10 +372,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
             return exc.exit_code or 1
         _record_ledgers(args)
-        pr_label = f"PR #{args.json_pr}" if args.json_pr is not None else f"the PR for refs/heads/{normalize_branch(args.branch)}"
+        pr_label = (
+            f"PR #{args.json_pr}"
+            if args.json_pr is not None
+            else f"the PR for refs/heads/{normalize_branch(args.branch, cwd=Path(args.cwd))}"
+        )
         print(
             f"pr-worker-safe-push: noop: {pr_label} is already {state.lower()}; "
-            f"refs/heads/{normalize_branch(args.branch)} no longer exists, nothing to push",
+            f"refs/heads/{normalize_branch(args.branch, cwd=Path(args.cwd))} no longer exists, nothing to push",
             file=sys.stderr,
         )
         return 0

@@ -30,6 +30,7 @@ cron_lock
 STATE_FILE="${INVOKER_PR_ORPHAN_STATE_FILE:-$HOME/.invoker/pr-orphan-repair.tsv}"
 MAX_ATTEMPTS="${INVOKER_PR_ORPHAN_MAX_ATTEMPTS:-3}"
 SCAN_BUDGET_SECS="${INVOKER_PR_ORPHAN_SCAN_BUDGET_SECS:-150}"
+INVOKER_REPO="${INVOKER_PR_ORPHAN_INVOKER_REPO:-Neko-Catpital-Labs/Invoker}"
 ledger_init "$STATE_FILE"
 
 # Repros pass INVOKER_PR_ORPHAN_PLAN_DIR to inspect submitted plans; a
@@ -148,6 +149,7 @@ scan_repo() {
     q_key="$(shell_quote "$key")"
     q_fingerprint="$(shell_quote "$fingerprint")"
     q_tsv_kind="$(shell_quote "orphan-attempt")"
+    q_num="$(shell_quote "$num")"
 
     plan_file="$repo_plan_dir/repair-pr-$num.yaml"
     {
@@ -184,29 +186,40 @@ scan_repo() {
       printf '    dependencies: [repair]\n'
       printf '    command: |\n'
       {
-        printf 'set -euo pipefail\n'
-        printf 'branch=%s\n' "$q_head_ref"
-        printf 'expected=%s\n' "$q_head_oid"
-        printf 'ledger=%s\n' "$q_state_file"
-        printf 'kind=%s\n' "$q_tsv_kind"
-        printf 'key=%s\n' "$q_key"
-        printf 'marker=%s\n' "$q_fingerprint"
-        printf 'ref="refs/heads/$branch"\n'
-        printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
-        printf 'if [ "$live" != "$expected" ]; then\n'
-        printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
-        printf '  exit 20\n'
-        printf 'fi\n'
-        printf 'pushed="$(git rev-parse HEAD)"\n'
-        printf 'git push --force-with-lease="$ref:$expected" origin "HEAD:$ref"\n'
-        printf 'verified="$(git ls-remote origin "$ref" | cut -f1)"\n'
-        printf 'if [ "$verified" != "$pushed" ]; then\n'
-        printf '  echo "post-push verification failed: $ref is ${verified:-missing}; expected $pushed" >&2\n'
-        printf '  exit 22\n'
-        printf 'fi\n'
-        printf 'mkdir -p "$(dirname "$ledger")"\n'
-        printf 'printf '"'"'%%s\\t%%s\\t%%s\\t%%s\\n'"'"' "$kind" "$key" "$marker" "$(date +%%s)" >> "$ledger"\n'
-        printf 'echo "pr-worker-safe-push: pushed $ref to $pushed"\n'
+        if [ "$repo" = "$INVOKER_REPO" ]; then
+          printf 'set -euo pipefail\n'
+          printf 'python3 scripts/pr_worker_safe_push.py \\\n'
+          printf '  --branch %s --expected-head %s --cwd . \\\n' "$q_head_ref" "$q_head_oid"
+          printf '  --json-pr %s \\\n' "$q_num"
+          printf '  --record-tsv-ledger %s \\\n' "$q_state_file"
+          printf '  --tsv-kind %s \\\n' "$q_tsv_kind"
+          printf '  --tsv-key %s \\\n' "$q_key"
+          printf '  --tsv-marker %s\n' "$q_fingerprint"
+        else
+          printf 'set -euo pipefail\n'
+          printf 'branch=%s\n' "$q_head_ref"
+          printf 'expected=%s\n' "$q_head_oid"
+          printf 'ledger=%s\n' "$q_state_file"
+          printf 'kind=%s\n' "$q_tsv_kind"
+          printf 'key=%s\n' "$q_key"
+          printf 'marker=%s\n' "$q_fingerprint"
+          printf 'ref="refs/heads/$branch"\n'
+          printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
+          printf 'if [ "$live" != "$expected" ]; then\n'
+          printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
+          printf '  exit 20\n'
+          printf 'fi\n'
+          printf 'pushed="$(git rev-parse HEAD)"\n'
+          printf 'git push --force-with-lease="$ref:$expected" origin "HEAD:$ref"\n'
+          printf 'verified="$(git ls-remote origin "$ref" | cut -f1)"\n'
+          printf 'if [ "$verified" != "$pushed" ]; then\n'
+          printf '  echo "post-push verification failed: $ref is ${verified:-missing}; expected $pushed" >&2\n'
+          printf '  exit 22\n'
+          printf 'fi\n'
+          printf 'mkdir -p "$(dirname "$ledger")"\n'
+          printf 'printf '"'"'%%s\\t%%s\\t%%s\\t%%s\\n'"'"' "$kind" "$key" "$marker" "$(date +%%s)" >> "$ledger"\n'
+          printf 'echo "pr-worker-safe-push: pushed $ref to $pushed"\n'
+        fi
       } | sed 's/^/      /'
     } > "$plan_file"
 

@@ -64,12 +64,17 @@ class SafePushTests(unittest.TestCase):
     def remote_head(self, branch: str = "main") -> str:
         return safe_push.remote_branch_sha(branch, remote="origin", cwd=self.repo) or ""
 
-    def invoke_helper(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-        command = ["python3", str(Path(__file__).with_name("pr_worker_safe_push.py")), *args]
+    def invoke_helper(
+        self,
+        *args: str,
+        env: dict[str, str] | None = None,
+        run_cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        command = ["python3", str(Path(__file__).with_name("pr_worker_safe_push.py").resolve()), *args]
         merged_env = {**os.environ, **(env or {})}
         return subprocess.run(
             command,
-            cwd=str(self.repo),
+            cwd=str(run_cwd or self.repo),
             check=False,
             text=True,
             capture_output=True,
@@ -91,6 +96,22 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.remote_head(), pushed)
         self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["queue-attempt", "123", "fp1"])
+
+    def test_helper_honors_cwd_when_caller_directory_has_broken_git_metadata(self) -> None:
+        pushed = self.commit(self.repo, "repair")
+        broken_caller = self.root / "broken-caller"
+        broken_caller.mkdir()
+        (broken_caller / ".git").write_text("gitdir: /missing/gitdir\n", encoding="utf-8")
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--cwd", str(self.repo),
+            run_cwd=broken_caller,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.remote_head(), pushed)
 
     def test_moved_remote_head_exits_nonzero_leaves_remote_unchanged_and_records_no_attempt(self) -> None:
         self.clone_other()
