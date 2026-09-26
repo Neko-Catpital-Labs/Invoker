@@ -214,12 +214,16 @@ df -h / | tail -1
 remove_path() {
   local path="$1"
   if [ -e "$path" ]; then
-    echo "[disk-headroom-cleanup] remove $path"
     local staged="\${path}.deleting.$$"
     if mv "$path" "$staged" 2>/dev/null; then
       rm -rf "$staged" 2>/dev/null || true
     fi
     rm -rf "$path" 2>/dev/null || true
+    if [ -e "$path" ] || [ -e "$staged" ]; then
+      echo "[disk-headroom-cleanup] remove-failed $path"
+    else
+      echo "[disk-headroom-cleanup] remove $path"
+    fi
   fi
 }
 # In-flight work on this target's own pool — checked before a child is removed below.
@@ -294,12 +298,20 @@ reap_tmp() {
     return 0
   fi
   rm -rf "$1" >/dev/null 2>&1
-  echo "[disk-headroom-cleanup] remove $1"
+  if [ -e "$1" ]; then
+    echo "[disk-headroom-cleanup] remove-failed $1"
+  else
+    echo "[disk-headroom-cleanup] remove $1"
+  fi
 }
 reap_transient_test_tmp() {
   [ -e "$1" ] || return 0
   rm -rf "$1" >/dev/null 2>&1
-  echo "[disk-headroom-cleanup] remove $1"
+  if [ -e "$1" ]; then
+    echo "[disk-headroom-cleanup] remove-failed $1"
+  else
+    echo "[disk-headroom-cleanup] remove $1"
+  fi
 }
 if [ -z "$SWEEP_USER" ]; then
   echo "[disk-headroom-cleanup] skip tmp sweep: cannot resolve the running user" >&2
@@ -1039,6 +1051,10 @@ export async function cleanupRemoteInvokerHome(opts: {
         .split('\n')
         .filter((line) => line.startsWith('[disk-headroom-cleanup] remove '))
         .map((line) => line.slice('[disk-headroom-cleanup] remove '.length)),
+      failedPaths: output
+        .split('\n')
+        .filter((line) => line.startsWith('[disk-headroom-cleanup] remove-failed '))
+        .map((line) => line.slice('[disk-headroom-cleanup] remove-failed '.length)),
       outputTail: output.slice(-400),
     });
     return {

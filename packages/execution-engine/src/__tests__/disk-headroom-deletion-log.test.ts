@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -85,5 +85,38 @@ describe('disk-headroom cleanup deletion log', () => {
     expect(result.status).toBe(0);
     expect(existsSync(otherDir)).toBe(false);
     expect(result.stdout).toContain(`[disk-headroom-cleanup] remove ${otherDir}`);
+  });
+
+  it('logs remove-failed and never records a path whose deletion failed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-remote-deletion-fail-'));
+    tempDirs.push(root);
+    const invokerHome = join(root, 'home');
+    const isolatedTmp = join(root, 'scratch-tmp');
+    mkdirSync(isolatedTmp, { recursive: true });
+    const reposDir = join(invokerHome, 'repos');
+    const stuckDir = join(reposDir, 'stuck-hash');
+    mkdirSync(stuckDir, { recursive: true });
+    writeFileSync(join(stuckDir, 'file.txt'), 'cannot-delete');
+    chmodSync(reposDir, 0o555);
+    const scriptPath = join(root, 'cleanup.sh');
+    writeFileSync(scriptPath, buildInvokerHomeCleanupScript(invokerHome, []));
+    const stubBin = join(root, 'stub-bin');
+    mkdirSync(stubBin, { recursive: true });
+    writeFileSync(join(stubBin, 'pkill'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+
+    let result;
+    try {
+      result = spawnSync('bash', [scriptPath], {
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: isolatedTmp, PATH: `${stubBin}:${process.env.PATH ?? ''}` },
+      });
+    } finally {
+      chmodSync(reposDir, 0o755);
+    }
+
+    expect(result.status).toBe(0);
+    expect(existsSync(stuckDir)).toBe(true);
+    expect(result.stdout).toContain(`[disk-headroom-cleanup] remove-failed ${stuckDir}`);
+    expect(result.stdout).not.toContain(`[disk-headroom-cleanup] remove ${stuckDir}`);
   });
 });
