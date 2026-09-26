@@ -514,6 +514,13 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);
     }
+    const hasCommand = typeof task.command === 'string' && task.command.trim() !== '';
+    const hasPrompt = typeof task.prompt === 'string' && task.prompt.trim() !== '';
+    if (!hasCommand && !hasPrompt) {
+      throw new PlanParseError(
+        `Task "${task.id}" must have at least one of "command" or "prompt". A task without either cannot run.`,
+      );
+    }
     assertNoLegacyRoutingKeys(`Task "${task.id}"`, task as object);
 
     if (hasOwn(task as object, 'autoFix')) {

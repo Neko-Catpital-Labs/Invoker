@@ -73,12 +73,14 @@ workflows:
     tasks:
       - id: bound
         description: Use the planning session repository
+        command: echo ok
   - name: Explicit Repository Workflow
     repoUrl: git@github.com:test/explicit-repo.git
     featureBranch: plan/explicit-repository
     tasks:
       - id: explicit
         description: Keep the explicit repository
+        command: echo ok
 `, deps, {
       repositoryBinding: {
         repoUrl: '/home/demo/demo-repo',
@@ -99,6 +101,7 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build it
+    command: echo ok
 `;
 
     await loadPlanSubmissionBundle(plan, deps, { staged: true });
@@ -122,6 +125,7 @@ featureBranch: plan/single-review-workflow
 tasks:
   - id: build
     description: Build it
+    command: echo ok
 `, deps);
 
     expect(loadedPlans).toHaveLength(1);
@@ -141,11 +145,13 @@ workflows:
     tasks:
       - id: build-upstream
         description: Build upstream
+        command: echo ok
   - name: Downstream Step
     featureBranch: plan/downstream-step
     tasks:
       - id: build-downstream
         description: Build downstream
+        command: echo ok
 `, deps);
 
     expect(loadedPlans).toHaveLength(2);
@@ -167,6 +173,7 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build it
+    command: echo ok
 `;
 
     await loadPlanSubmissionBundle(plan, deps, { submittedBy: 'worker' });
@@ -182,6 +189,7 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build it
+    command: echo ok
 `;
 
     await loadPlanSubmissionBundle(plan, deps);
@@ -197,6 +205,7 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build it
+    command: echo ok
     priority: 5
 `;
 
@@ -213,6 +222,7 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build it
+    command: echo ok
     executionAgent: codex
     executionModel: gpt-5.6-luna
 `;
@@ -235,11 +245,13 @@ workflows:
     tasks:
       - id: good
         description: Fine
+        command: echo ok
   - name: Bad Step
     featureBranch: plan/bad-step
     tasks:
       - id: bad
         description: Not fine
+        prompt: Do the work
         executionAgent: codex
         executionModel: gpt-5.6-luna
 `;
@@ -274,8 +286,10 @@ repoUrl: git@github.com:test/repo.git
 tasks:
   - id: first
     description: First task
+    command: echo ok
   - id: second
     description: Second task
+    command: echo ok
     dependencies: [first]
 `, {
         persistence,
