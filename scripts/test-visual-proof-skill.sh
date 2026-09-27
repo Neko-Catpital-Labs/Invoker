@@ -47,6 +47,12 @@ must_contain "Expected surface and Expected predicates" \
   "visual-proof skill must require declaring Expected surface/predicates before capture"
 must_contain "Mechanical enforcement of that declaration is Backlog" \
   "visual-proof skill must mark Expected-surface mechanical gates as Backlog"
+must_contain "multiple major cases" \
+  "visual-proof skill must require Expected case-coverage for multi-case OR claims"
+must_contain "enumerate each case" \
+  "visual-proof skill must require Expected predicates to enumerate each OR case"
+must_contain "distinct media, or an explicit waiver" \
+  "visual-proof skill must require distinct Visual Proof media or waiver per major case"
 
 # A captured file is not proof anyone looked at it. Locks the prove-it hard gate wiring.
 must_contain "A captured screenshot or video file is not proof that anyone looked at it" \

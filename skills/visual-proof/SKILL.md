@@ -48,6 +48,12 @@ see). Mechanical enforcement of that declaration is Backlog; this skill only
 requires the declaration as a pointer so the capture target cannot drift from
 the claim.
 
+When the Review Claim names multiple major cases (OR claims — for example
+usage-limit **or** login/auth-needed failure), Expected predicates must
+enumerate each case before capture. Visual Proof is incomplete until every
+named case has its own distinct media, or an explicit waiver for that case.
+One case's screenshot does not cover another case in the same claim.
+
 ## Never reuse an unrelated or stale asset as proof
 
 Every image/video/gif in a `## Visual Proof` section must come from a capture run **against the
