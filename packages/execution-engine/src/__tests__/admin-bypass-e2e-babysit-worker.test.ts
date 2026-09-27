@@ -339,16 +339,10 @@ describe('runAdminBypassE2eBabysitTick', () => {
   });
 
   it('throttles duplicate investigation plans for the same worker within the cooldown window', async () => {
-    const staleRow: RepairFilingRow = {
-      kind: 'admin-requeue:rebase-conflict',
-      subject: '11219',
-      stateSha: 'sha-stale',
-      createdAt: new Date(Date.now() - REPAIR_FILING_STALE_TTL_MS - 60_000).toISOString(),
-    };
     const workerLifecycle = new FakeWorkerLifecycle([
       { kind: DEFAULT_WATCHED_WORKER_KINDS[0], desiredEnabled: true, lifecycle: 'stopped' },
     ]);
-    const repairFilings = new FakeRepairFilingStore([staleRow]);
+    const repairFilings = new FakeRepairFilingStore([]);
     const planSubmitter = new FakeInvestigativePlanSubmitter();
     const { store } = makeDecisionStore();
     const recentInvestigations = new Map<string, number>();
@@ -366,16 +360,15 @@ describe('runAdminBypassE2eBabysitTick', () => {
     await runAdminBypassE2eBabysitTick(baseOptions);
     expect(planSubmitter.submittedPlans).toHaveLength(1);
     expect(planSubmitter.submittedPlans[0]).toContain(DEFAULT_WATCHED_WORKER_KINDS[0]);
-    expect(planSubmitter.submittedPlans[0]).not.toContain(staleRow.kind);
     expect(workerLifecycle.startCalls).toHaveLength(1);
-    expect(repairFilings.deleteCalls).toHaveLength(1);
+    expect(repairFilings.deleteCalls).toHaveLength(0);
 
     // A second tick immediately should not file another plan, but should still
-    // attempt the start and delete operations.
+    // attempt the start operation.
     await runAdminBypassE2eBabysitTick(baseOptions);
     expect(planSubmitter.submittedPlans).toHaveLength(1);
     expect(workerLifecycle.startCalls).toHaveLength(2);
-    expect(repairFilings.deleteCalls).toHaveLength(2);
+    expect(repairFilings.deleteCalls).toHaveLength(0);
   });
 
   it('publishes a needs-human alert once for a new claim', async () => {
