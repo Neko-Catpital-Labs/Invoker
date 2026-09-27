@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -66,9 +65,12 @@ def scan_file(path: Path) -> tuple[tuple[int, int, int, int], str | None]:
     with path.open(errors="replace") as fh:
         for line in fh:
             if first_ts is None:
-                m = re.search(r'"timestamp":"([^"]+)"', line)
-                if m:
-                    first_ts = m.group(1)
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    obj = None
+                if isinstance(obj, dict) and isinstance(obj.get("timestamp"), str):
+                    first_ts = obj["timestamp"]
             add_usage(line, seen)
     totals = [0, 0, 0, 0]
     for fields in seen.values():
