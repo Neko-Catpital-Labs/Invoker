@@ -11,6 +11,7 @@ import {
 } from '../worker-runtime.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
+import { uniqueWorkKeys } from './worker-key-utils.js';
 
 export const WORKFLOW_RESUME_WORKER_KIND = 'workflow-resume';
 
@@ -122,7 +123,7 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
     const wakeups = options.drainWakeupHints?.() ?? [];
     const wakeupWorkflowIds = collectWakeupWorkflowIds(wakeups);
 
-    const candidates = wakeupWorkflowIds.length > 0 && ctx.reason === 'wake'
+    const candidates = (wakeupWorkflowIds.length > 0 && ctx.reason === 'wake'
       ? wakeupWorkflowIds
         .map((id) => ({
           workflowId: id,
@@ -130,7 +131,8 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
         }))
         .filter((candidate): candidate is { workflowId: string; readyTaskId: string } =>
           candidate.readyTaskId !== null)
-      : listAllWorkflowsWithReadyPendingTasks(options.store);
+      : listAllWorkflowsWithReadyPendingTasks(options.store))
+      .filter((candidate) => ctx.workKey === undefined || candidate.readyTaskId === ctx.workKey);
 
     const submitted = new Set<string>();
     for (const candidate of candidates) {
@@ -212,6 +214,20 @@ export function createWorkflowResumeWorker(options: WorkflowResumeWorkerOptions)
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
     onTick,
+    listWorkKeys: options.workflowResume && !options.onTick
+      ? ({ reason }) => {
+        if (reason === 'wake') {
+          const workflowIds = collectWakeupWorkflowIds(pendingWakeups);
+          const readyTaskIds = workflowIds
+            .map((workflowId) => findLocallyReadyPendingTaskId(options.workflowResume!.store, workflowId));
+          if (readyTaskIds.some((taskId) => taskId !== null)) return uniqueWorkKeys(readyTaskIds);
+        }
+        return uniqueWorkKeys(
+          listAllWorkflowsWithReadyPendingTasks(options.workflowResume!.store)
+            .map((candidate) => candidate.readyTaskId),
+        );
+      }
+      : () => [WORKFLOW_RESUME_WORKER_KIND],
   });
   if (!options.messageBus || !options.workflowResume || options.onTick) {
     return runtime;

@@ -85,6 +85,7 @@ export function createMergifyQueueResearchWorker(options: MergifyQueueResearchWo
       hasMaps: options.hasMaps,
       spawnProcess: options.spawnProcess,
     }),
+    listWorkKeys: () => [MERGIFY_QUEUE_RESEARCH_WORKER_KIND],
   });
 }
 

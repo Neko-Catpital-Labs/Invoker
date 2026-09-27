@@ -66,5 +66,6 @@ export function createPrStatusWorker(options: PrStatusWorkerOptions): WorkerRunt
       logger: options.logger,
       reviewGate: options.reviewGate,
     }),
+    listWorkKeys: () => [PR_STATUS_WORKER_KIND],
   });
 }

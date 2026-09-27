@@ -115,6 +115,7 @@ export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): Wo
     intervalMs: options.intervalMs ?? resolveSlackBugScanIntervalMs(),
     tickOnStart: options.tickOnStart ?? true,
     startDelayMs: options.startDelayMs,
+    listWorkKeys: () => [SLACK_BUG_SCAN_WORKER_KIND],
     onTick: async (ctx) => {
       ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);
