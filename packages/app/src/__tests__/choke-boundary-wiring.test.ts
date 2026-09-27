@@ -258,6 +258,7 @@ describe('choke boundary wiring', () => {
 
     expect(() => metrics.recordRequest('ipc', 'success', { channel: 'x' })).not.toThrow();
     expect(() => metrics.recordQueueAccepted('mutation', 'intent:1')).not.toThrow();
+    expect(() => metrics.recordQueueRejected('launch', 'dispatch:1')).not.toThrow();
     expect(() => metrics.recordEventLoopLag('launch.topup', 3)).not.toThrow();
     expect(onMetricError).toHaveBeenCalledWith('counter', expect.any(Error));
     expect(onMetricError).toHaveBeenCalledWith('gauge', expect.any(Error));
