@@ -20,6 +20,34 @@ To choose which surface/spec to prove before capture, use `skills/verify/SKILL.m
 (`node skills/verify/control-invoker.mjs prove <feature>` or `visual-proof …`). This skill
 still owns before/after capture and the Manually inspected gate.
 
+## Match the proof source to the claim
+
+By default, a screenshot means a pixel capture from the actual rendered flow
+being described: the running Electron/`packages/ui` app, a Slack/`packages/surfaces`
+message or modal as shown in Slack itself, or another live device/OS surface the
+claim names. A screenshot of a container that displays reconstructed controls
+proves only that the container rendered. Mocked, redrawn, generated, Storybook,
+accessibility-tree-only, or other proxy UI does not satisfy a request for a
+screenshot or visual proof unless the user explicitly asked for a mockup.
+
+For Slack claims, capture the live Slack client (or an authenticated Slack web
+session showing the real message/blocks), not a local HTML preview, fixture
+renderer, or redrawn block mock. For Electron/`packages/ui` claims, capture the
+running app window under test, not a static component story that redraws the
+controls.
+
+Cropping and annotation overlays (borders, arrows, labels, or highlights) are
+allowed when they do not redraw or replace the captured pixels. Preserve both
+the untouched raw capture and the annotated artifact. Record the source app,
+device or browser and OS, and flow step; then inspect the exact icons, labels,
+and target state in the artifact before presenting it.
+
+Before capture, declare the Expected surface and Expected predicates for the
+claim (which live surface must appear, and what the reviewer must be able to
+see). Mechanical enforcement of that declaration is Backlog; this skill only
+requires the declaration as a pointer so the capture target cannot drift from
+the claim.
+
 ## Never reuse an unrelated or stale asset as proof
 
 Every image/video/gif in a `## Visual Proof` section must come from a capture run **against the
