@@ -876,7 +876,8 @@ export class SqliteTaskAttemptRepository {
           : beforeTask.execution,
       };
       if (mergedForRecovery.execution.agentSessionId || mergedForRecovery.execution.lastAgentSessionId) {
-        this.syncSessionRecoveryFromTask(workflowId ?? beforeTask.config.workflowId ?? '', mergedForRecovery);
+        const recoveryWorkflowId = mergedForRecovery.config.workflowId;
+        if (recoveryWorkflowId) this.syncSessionRecoveryFromTask(recoveryWorkflowId, mergedForRecovery);
       }
       const taskPayload = this.loadTaskJournalPayload(taskId);
       if (!taskPayload) {
