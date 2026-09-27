@@ -171,6 +171,33 @@ class PrereqSplitValidationTests(unittest.TestCase):
             repair_body.is_incidental_tooling_docs_addition({"valid": True, "errors": []})
         )
 
+    def test_scope_split_uses_review_units_not_error_text(self) -> None:
+        self.assertEqual(
+            repair_body.scope_split_review_units(
+                {"valid": False, "reviewUnits": ["proof", "tooling-policy", "proof"]}
+            ),
+            ("proof", "tooling-policy"),
+        )
+        self.assertEqual(
+            repair_body.scope_split_review_units({"valid": False, "reviewUnits": ["proof"]}),
+            (),
+        )
+        self.assertEqual(
+            repair_body.scope_split_review_units(
+                {"valid": True, "reviewUnits": ["proof", "tooling-policy"]}
+            ),
+            (),
+        )
+        self.assertEqual(
+            repair_body.scope_split_review_units(
+                {
+                    "valid": False,
+                    "errors": ["Split this into one Review Unit per PR."],
+                }
+            ),
+            (),
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

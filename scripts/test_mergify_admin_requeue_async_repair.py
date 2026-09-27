@@ -94,6 +94,26 @@ class AsyncRepairPlanTests(unittest.TestCase):
                 for task, expected_id in zip(doc["tasks"][1:], expected_task_ids[1:]):
                     self.assertEqual(task["dependencies"], [expected_task_ids[expected_task_ids.index(expected_id) - 1]])
 
+    def test_scope_split_plan_names_each_review_unit_and_skips_in_place_repair(self):
+        plan = async_repair.build_repair_scope_split_plan(
+            pr(),
+            repo="Neko-Catpital-Labs/Invoker",
+            review_units=("proof", "tooling-policy"),
+            review_unit="proof",
+            errors=("Diff atomicity violation: test-assertion-weakened",),
+            details_url="https://example.invalid/job",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        doc = yaml.safe_load(plan.yaml_text)
+        self.assertEqual([task["id"] for task in doc["tasks"]], ["repair", "normalize", "safe-push"])
+        self.assertIn("--scope-split", doc["tasks"][1]["command"])
+        self.assertIn("proof, tooling-policy", plan.yaml_text)
+        self.assertIn("scripts/create-pr.mjs", plan.yaml_text)
+        self.assertIn("test-assertion-weakened", plan.yaml_text)
+        self.assertNotIn("Diagnose why it is failing", plan.yaml_text)
+        self.assertTrue(plan.plan_name.startswith("admin-bypass-repair-scope-split-pr-2647-"))
+
     def test_repair_check_plan_includes_three_tasks_in_dependency_order(self):
         plan = async_repair.build_repair_check_plan(
             pr(),
