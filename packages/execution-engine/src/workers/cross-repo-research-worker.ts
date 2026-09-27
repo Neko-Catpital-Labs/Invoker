@@ -85,6 +85,7 @@ export function createCrossRepoResearchWorker(options: CrossRepoResearchWorkerOp
       hasMaps: options.hasMaps,
       spawnProcess: options.spawnProcess,
     }),
+    listWorkKeys: () => [CROSS_REPO_RESEARCH_WORKER_KIND],
   });
 }
 

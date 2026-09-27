@@ -66,6 +66,7 @@ export function createSessionTokenPushWorker(options: SessionTokenPushWorkerOpti
       shell: options.shell,
       spawnProcess: options.spawnProcess,
     }),
+    listWorkKeys: () => [SESSION_TOKEN_PUSH_WORKER_KIND],
   });
 }
 

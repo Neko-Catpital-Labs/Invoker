@@ -10,6 +10,7 @@ import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { buildTaskGraphSnapshot } from './web/task-graph-snapshot.js';
 import { listWorkerActionHistory, listWorkerDecisions } from './worker-control.js';
+import type { ChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 
 export interface RegisterReadOnlyIpcHandlersContext {
   ipcMain: IpcMain;
@@ -30,6 +31,7 @@ export interface RegisterReadOnlyIpcHandlersContext {
   onMutationOwnerUnavailable?: (reason: string) => void;
   recordStartupDuration: (label: string, startedAtMs: number, fields?: Record<string, unknown>) => void;
   getTaskDeltaStreamSequence: () => number;
+  chokeMetrics?: ChokeBoundaryMetrics;
 }
 
 type DelegatedTasksSnapshot = {
@@ -67,7 +69,24 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     onMutationOwnerUnavailable,
     recordStartupDuration,
     getTaskDeltaStreamSequence,
+    chokeMetrics,
   } = context;
+
+  function handleIpcRequest<TResult>(
+    channel: string,
+    handler: (...args: unknown[]) => TResult | Promise<TResult>,
+  ): void {
+    ipcMain.handle(channel, async (_event: unknown, ...args: unknown[]) => {
+      try {
+        const result = await handler(...args);
+        chokeMetrics?.recordRequest('ipc', 'success', { channel });
+        return result;
+      } catch (err) {
+        chokeMetrics?.recordRequest('ipc', 'error', { channel });
+        throw err;
+      }
+    });
+  }
 
   async function delegateOwnerQuery<T>(kind: string, request: Record<string, unknown> = {}): Promise<T | null> {
     if (getOwnerMode?.() !== false) return null;
@@ -110,7 +129,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
   }
 
   let cachedWorkflowList: { at: number; value: unknown } | null = null;
-  ipcMain.handle('invoker:list-workflows', () =>
+  handleIpcRequest('invoker:list-workflows', () =>
     delegatedRead('workflows', {}, 'workflows', () => {
       const now = Date.now();
       if (cachedWorkflowList && now - cachedWorkflowList.at >= 0 && now - cachedWorkflowList.at < 1000) {
@@ -120,9 +139,10 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
       cachedWorkflowList = { at: now, value };
       return value;
     }));
-  ipcMain.handle('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
+  handleIpcRequest('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
 
-  ipcMain.handle('invoker:load-workflow', async (_event, workflowId: string) => {
+  handleIpcRequest('invoker:load-workflow', async (workflowIdArg: unknown) => {
+    const workflowId = String(workflowIdArg);
     logger.info(`load-workflow: "${workflowId}"`, { module: 'ipc' });
     const delegated = await delegateOwnerQuery<{ workflow: unknown; tasks: unknown[] }>('workflow', { workflowId });
     if (delegated) return delegated;
@@ -134,7 +154,8 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     return { workflow, tasks };
   });
 
-  ipcMain.handle('invoker:get-review-gate', async (_event, workflowId: string) => {
+  handleIpcRequest('invoker:get-review-gate', async (workflowIdArg: unknown) => {
+    const workflowId = String(workflowIdArg);
     const delegated = await delegateOwnerQuery<{ reviewGate: unknown }>('review-gate', { workflowId });
     if (delegated && 'reviewGate' in delegated) return delegated.reviewGate;
     const workflow = persistence.loadWorkflow(workflowId);
@@ -143,7 +164,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     return buildReviewGateQueryResponse({ workflowId, workflow, tasks });
   });
 
-  ipcMain.handle('invoker:get-tasks', async () => {
+  handleIpcRequest('invoker:get-tasks', async () => {
     const startedAtMs = Date.now();
     const orchestrator = getOrchestrator();
     const delegatedSnapshot = asDelegatedTasksSnapshot(await delegateOwnerQuery<DelegatedTasksSnapshot>('tasks'));
@@ -182,58 +203,58 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     return { tasks, workflows, streamSequence };
   });
 
-  ipcMain.handle('invoker:get-events', (_event, taskId: string, options: GetEventsOptions) =>
+  handleIpcRequest('invoker:get-events', (taskId: unknown, options: unknown) =>
     delegatedRead('events', { taskId, options }, 'events', () =>
-      getEventsPage(persistence, String(taskId), options)));
-  ipcMain.handle('invoker:get-status', async () => (
+      getEventsPage(persistence, String(taskId), options as GetEventsOptions)));
+  handleIpcRequest('invoker:get-status', async () => (
     await delegateOwnerQuery('workflow-status') ?? getOrchestrator().getWorkflowStatus()
   ));
-  ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) =>
-    delegatedRead('task-by-id', { taskId }, 'task', () => loadTaskByIdFromPersistence(taskId) ?? null));
-  ipcMain.handle('invoker:get-task-output', (_event, taskId: string) =>
-    delegatedRead('task-output', { taskId }, 'output', () => persistence.getTaskOutput(taskId)));
-  ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) =>
-    delegatedRead('output-chunks', { taskId }, 'chunks', () => persistence.getOutputChunks(taskId)));
-  ipcMain.handle('invoker:replay-output-from', (_event, taskId: string, fromOffset: number) =>
-    delegatedRead('replay-output', { taskId, fromOffset }, 'chunks', () => persistence.replayOutputFrom(taskId, fromOffset)));
-  ipcMain.handle('invoker:get-output-tail', (_event, taskId: string) =>
-    delegatedRead('output-tail', { taskId }, 'tail', () => persistence.getOutputTail(taskId)));
-  ipcMain.handle('invoker:get-all-completed-tasks', () =>
+  handleIpcRequest('invoker:get-task-by-id', (taskId: unknown) =>
+    delegatedRead('task-by-id', { taskId }, 'task', () => loadTaskByIdFromPersistence(String(taskId)) ?? null));
+  handleIpcRequest('invoker:get-task-output', (taskId: unknown) =>
+    delegatedRead('task-output', { taskId }, 'output', () => persistence.getTaskOutput(String(taskId))));
+  handleIpcRequest('invoker:get-output-chunks', (taskId: unknown) =>
+    delegatedRead('output-chunks', { taskId }, 'chunks', () => persistence.getOutputChunks(String(taskId))));
+  handleIpcRequest('invoker:replay-output-from', (taskId: unknown, fromOffset: unknown) =>
+    delegatedRead('replay-output', { taskId, fromOffset }, 'chunks', () => persistence.replayOutputFrom(String(taskId), Number(fromOffset))));
+  handleIpcRequest('invoker:get-output-tail', (taskId: unknown) =>
+    delegatedRead('output-tail', { taskId }, 'tail', () => persistence.getOutputTail(String(taskId))));
+  handleIpcRequest('invoker:get-all-completed-tasks', () =>
     delegatedRead('all-completed-tasks', {}, 'tasks', () => persistence.loadAllCompletedTasks()));
-  ipcMain.handle('invoker:get-history-tasks', () =>
+  handleIpcRequest('invoker:get-history-tasks', () =>
     delegatedRead('history-tasks', {}, 'tasks', () => persistence.loadAllHistoryTasks()));
-  ipcMain.handle('invoker:get-worker-action-history', (_event, request: WorkerActionHistoryRequest) =>
+  handleIpcRequest('invoker:get-worker-action-history', (request: unknown) =>
     delegatedRead<WorkerActionHistoryResponse>(
       'worker-action-history',
       request as unknown as Record<string, unknown>,
       'workerActionHistory',
-      () => listWorkerActionHistory(persistence, request),
+      () => listWorkerActionHistory(persistence, request as WorkerActionHistoryRequest),
     ));
-  ipcMain.handle('invoker:get-worker-decisions', (_event, request: WorkerDecisionsRequest) =>
+  handleIpcRequest('invoker:get-worker-decisions', (request: unknown) =>
     delegatedRead<WorkerDecisionsResponse>(
       'worker-decisions',
       request as unknown as Record<string, unknown>,
       'workerDecisions',
-      () => listWorkerDecisions(persistence, request),
+      () => listWorkerDecisions(persistence, request as WorkerDecisionsRequest),
     ));
 
-  ipcMain.handle('invoker:get-claude-session', async (_event, sessionId: string) => {
+  handleIpcRequest('invoker:get-claude-session', async (sessionId: unknown) => {
     logger.info(`get-claude-session: "${sessionId}"`, { module: 'ipc' });
     try {
       const orchestrator = getOrchestrator();
-      return await resolveAgentSession(sessionId, DEFAULT_EXECUTION_AGENT, agentRegistry, orchestrator.getAllTasks());
+      return await resolveAgentSession(String(sessionId), DEFAULT_EXECUTION_AGENT, agentRegistry, orchestrator.getAllTasks());
     } catch (err) {
       logger.error(`get-claude-session failed: ${err}`, { module: 'ipc' });
       return null;
     }
   });
 
-  ipcMain.handle('invoker:get-agent-session', async (_event, sessionId: string, agentName?: string) => {
-    const resolvedAgentName = agentName ?? DEFAULT_EXECUTION_AGENT;
+  handleIpcRequest('invoker:get-agent-session', async (sessionId: unknown, agentName?: unknown) => {
+    const resolvedAgentName = typeof agentName === 'string' ? agentName : DEFAULT_EXECUTION_AGENT;
     logger.info(`get-agent-session: "${sessionId}" agent="${resolvedAgentName}"`, { module: 'ipc' });
     try {
       const orchestrator = getOrchestrator();
-      return await resolveAgentSession(sessionId, resolvedAgentName, agentRegistry, orchestrator.getAllTasks());
+      return await resolveAgentSession(String(sessionId), resolvedAgentName, agentRegistry, orchestrator.getAllTasks());
     } catch (err) {
       logger.error(`get-agent-session failed: ${err}`, { module: 'ipc' });
       return null;

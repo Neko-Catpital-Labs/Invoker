@@ -336,6 +336,7 @@ function createPrMaintenanceWorker(
       lockProbe: options.lockProbe,
       store: options.store,
     }),
+    listWorkKeys: () => [entrypoint.kind],
   });
 }
 

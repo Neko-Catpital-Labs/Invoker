@@ -153,6 +153,7 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
     logger: options.logger,
     intervalMs: options.intervalMs ?? resolveDiskCheckIntervalMs(),
     tickOnStart: options.tickOnStart ?? true,
+    listWorkKeys: () => [DISK_HEADROOM_WORKER_KIND],
     onTick: async (ctx) => {
       ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);

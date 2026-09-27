@@ -111,6 +111,7 @@ export function createIdleTaskCleanupWorker(options: IdleTaskCleanupWorkerOption
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_IDLE_TASK_CLEANUP_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? true,
+    listWorkKeys: () => [IDLE_TASK_CLEANUP_WORKER_KIND],
     onTick: async (ctx) => {
       ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);

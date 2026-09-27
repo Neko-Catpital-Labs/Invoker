@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { SQLiteAdapter } from '@invoker/data-store';
+import { getChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 
 export interface MainProcessDatabaseOptions {
   dbPath: string;
@@ -9,6 +10,7 @@ export interface MainProcessDatabaseOptions {
 }
 
 export async function openMainProcessDatabase(options: MainProcessDatabaseOptions): Promise<SQLiteAdapter> {
+  const chokeMetrics = getChokeBoundaryMetrics();
   if (options.detachedViewer) {
     if (!existsSync(options.dbPath)) {
       return openDetachedViewerDatabase();
@@ -18,6 +20,8 @@ export async function openMainProcessDatabase(options: MainProcessDatabaseOption
       readOnly: true,
       ownerCapability: false,
       exclusiveLocking: false,
+      onTransactionDuration: (info) => chokeMetrics.recordSqliteTransaction(info),
+      onBusyFailure: (info) => chokeMetrics.recordSqliteBusyFailure(info),
     });
   }
 
@@ -31,9 +35,15 @@ export async function openMainProcessDatabase(options: MainProcessDatabaseOption
     readOnly: options.readOnly,
     ownerCapability: !options.readOnly,
     exclusiveLocking: !options.readOnly && options.exclusiveLocking,
+    onTransactionDuration: (info) => chokeMetrics.recordSqliteTransaction(info),
+    onBusyFailure: (info) => chokeMetrics.recordSqliteBusyFailure(info),
   });
 }
 
 export async function openDetachedViewerDatabase(): Promise<SQLiteAdapter> {
-  return SQLiteAdapter.createEphemeral();
+  const chokeMetrics = getChokeBoundaryMetrics();
+  return SQLiteAdapter.createEphemeral({
+    onTransactionDuration: (info) => chokeMetrics.recordSqliteTransaction(info),
+    onBusyFailure: (info) => chokeMetrics.recordSqliteBusyFailure(info),
+  });
 }
