@@ -23,6 +23,7 @@ import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { appendJournalEntry, appendJournalEntryWithoutReadback, LOCAL_SYNC_ORIGIN } from './sync-journal.js';
 import { SQLITE_MAX_VARIABLE_NUMBER } from './sqlite-workflow-repository.js';
 import {
+  normalizeAgentSessionId,
   resolveDefaultClaudeWorkerConfigDir,
   upsertTaskSessionRecovery,
 } from './session-recovery.js';
@@ -249,7 +250,9 @@ export class SqliteTaskAttemptRepository {
     workflowId: string,
     task: TaskState,
   ): void {
-    const sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
+    const sessionId =
+      normalizeAgentSessionId(task.execution.agentSessionId)
+      ?? normalizeAgentSessionId(task.execution.lastAgentSessionId);
     if (!sessionId) return;
     if (!this.hasSessionRecoveryTable()) return;
     upsertTaskSessionRecovery(this.exec, {

@@ -3525,6 +3525,27 @@ describe('SQLiteAdapter', () => {
       });
     });
 
+    it('writes task_session_recovery from lastAgentSessionId when current session is invalid', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', {
+        execution: {
+          agentSessionId: ' none ',
+          lastAgentSessionId: 'sess-last-valid',
+          workspacePath: '/tmp/wt-last',
+        },
+      }));
+
+      expect(
+        (adapter as any).queryOne(
+          'SELECT agent_session_id, workspace_path FROM task_session_recovery WHERE workflow_id = ?',
+          ['wf-1'],
+        ),
+      ).toMatchObject({
+        agent_session_id: 'sess-last-valid',
+        workspace_path: '/tmp/wt-last',
+      });
+    });
+
     it('round-trips lastAgentSessionId and lastAgentName through save/load', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask(
