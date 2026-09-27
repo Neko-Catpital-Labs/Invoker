@@ -309,6 +309,14 @@ export function isTransientFailureClass(failureClass: FailureClass | undefined):
   return failureClass === 'ssh-transport-transient';
 }
 
+export interface FixFailureRecord {
+  readonly agent: string;
+  readonly failureClass?: FailureClass;
+  readonly message: string;
+  readonly resetsAt?: Date;
+  readonly at: Date;
+}
+
 export interface TaskExecution {
   readonly generation?: number;
   readonly blockedBy?: string;
@@ -340,6 +348,7 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
+  readonly lastFixFailure?: FixFailureRecord;
   /**
    * Resting status recorded when a fix session began (`failed`,
    * `review_ready`, or `awaiting_approval`). Present only while the session
