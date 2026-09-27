@@ -289,7 +289,10 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const enqueueWork = (payload: WorkerRuntimeWorkPayload): void => {
     const enqueued = workQueue.enqueue(UNMIGRATED_WORKER_KEY, payload);
     if (!enqueued) {
-      pendingAfterCurrent = payload;
+      pendingAfterCurrent = {
+        ...payload,
+        args: payload.args ?? pendingAfterCurrent?.args,
+      };
     }
   };
 
