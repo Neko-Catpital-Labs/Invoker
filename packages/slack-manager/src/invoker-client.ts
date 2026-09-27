@@ -104,6 +104,7 @@ export interface InvokerClient {
   getTaskOutput(taskId: string): Promise<string>;
   /** Run a delegated headless mutation (`approve`, `recreate`, `cancel-workflow`, …). Fire-and-forget. */
   exec(args: string[]): Promise<void>;
+  execWithResult(args: string[]): Promise<unknown>;
   /** Submit a plan file; resolves to the created workflow id(s). `workflowIds` covers stacked plans in submission order. */
   run(planPath: string): Promise<{ workflowId: string; workflowIds: string[] }>;
   /** (Re)launch Invoker. `healthy: false` results carry the failure cause (throttle, timeout, split-brain). */
@@ -313,6 +314,10 @@ export class IpcInvokerClient implements InvokerClient {
 
   async exec(args: string[]): Promise<void> {
     await this.ownerRequest('headless.exec', { args, noTrack: true, traceId: this.traceId('exec') }, EXEC_TIMEOUT_MS);
+  }
+
+  async execWithResult(args: string[]): Promise<unknown> {
+    return this.ownerRequest('headless.exec', { args, noTrack: true, traceId: this.traceId('exec') }, EXEC_TIMEOUT_MS);
   }
 
   async run(planPath: string): Promise<{ workflowId: string; workflowIds: string[] }> {
