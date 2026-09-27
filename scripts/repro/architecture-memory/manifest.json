@@ -1,0 +1,107 @@
+{
+  "controls": {
+    "baseline": {
+      "bypass-command-service": {
+        "expect": "fail",
+        "patch": "controls/baseline/bypass-command-service.patch"
+      },
+      "gold": {
+        "expect": "pass",
+        "patch": "controls/baseline/gold.patch"
+      },
+      "noop-todo-test": {
+        "expect": "fail",
+        "patch": "controls/baseline/noop-todo-test.patch"
+      },
+      "skip-review-close": {
+        "expect": "fail",
+        "patch": "controls/baseline/skip-review-close.patch"
+      },
+      "stub-empty-result": {
+        "expect": "fail",
+        "patch": "controls/baseline/stub-empty-result.patch"
+      },
+      "unscoped-dispatch": {
+        "expect": "fail",
+        "patch": "controls/baseline/unscoped-dispatch.patch"
+      }
+    },
+    "treatment": {
+      "bypass-command-service": {
+        "expect": "fail",
+        "patch": "controls/treatment/bypass-command-service.patch"
+      },
+      "gold": {
+        "expect": "pass",
+        "patch": "controls/treatment/gold.patch"
+      },
+      "noop-todo-test": {
+        "expect": "fail",
+        "patch": "controls/treatment/noop-todo-test.patch"
+      },
+      "skip-review-close": {
+        "expect": "fail",
+        "patch": "controls/treatment/skip-review-close.patch"
+      },
+      "stub-empty-result": {
+        "expect": "fail",
+        "patch": "controls/treatment/stub-empty-result.patch"
+      },
+      "unscoped-dispatch": {
+        "expect": "fail",
+        "patch": "controls/treatment/unscoped-dispatch.patch"
+      }
+    }
+  },
+  "experiment_id": "architecture-memory-edit-task-pool-v1",
+  "fixture": {
+    "patch": "fixture/treatment-structural-delta.patch",
+    "summary": "Extract WorkflowMutationFacade.runTaskCommand (close review -> CommandService -> task-scoped dispatch) and route retryTask/recreateTask through it; behavior-preserving."
+  },
+  "grader": {
+    "expected_tests": 6,
+    "file": "grader/hidden-edit-task-pool.test.ts"
+  },
+  "pinned_files": {
+    "controls/baseline/bypass-command-service.patch": "c4597480d0566acdceb561e105f52e35a62959be1459186cd2266de61ec53470",
+    "controls/baseline/gold.patch": "34e74efe8eae26fa35f804d7238b4dcd02577ff11e830aac15a6622c319d3333",
+    "controls/baseline/noop-todo-test.patch": "abb2804aaa83af1d85a3c7a1015b5fae4c472c3b642442caf7157469d4f22e64",
+    "controls/baseline/skip-review-close.patch": "0eff04575fa896e9b036480475c04ad2aaf1f682690b9f65116b1d2dee769cbf",
+    "controls/baseline/stub-empty-result.patch": "9f4f43e4b38b2e987bbd18c96d33c3882f2cfa50e91633e8cd2832e7293d9ab3",
+    "controls/baseline/unscoped-dispatch.patch": "1d4b7a3ec7a6bd909c6bab32d0fda1d519b2d17427175ad21412d5306256ea17",
+    "controls/treatment/bypass-command-service.patch": "69e555748523c72970ab8ee043bec9e9e648b46c3301016583324d8e5728ef81",
+    "controls/treatment/gold.patch": "3e8b2f7160bf5086e1fd306d0c4a3c0f7eeca0a1a4029a9885c3079f67616bff",
+    "controls/treatment/noop-todo-test.patch": "abb2804aaa83af1d85a3c7a1015b5fae4c472c3b642442caf7157469d4f22e64",
+    "controls/treatment/skip-review-close.patch": "09195516dad0aef0fc106f0e972904e2e277231c851e92e4f9dae3d010f4032a",
+    "controls/treatment/stub-empty-result.patch": "f134749d636593428363fd7d4f096ecf333e0956180eb97f9118ddf32ca82776",
+    "controls/treatment/unscoped-dispatch.patch": "744f6356dab24300d5c6b2025b6d6759578cd6296ebc952ca3a94cbd63fb2cb8",
+    "fixture/treatment-structural-delta.patch": "5cc376401d7dcaa29338cd70be293c63f353e77d7680cd1ab0bea41711f1bd62",
+    "grader/hidden-edit-task-pool.test.ts": "832da59b96e835076a623ccea9721fbe2e536326f999c86130923e920bb54ed8",
+    "runners.json": "b3155ae03cc5a2e9f2f8856e10967f774381e8aba22dcc4ae09e00a00d9e994e",
+    "task/prompt.md": "e864877ad6cb21d5898ff070bb8d27e6288d269d8515aafbc03ffc503342a6ea"
+  },
+  "protected_paths": [
+    "vitest.shared.ts",
+    "packages/app/vitest.config.ts",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "packages/app/package.json",
+    "tsconfig.json",
+    "packages/app/tsconfig.json"
+  ],
+  "regression_tests": [
+    "src/__tests__/workflow-mutation-facade.test.ts",
+    "src/__tests__/api-server.test.ts",
+    "src/__tests__/parity-regression.test.ts"
+  ],
+  "source": {
+    "commit": "0ca415e4d69a3f59a4b666e65f6362adf2d947ad",
+    "remote": "https://github.com/Neko-Catpital-Labs/Invoker.git",
+    "tree": "8248449ec6a6b2773fb4fd5eca9b20cc3d08eb00"
+  },
+  "task": {
+    "id": "facade-edit-task-pool",
+    "prompt": "task/prompt.md"
+  }
+}

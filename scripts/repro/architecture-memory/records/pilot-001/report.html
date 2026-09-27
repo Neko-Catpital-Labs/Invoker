@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Architecture-as-memory pilot pair pilot-001</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em;color:#1d1d1f}
+table{border-collapse:collapse;width:100%;margin:0.5em 0 1.5em}th,td{border:1px solid #d0d0d7;padding:4px 6px;
+text-align:left;vertical-align:top}th{background:#f3f3f6}pre{background:#f6f6f8;padding:8px;overflow:auto;
+font-size:12px;max-height:480px}code{background:#f3f3f6;padding:0 3px}.note{background:#fff7e0;padding:8px 12px;
+border-left:4px solid #e0a800}
+</style></head><body>
+<h1>Architecture-as-memory: pilot pair <code>pilot-001</code></h1>
+<p class="note"><b>Scope.</b> One real A/B pair establishes that the apparatus executes end to end and records
+externally checked outcomes. It is not evidence for or against an architecture advantage: n=1 per arm, no variance
+estimate, no significance test. No dollar-efficiency conclusion is allowed.</p>
+<h2>Setup</h2>
+<table><thead><tr><th>field</th><th>value</th></tr></thead><tbody><tr><td>source commit</td><td>0ca415e4d69a3f59a4b666e65f6362adf2d947ad</td></tr><tr><td>source tree</td><td>8248449ec6a6b2773fb4fd5eca9b20cc3d08eb00</td></tr><tr><td>task</td><td>facade-edit-task-pool</td></tr><tr><td>execution order (randomized)</td><td>treatment → baseline</td></tr><tr><td>order seed</td><td>6fb57668321bd98f</td></tr><tr><td>harness</td><td>claude</td></tr><tr><td>CLI version</td><td>2.1.281 (Claude Code)</td></tr><tr><td>CLI binary sha256</td><td>a922981f6f3b55a251ef9f9dbaa0621a5f99cbcb5ca67f8a797476ccfc83f626</td></tr><tr><td>model</td><td>claude-sonnet-5</td></tr><tr><td>effort</td><td>medium</td></tr><tr><td>budget per trial (USD cap)</td><td>5.0</td></tr><tr><td>timeout per trial (s)</td><td>900</td></tr><tr><td>config sha256 (baseline)</td><td>4427f8361f8d9954f7abd3c874365995641807f2cbf36f40e1c0cb9fd56edb34</td></tr><tr><td>config sha256 (treatment)</td><td>4427f8361f8d9954f7abd3c874365995641807f2cbf36f40e1c0cb9fd56edb34</td></tr><tr><td>prompt sha256</td><td>e864877ad6cb21d5898ff070bb8d27e6288d269d8515aafbc03ffc503342a6ea</td></tr><tr><td>grader sha256</td><td>832da59b96e835076a623ccea9721fbe2e536326f999c86130923e920bb54ed8</td></tr><tr><td>automatic retries</td><td>0</td></tr><tr><td>human intervention</td><td>baseline: none, treatment: none</td></tr></tbody></table>
+<h2>Trial outcomes</h2>
+<table><thead><tr><th>arm</th><th>run #</th><th>trial status</th><th>harness exit</th><th>wall s</th><th>graded</th><th>reason</th><th>hidden checks passed</th><th>input tok</th><th>output tok</th><th>cache-read tok</th><th>reported USD</th><th>turns</th><th>files changed</th></tr></thead><tbody><tr><td>baseline</td><td>2</td><td>completed</td><td>0</td><td>468.2</td><td>PASS</td><td>passed</td><td>6/6</td><td>46</td><td>5751</td><td>805167</td><td>0.3924794</td><td>23</td><td>packages/app/src/__tests__/workflow-mutation-facade.test.ts, packages/app/src/workflow-mutation-facade.ts</td></tr><tr><td>treatment</td><td>1</td><td>completed</td><td>0</td><td>48.1</td><td>PASS</td><td>passed</td><td>6/6</td><td>28</td><td>3499</td><td>408991</td><td>0.22346820000000003</td><td>14</td><td>packages/app/src/__tests__/workflow-mutation-facade.test.ts, packages/app/src/workflow-mutation-facade.ts</td></tr></tbody></table>
+<p>Dollar telemetry complete: True. One pair cannot support an efficiency conclusion. Reported dollars are the harness&#x27;s own client-side estimate; no prices were invented and token totals are not converted to dollars.
+Setup/development costs: no model calls outside the two trials; authoring-session cost is not measured here.</p>
+<h2>External checks per arm (fresh evaluator copies)</h2>
+<table><thead><tr><th>arm</th><th>suite</th><th>check</th><th>status / exit</th><th>failure excerpt</th></tr></thead><tbody><tr><td>baseline</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade</td><td>passed</td><td></td></tr><tr><td>baseline</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload</td><td>passed</td><td></td></tr><tr><td>baseline</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs</td><td>passed</td><td></td></tr><tr><td>baseline</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest</td><td>passed</td><td></td></tr><tr><td>baseline</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing</td><td>passed</td><td></td></tr><tr><td>baseline</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing</td><td>passed</td><td></td></tr><tr><td>baseline</td><td>hidden</td><td>exit code of: pnpm exec vitest run src/__tests__/archmem-hidden-edit-task-pool.test.ts</td><td>0</td><td></td></tr><tr><td>baseline</td><td>regression</td><td>exit code of: pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts src/__tests__/api-server.test.ts src/__tests__/parity-regression.test.ts</td><td>0</td><td></td></tr><tr><td>treatment</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade</td><td>passed</td><td></td></tr><tr><td>treatment</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload</td><td>passed</td><td></td></tr><tr><td>treatment</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs</td><td>passed</td><td></td></tr><tr><td>treatment</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest</td><td>passed</td><td></td></tr><tr><td>treatment</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool maps a known CommandService error code to OrchestratorError and dispatches nothing</td><td>passed</td><td></td></tr><tr><td>treatment</td><td>hidden</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool surfaces an unknown CommandService failure message and dispatches nothing</td><td>passed</td><td></td></tr><tr><td>treatment</td><td>hidden</td><td>exit code of: pnpm exec vitest run src/__tests__/archmem-hidden-edit-task-pool.test.ts</td><td>0</td><td></td></tr><tr><td>treatment</td><td>regression</td><td>exit code of: pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts src/__tests__/api-server.test.ts src/__tests__/parity-regression.test.ts</td><td>0</td><td></td></tr></tbody></table>
+<h2>Preflight gates run before any trial</h2>
+<h3>Baseline behavioral equivalence (existing facade/API tests, unpatched snapshots)</h3>
+<p>Identical per-test outcomes across arms: True</p>
+<table><thead><tr><th>arm</th><th>exit</th><th>passed</th><th>failed</th><th>snapshot tree</th></tr></thead><tbody><tr><td>baseline</td><td>0</td><td>172</td><td>0</td><td>ac518fa9c4ec</td></tr><tr><td>treatment</td><td>0</td><td>172</td><td>0</td><td>9cd6118e2b18</td></tr></tbody></table>
+<h3>Grader controls</h3>
+<table><thead><tr><th>arm</th><th>control</th><th>expected</th><th>actual</th><th>verdict</th><th>hidden exit</th><th>hidden passed</th><th>failing hidden checks</th></tr></thead><tbody><tr><td>baseline</td><td>bypass-command-service</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>2/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hidden: WorkflowMutationFacade.editTaskPool</td></tr><tr><td>baseline</td><td>gold</td><td>pass</td><td>pass</td><td>ok</td><td>0</td><td>6/6</td><td></td></tr><tr><td>baseline</td><td>noop-todo-test</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>0/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.e</td></tr><tr><td>baseline</td><td>skip-review-close</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>5/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs</td></tr><tr><td>baseline</td><td>stub-empty-result</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>1/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hidden: WorkflowMutationFacade.editTaskPool</td></tr><tr><td>baseline</td><td>unedited-snapshot</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>0/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.e</td></tr><tr><td>baseline</td><td>unscoped-dispatch</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>5/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest</td></tr><tr><td>treatment</td><td>bypass-command-service</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>2/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hidden: WorkflowMutationFacade.editTaskPool</td></tr><tr><td>treatment</td><td>gold</td><td>pass</td><td>pass</td><td>ok</td><td>0</td><td>6/6</td><td></td></tr><tr><td>treatment</td><td>noop-todo-test</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>0/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.e</td></tr><tr><td>treatment</td><td>skip-review-close</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>5/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool closes the owning workflow review before the mutation runs</td></tr><tr><td>treatment</td><td>stub-empty-result</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>1/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.editTaskPool exactly once with the requested payload; archmem hidden: WorkflowMutationFacade.editTaskPool</td></tr><tr><td>treatment</td><td>unedited-snapshot</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>0/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool exposes editTaskPool(taskId, poolId) on the facade; archmem hidden: WorkflowMutationFacade.editTaskPool routes the mutation through CommandService.e</td></tr><tr><td>treatment</td><td>unscoped-dispatch</td><td>fail</td><td>fail</td><td>ok</td><td>1</td><td>5/6</td><td>archmem hidden: WorkflowMutationFacade.editTaskPool dispatches only the edited task as mutation-scoped work and tops up the rest</td></tr></tbody></table>
+<h3>Access-denial controls (same sandbox profile as trials)</h3>
+<table><thead><tr><th>probe</th><th>expected</th><th>observed</th><th>exit</th><th>verdict</th></tr></thead><tbody><tr><td>read hidden grader in evaluator repo</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>read committed gold control</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>read evaluator private copy</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>read other arm&#x27;s trial copy</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>list evaluator state/ledger dir</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>list personal ~/.claude</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>read gh credentials dir</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>list prior sessions in harness config</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>read harness prompt history</td><td>deny</td><td>deny</td><td>1</td><td>ok</td></tr><tr><td>execute gh</td><td>deny</td><td>deny</td><td>71</td><td>ok</td></tr><tr><td>execute invoker-cli</td><td>deny</td><td>deny</td><td>71</td><td>ok</td></tr><tr><td>read own trial file</td><td>allow</td><td>allow</td><td>0</td><td>ok</td></tr><tr><td>write own trial file</td><td>allow</td><td>allow</td><td>0</td><td>ok</td></tr><tr><td>run node inside trial</td><td>allow</td><td>allow</td><td>0</td><td>ok</td></tr></tbody></table>
+<h2>What was exercised</h2>
+<ul>
+<li>Two snapshots from one immutable source commit; the treatment differs only by the committed structural fixture
+(a shared task-command lifecycle helper in <code>WorkflowMutationFacade</code>).</li>
+<li>Identical prompt, harness binary, model, effort, tools, permissions, budget, timeout and isolation profile
+(normalized config hashes above are equal).</li>
+<li>Trials ran under macOS <code>sandbox-exec</code> with evaluator files, other-arm copies, ledger, prior sessions and
+credential stores unreadable; results were graded afterwards by evaluator-owned hidden checks in fresh copies.</li>
+</ul>
+<h2>What was not exercised</h2>
+<ul>
+<li>No typecheck: the source commit has no working per-package <code>tsc</code> entry point, so grading is behavioral
+(vitest) only.</li>
+<li>The codex harness is registered but was not run; only one harness/model/effort was used.</li>
+<li>Network egress is allowed (the harness needs its API); publication is blocked by removing git remotes, denying
+credential helpers/<code>gh</code>/Invoker CLIs, and a Bash allowlist, not by a network firewall.</li>
+<li>No repeated trials, no other tasks.</li>
+</ul>
+<h2>What would invalidate this pair</h2>
+<ul>
+<li>Any verify-recorded failure: a pinned input hash drift, a patch that no longer regrades to the recorded verdict,
+a snapshot that no longer rebuilds to the recorded tree, or ledger evidence of more than one invocation per arm.</li>
+<li>Evidence that a trial read evaluator-owned files (the access-denial controls would have to be wrong).</li>
+<li>A rerun of either arm after seeing this result, or tuning the treatment in response to it.</li>
+</ul>
+<h2>Later protocol (not launched)</h2>
+<p>Six behavioral tasks around task-mutation handling, each frozen with its own hidden grader and bad/good controls
+before any trial, five paired repeats per task (60 trials), randomized order within each pair, same pinned harness
+configuration, every attempt counted, and a pre-registered primary metric (hidden-check pass rate) with a paired
+analysis. Only after this apparatus pair verifies cleanly.</p>
+<h2>Agent final messages (sanitized)</h2>
+<h3>baseline</h3><pre>These failures involve git-merge/executor mechanics unrelated to the facade change — confirming the broad suite failures are pre-existing environment issues, not something introduced by my edit. The facade-specific tests (28/28) pass cleanly.
+
+## Summary
+
+Added `editTaskPool(taskId, poolId): Promise&lt;MutationResult&gt;` to `WorkflowMutationFacade` (`packages/app/src/workflow-mutation-facade.ts:246`), following the same `closeReviewForTask` → `runViaCommandService(cs.editTaskPool)` → `finalizeWithTopup` pattern used by `retryTask`/`recreateTask`, so pool edits get the same review-close, mutex-serialized dispatch, and topup guarantees as other task-level mutations.
+
+Added corresponding unit tests in `packages/app/src/__tests__/workflow-mutation-facade.test.ts` (mock wiring for `commandService.editTaskPool`/`orchestrator.editTaskPool`, plus two new test cases). Ran `pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts` — all 28 tests pass. A full `pnpm test` run shows many pre-existing failures unrelated to this change (EPERM on local config file, missing built `@invoker/surfaces` module, git-merge mechanics, timeouts); I spot-checked several and confirmed none relate to `editTaskPool`.</pre><h3>treatment</h3><pre>Tests pass and confirm behavior; I&#x27;ll skip the separate typecheck since it needs approval and isn&#x27;t part of the required test run.
+
+## Summary
+
+Added `WorkflowMutationFacade.editTaskPool(taskId, poolId)` in `packages/app/src/workflow-mutation-facade.ts`, implemented via the existing `runTaskCommand` helper (same lifecycle as `retryTask`/`recreateTask`: closes the workflow review, routes through `CommandService.editTaskPool`, then dispatches/tops up scoped to the task).
+
+Updated `packages/app/src/__tests__/workflow-mutation-facade.test.ts` to mock `orchestrator.editTaskPool`/`commandService.editTaskPool` and added an `editTaskPool` describe block verifying the command dispatch and the review-close-before-mutation ordering. Ran `pnpm exec vitest run src/__tests__/workflow-mutation-facade.test.ts` — 28/28 tests pass.</pre>
+<h2>Replayable patches</h2>
+<h3>baseline patch <code>3dc35ff3f9da6f13</code></h3><pre>diff --git a/packages/app/src/__tests__/workflow-mutation-facade.test.ts b/packages/app/src/__tests__/workflow-mutation-facade.test.ts
+index 3bb7fe5..b71872a 100644
+--- a/packages/app/src/__tests__/workflow-mutation-facade.test.ts
++++ b/packages/app/src/__tests__/workflow-mutation-facade.test.ts
+@@ -93,6 +93,7 @@ function makeDeps(overrides: Partial&lt;WorkflowMutationFacadeDeps&gt; = {}): Workflow
+     editTaskCommand: vi.fn(() =&gt; [makeRunningTask()]),
+     editTaskPrompt: vi.fn(() =&gt; [makeRunningTask()]),
+     editTaskAgent: vi.fn(() =&gt; [makeRunningTask()]),
++    editTaskPool: vi.fn(() =&gt; [makeRunningTask()]),
+     setTaskExternalGatePolicies: vi.fn(() =&gt; []),
+     selectExperiment: vi.fn(() =&gt; [makeRunningTask()]),
+     approve: vi.fn(async () =&gt; [makeRunningTask()]),
+@@ -123,6 +124,7 @@ function makeDeps(overrides: Partial&lt;WorkflowMutationFacadeDeps&gt; = {}): Workflow
+     recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) =&gt; ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
+     deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) =&gt; ({ ok: true as const, data: orchestrator.deleteTask(envelope.payload.taskId) })),
+     recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) =&gt; ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
++    editTaskPool: vi.fn(async (envelope: { payload: { taskId: string; poolId: string } }) =&gt; ({ ok: true as const, data: orchestrator.editTaskPool(envelope.payload.taskId, envelope.payload.poolId) })),
+     retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) =&gt; ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+     recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) =&gt; {
+       const workflow = persistence.loadWorkflow(envelope.payload.workflowId);
+@@ -257,6 +259,33 @@ describe(&#x27;WorkflowMutationFacade&#x27;, () =&gt; {
+     });
+   });
+ 
++  describe(&#x27;editTaskPool&#x27;, () =&gt; {
++    it(&#x27;calls commandService.editTaskPool and returns accepted runnable tasks&#x27;, async () =&gt; {
++      const result = await facade.editTaskPool(&#x27;task-a&#x27;, &#x27;mixed-local-ssh&#x27;);
++
++      expect(deps.commandService.editTaskPool).toHaveBeenCalledWith(
++        expect.objectContaining({ payload: { taskId: &#x27;task-a&#x27;, poolId: &#x27;mixed-local-ssh&#x27; } }),
++      );
++      expect(deps.orchestrator.editTaskPool).toHaveBeenCalledWith(&#x27;task-a&#x27;, &#x27;mixed-local-ssh&#x27;);
++      expect(result.started).toHaveLength(1);
++      expect(result.runnable).toHaveLength(1);
++      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
++    });
++
++    it(&#x27;closes the workflow review before task-scoped pool edit&#x27;, async () =&gt; {
++      (deps.orchestrator.getTask as ReturnType&lt;typeof vi.fn&gt;).mockReturnValue(
++        makeTask({ id: &#x27;task-a&#x27;, config: { workflowId: &#x27;wf-1&#x27; } }),
++      );
++
++      await facade.editTaskPool(&#x27;task-a&#x27;, &#x27;mixed-local-ssh&#x27;);
++
++      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith(&#x27;wf-1&#x27;);
++      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
++        (deps.commandService.editTaskPool as any).mock.invocationCallOrder[0],
++      );
++    });
++  });
++
+   describe(&#x27;selectExperiment&#x27;, () =&gt; {
+     it(&#x27;calls orchestrator.selectExperiment&#x27;, async () =&gt; {
+       const result = await facade.selectExperiment(&#x27;task-a&#x27;, &#x27;exp-1&#x27;);
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index bfc485e..f79a548 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -258,6 +258,14 @@ export class WorkflowMutationFacade {
+     return this.finalizeWithTopup(started, &#x27;facade.edit-task-type&#x27;, { scopedTaskIds: [taskId] });
+   }
+ 
++  async editTaskPool(taskId: string, poolId: string): Promise&lt;MutationResult&gt; {
++    await this.closeReviewForTask(taskId);
++    const started = await this.runViaCommandService(
++      (cs) =&gt; cs.editTaskPool(makeEnvelope(&#x27;facade.edit-task-pool&#x27;, &#x27;surface&#x27;, &#x27;task&#x27;, { taskId, poolId })),
++    );
++    return this.finalizeWithTopup(started, &#x27;facade.edit-task-pool&#x27;, { scopedTaskIds: [taskId] });
++  }
++
+   async editTaskAgent(taskId: string, agentName: string): Promise&lt;MutationResult&gt; {
+     await this.closeReviewForTask(taskId);
+     const started = sharedEditTaskAgent(taskId, agentName, {
+</pre><h3>treatment patch <code>f80149a7e91f2a62</code></h3><pre>diff --git a/packages/app/src/__tests__/workflow-mutation-facade.test.ts b/packages/app/src/__tests__/workflow-mutation-facade.test.ts
+index 3bb7fe5..b8ff875 100644
+--- a/packages/app/src/__tests__/workflow-mutation-facade.test.ts
++++ b/packages/app/src/__tests__/workflow-mutation-facade.test.ts
+@@ -93,6 +93,7 @@ function makeDeps(overrides: Partial&lt;WorkflowMutationFacadeDeps&gt; = {}): Workflow
+     editTaskCommand: vi.fn(() =&gt; [makeRunningTask()]),
+     editTaskPrompt: vi.fn(() =&gt; [makeRunningTask()]),
+     editTaskAgent: vi.fn(() =&gt; [makeRunningTask()]),
++    editTaskPool: vi.fn(() =&gt; [makeRunningTask()]),
+     setTaskExternalGatePolicies: vi.fn(() =&gt; []),
+     selectExperiment: vi.fn(() =&gt; [makeRunningTask()]),
+     approve: vi.fn(async () =&gt; [makeRunningTask()]),
+@@ -123,6 +124,7 @@ function makeDeps(overrides: Partial&lt;WorkflowMutationFacadeDeps&gt; = {}): Workflow
+     recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) =&gt; ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
+     deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) =&gt; ({ ok: true as const, data: orchestrator.deleteTask(envelope.payload.taskId) })),
+     recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) =&gt; ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
++    editTaskPool: vi.fn(async (envelope: { payload: { taskId: string; poolId: string } }) =&gt; ({ ok: true as const, data: orchestrator.editTaskPool(envelope.payload.taskId, envelope.payload.poolId) })),
+     retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) =&gt; ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+     recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) =&gt; {
+       const workflow = persistence.loadWorkflow(envelope.payload.workflowId);
+@@ -200,6 +202,33 @@ describe(&#x27;WorkflowMutationFacade&#x27;, () =&gt; {
+     });
+   });
+ 
++  describe(&#x27;editTaskPool&#x27;, () =&gt; {
++    it(&#x27;calls commandService.editTaskPool and returns accepted runnable tasks&#x27;, async () =&gt; {
++      const result = await facade.editTaskPool(&#x27;task-a&#x27;, &#x27;pool-b&#x27;);
++
++      expect(deps.commandService.editTaskPool).toHaveBeenCalledWith(
++        expect.objectContaining({ payload: { taskId: &#x27;task-a&#x27;, poolId: &#x27;pool-b&#x27; } }),
++      );
++      expect(deps.orchestrator.editTaskPool).toHaveBeenCalledWith(&#x27;task-a&#x27;, &#x27;pool-b&#x27;);
++      expect(result.started).toHaveLength(1);
++      expect(result.runnable).toHaveLength(1);
++      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
++    });
++
++    it(&#x27;closes the workflow review before task-scoped pool edit&#x27;, async () =&gt; {
++      (deps.orchestrator.getTask as ReturnType&lt;typeof vi.fn&gt;).mockReturnValue(
++        makeTask({ id: &#x27;task-a&#x27;, config: { workflowId: &#x27;wf-1&#x27; } }),
++      );
++
++      await facade.editTaskPool(&#x27;task-a&#x27;, &#x27;pool-b&#x27;);
++
++      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith(&#x27;wf-1&#x27;);
++      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
++        (deps.commandService.editTaskPool as any).mock.invocationCallOrder[0],
++      );
++    });
++  });
++
+   describe(&#x27;deleteTask&#x27;, () =&gt; {
+     it(&#x27;kills an active target and returns accepted runnable tasks&#x27;, async () =&gt; {
+       const killFn = vi.fn();
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index 220eab1..39cb678 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -270,6 +270,15 @@ export class WorkflowMutationFacade {
+     return this.finalizeWithTopup(started, &#x27;facade.edit-task-agent&#x27;, { scopedTaskIds: [taskId] });
+   }
+ 
++  async editTaskPool(taskId: string, poolId: string): Promise&lt;MutationResult&gt; {
++    return this.runTaskCommand(
++      taskId,
++      &#x27;facade.edit-task-pool&#x27;,
++      (cs, envelope) =&gt; cs.editTaskPool(envelope),
++      { poolId },
++    );
++  }
++
+   async editTaskModel(taskId: string, executionModel: string | null): Promise&lt;MutationResult&gt; {
+     await this.closeReviewForTask(taskId);
+     const started = sharedEditTaskModel(taskId, executionModel, {
+</pre>
+</body></html>

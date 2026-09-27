@@ -1,0 +1,18 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index bfc485e..9552131 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -185,6 +185,13 @@ export class WorkflowMutationFacade {
+     return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
+   }
+ 
++  async editTaskPool(taskId: string, poolId: string): Promise<MutationResult> {
++    const started = await this.runViaCommandService(
++      (cs) => cs.editTaskPool(makeEnvelope('facade.edit-task-pool', 'surface', 'task', { taskId, poolId })),
++    );
++    return this.finalizeWithTopup(started, 'facade.edit-task-pool', { scopedTaskIds: [taskId] });
++  }
++
+   async deleteTask(taskId: string): Promise<MutationResult> {
+     await this.closeReviewForTask(taskId);
+     if (this.deps.killRunningTask) {

@@ -1,0 +1,74 @@
+diff --git a/packages/app/src/__tests__/workflow-mutation-facade.test.ts b/packages/app/src/__tests__/workflow-mutation-facade.test.ts
+index 3bb7fe5..b8ff875 100644
+--- a/packages/app/src/__tests__/workflow-mutation-facade.test.ts
++++ b/packages/app/src/__tests__/workflow-mutation-facade.test.ts
+@@ -93,6 +93,7 @@ function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Workflow
+     editTaskCommand: vi.fn(() => [makeRunningTask()]),
+     editTaskPrompt: vi.fn(() => [makeRunningTask()]),
+     editTaskAgent: vi.fn(() => [makeRunningTask()]),
++    editTaskPool: vi.fn(() => [makeRunningTask()]),
+     setTaskExternalGatePolicies: vi.fn(() => []),
+     selectExperiment: vi.fn(() => [makeRunningTask()]),
+     approve: vi.fn(async () => [makeRunningTask()]),
+@@ -123,6 +124,7 @@ function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Workflow
+     recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
+     deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.deleteTask(envelope.payload.taskId) })),
+     recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
++    editTaskPool: vi.fn(async (envelope: { payload: { taskId: string; poolId: string } }) => ({ ok: true as const, data: orchestrator.editTaskPool(envelope.payload.taskId, envelope.payload.poolId) })),
+     retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+     recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+       const workflow = persistence.loadWorkflow(envelope.payload.workflowId);
+@@ -200,6 +202,33 @@ describe('WorkflowMutationFacade', () => {
+     });
+   });
+ 
++  describe('editTaskPool', () => {
++    it('calls commandService.editTaskPool and returns accepted runnable tasks', async () => {
++      const result = await facade.editTaskPool('task-a', 'pool-b');
++
++      expect(deps.commandService.editTaskPool).toHaveBeenCalledWith(
++        expect.objectContaining({ payload: { taskId: 'task-a', poolId: 'pool-b' } }),
++      );
++      expect(deps.orchestrator.editTaskPool).toHaveBeenCalledWith('task-a', 'pool-b');
++      expect(result.started).toHaveLength(1);
++      expect(result.runnable).toHaveLength(1);
++      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
++    });
++
++    it('closes the workflow review before task-scoped pool edit', async () => {
++      (deps.orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue(
++        makeTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
++      );
++
++      await facade.editTaskPool('task-a', 'pool-b');
++
++      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
++      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
++        (deps.commandService.editTaskPool as any).mock.invocationCallOrder[0],
++      );
++    });
++  });
++
+   describe('deleteTask', () => {
+     it('kills an active target and returns accepted runnable tasks', async () => {
+       const killFn = vi.fn();
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index 220eab1..39cb678 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -270,6 +270,15 @@ export class WorkflowMutationFacade {
+     return this.finalizeWithTopup(started, 'facade.edit-task-agent', { scopedTaskIds: [taskId] });
+   }
+ 
++  async editTaskPool(taskId: string, poolId: string): Promise<MutationResult> {
++    return this.runTaskCommand(
++      taskId,
++      'facade.edit-task-pool',
++      (cs, envelope) => cs.editTaskPool(envelope),
++      { poolId },
++    );
++  }
++
+   async editTaskModel(taskId: string, executionModel: string | null): Promise<MutationResult> {
+     await this.closeReviewForTask(taskId);
+     const started = sharedEditTaskModel(taskId, executionModel, {
