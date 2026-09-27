@@ -25,7 +25,7 @@ const AGENT_LABEL: Record<AgentLoginAgent, string> = {
   codex: 'Codex',
 };
 
-const LOGIN_FAILURE_SIGNATURES: ReadonlyArray<string> = [
+export const LOGIN_FAILURE_SIGNATURES: ReadonlyArray<string> = [
   'failed to authenticate: oauth session expired and could not be refreshed',
   'your access token could not be refreshed because your refresh token was revoked',
   'please run /login',
