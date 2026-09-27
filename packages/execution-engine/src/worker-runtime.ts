@@ -32,7 +32,6 @@ export interface WorkerTickContext {
   readonly identity: WorkerIdentity;
   /** What triggered this tick. */
   readonly reason: WorkerTickReason;
-  /** Stable WorkQueue key currently being processed. */
   readonly workKey?: string;
   /** 1-based count of ticks that have started for this runtime. */
   readonly tickNumber: number;
@@ -83,7 +82,6 @@ export interface WorkerRuntimeOptions {
   logger: Logger;
   /** Work performed on every tick. */
   onTick: WorkerTick;
-  /** Lists concrete WorkQueue keys to run for a scheduled tick. */
   listWorkKeys?: WorkerRuntimeWorkKeySource;
   workQueueRegistry?: MetricRegistry;
   workQueueName?: string;
