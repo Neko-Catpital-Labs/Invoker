@@ -130,6 +130,7 @@ const TASK_COLUMNS = [
   'execution_model',
   'agent_name',
   'task_state_version',
+  'last_fix_failure_json',
 ] as const;
 
 const ATTEMPT_COLUMNS = [
