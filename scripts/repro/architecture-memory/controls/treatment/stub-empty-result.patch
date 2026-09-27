@@ -1,0 +1,15 @@
+diff --git a/packages/app/src/workflow-mutation-facade.ts b/packages/app/src/workflow-mutation-facade.ts
+index 220eab1..9f127d6 100644
+--- a/packages/app/src/workflow-mutation-facade.ts
++++ b/packages/app/src/workflow-mutation-facade.ts
+@@ -189,6 +189,10 @@ export class WorkflowMutationFacade {
+     );
+   }
+ 
++  async editTaskPool(_taskId: string, _poolId: string): Promise<MutationResult> {
++    return { started: [], runnable: [], topup: [] };
++  }
++
+   async deleteTask(taskId: string): Promise<MutationResult> {
+     await this.closeReviewForTask(taskId);
+     if (this.deps.killRunningTask) {
