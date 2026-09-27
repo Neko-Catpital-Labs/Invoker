@@ -31,6 +31,23 @@ must_contain "Capture whatever partial signal actually IS visible" \
 must_contain "substitute an image that doesn't actually demonstrate the claim" \
   "visual-proof skill must forbid substituting an unrelated image for an uncapturable claim"
 
+# Match proof source to claim (ported from catstack personal visual-proof).
+# Fails if the section is quietly removed or weakened to allow proxy/mock captures.
+must_contain "Match the proof source to the claim" \
+  "visual-proof skill must keep the match-proof-source section heading"
+must_contain "pixel capture from the actual rendered flow" \
+  "visual-proof skill must require pixel capture from the actual rendered flow"
+must_contain "Mocked, redrawn, generated, Storybook" \
+  "visual-proof skill must reject mocked/redrawn/proxy UI as screenshot proof"
+must_contain "Electron/\`packages/ui\`" \
+  "visual-proof skill must name Electron/packages/ui as a live capture surface"
+must_contain "Slack/\`packages/surfaces\`" \
+  "visual-proof skill must name Slack/packages/surfaces as a live capture surface"
+must_contain "Expected surface and Expected predicates" \
+  "visual-proof skill must require declaring Expected surface/predicates before capture"
+must_contain "Mechanical enforcement of that declaration is Backlog" \
+  "visual-proof skill must mark Expected-surface mechanical gates as Backlog"
+
 # A captured file is not proof anyone looked at it. Locks the prove-it hard gate wiring.
 must_contain "A captured screenshot or video file is not proof that anyone looked at it" \
   "visual-proof skill must state that capture alone is not proof"
