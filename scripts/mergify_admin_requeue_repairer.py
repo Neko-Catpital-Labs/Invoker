@@ -10,14 +10,24 @@ try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import is_queue_only_required_check
-    from .mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
+    from .mergify_admin_requeue_repair_body import (
+        git_output,
+        hard_reset_work_root,
+        scope_split_review_units,
+        validate_current_pr_body,
+    )
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import is_queue_only_required_check
-    from mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
+    from mergify_admin_requeue_repair_body import (
+        git_output,
+        hard_reset_work_root,
+        scope_split_review_units,
+        validate_current_pr_body,
+    )
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
     import mergify_admin_requeue_async_repair as async_repair
 
@@ -264,10 +274,13 @@ class AdminBypassRepairer:
                 errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
             )
         log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
-        # "PR Body" with an empty job log is the one check that still needs a
-        # local checkout before submitting anything: validate_current_pr_body
-        # has no API-only equivalent. Every other check name never checks out.
-        if check_name == "PR Body" and self.job_log_is_empty(log_path):
+        # Invoker "PR Body" checks out even when the job log is non-empty so a
+        # multi-unit diff is routed from reviewUnits. Other checks, and a
+        # foreign repo, check out only when that log is empty.
+        scope_units: tuple[str, ...] = ()
+        scope_validation: Mapping[str, object] | None = None
+        invoker_pr_body = check_name == "PR Body" and not self.is_foreign
+        if check_name == "PR Body" and (self.job_log_is_empty(log_path) or invoker_pr_body):
             work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
             work_root.parent.mkdir(parents=True, exist_ok=True)
             checkout_pr_head(self.repo, pr, work_root)
@@ -276,7 +289,7 @@ class AdminBypassRepairer:
             if terminal:
                 return terminal
             validation = validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
-            if validation.get("valid"):
+            if self.job_log_is_empty(log_path) and validation.get("valid"):
                 self.logger.trace(
                     "admin-bypass-pr-body-valid-noop",
                     repo=self.repo,
@@ -287,6 +300,9 @@ class AdminBypassRepairer:
                     log_path=log_path,
                 )
                 return self.blocked_outcome("noop", check_name, start_head, start_head)
+            if invoker_pr_body:
+                scope_units = scope_split_review_units(validation)
+                scope_validation = validation
         elif queue_only and not self.job_log_has_evidence(log_path):
             self.logger.trace(
                 "admin-bypass-queue-only-empty-log-noop",
@@ -304,6 +320,31 @@ class AdminBypassRepairer:
                 return terminal
 
         queue_pr_number = latest.queue_pr_number if latest else 0
+        if scope_units and scope_validation is not None:
+            review_unit = str(scope_validation.get("reviewUnit") or "")
+            raw_errors = scope_validation.get("errors")
+            errors = [str(error) for error in raw_errors if str(error)] if isinstance(raw_errors, list) else []
+            plan = async_repair.build_repair_scope_split_plan(
+                pr,
+                repo=self.repo,
+                review_units=scope_units,
+                review_unit=review_unit,
+                errors=errors,
+                details_url=details_url,
+                start_head=start_head,
+                state_file=self.ledger.path,
+            )
+            self.logger.trace(
+                "admin-bypass-repair-scope-split-start",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                review_units=list(scope_units),
+                head_sha=start_head,
+                plan_name=plan.plan_name,
+            )
+            self.submit_repair_plan(plan, "repair-check", pr.number, start_head, check_name, now)
+            return self.blocked_outcome("submitted", check_name, start_head, start_head)
         plan = async_repair.build_repair_check_plan(
             pr,
             check_name,

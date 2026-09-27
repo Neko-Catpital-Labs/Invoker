@@ -354,6 +354,67 @@ class RepairNormalizeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         reset.assert_called_once_with(Path.cwd(), HEAD)
 
+    def test_commit_path_multi_unit_without_scope_split_does_not_record_repair_invalid(self):
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=NEW_HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                        gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nmixed\n"}
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                            return_value=MANUAL_SPLIT_VALIDATION,
+                        ):
+                            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root"):
+                                code = normalize.main(self.argv())
+        self.assertEqual(code, 1)
+        self.assertEqual(self.kind_rows("repair-invalid"), [])
+
+    def test_scope_split_still_multi_unit_records_repair_invalid_and_skips_prerequisite(self):
+        stderr = io.StringIO()
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=NEW_HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                        gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nmixed\n"}
+                        gh_cls.return_value.issue_comments.return_value = []
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                            return_value=MANUAL_SPLIT_VALIDATION,
+                        ):
+                            with mock.patch(
+                                "scripts.mergify_admin_requeue_repair_normalize.create_repair_prerequisite",
+                            ) as create_prereq:
+                                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root") as reset:
+                                    with mock.patch("sys.stderr", stderr):
+                                        code = normalize.main([*self.argv(), "--scope-split"])
+        self.assertEqual(code, 1)
+        create_prereq.assert_not_called()
+        reset.assert_called_once_with(Path.cwd(), HEAD)
+        self.assertEqual(len(self.kind_rows("repair-invalid")), 1)
+        self.assertIn("blocked_invalid", stderr.getvalue())
+        gh_cls.return_value.comment.assert_called_once()
+
+    def test_scope_split_single_unit_invalid_does_not_record_repair_invalid(self):
+        single_unit = {
+            "valid": False,
+            "errors": ["Diff atomicity violation: test-assertion-weakened"],
+            "reviewUnit": "proof",
+            "reviewUnits": ["proof"],
+        }
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_output", return_value=NEW_HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repair_normalize.normalize_repair_commit", return_value=NEW_HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repair_normalize.GhClient") as gh_cls:
+                        gh_cls.return_value.pr_detail.return_value = {"body": "## Summary\n\nproof\n"}
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repair_normalize.validate_current_pr_body",
+                            return_value=single_unit,
+                        ):
+                            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root"):
+                                code = normalize.main([*self.argv(), "--scope-split"])
+        self.assertEqual(code, 1)
+        self.assertEqual(self.kind_rows("repair-invalid"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
