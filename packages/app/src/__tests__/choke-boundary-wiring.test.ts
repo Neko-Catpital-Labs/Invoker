@@ -199,25 +199,30 @@ describe('choke boundary wiring', () => {
       boundary: 'launch.topup',
     })?.count ?? 0;
     const logger = makeLogger();
+    const executor = { executeTask: vi.fn(async () => {}) };
+    const setLatestTaskExecutor = vi.fn();
+    const headlessDeps = {
+      logger,
+      persistence: {
+        listAbandonableLaunchDispatchLeases: vi.fn(() => []),
+        reapExpiredLaunchDispatchLeases: vi.fn(() => []),
+        claimLaunchDispatchAtomic: vi.fn(() => null),
+      },
+      orchestrator: {
+        startExecution: vi.fn(() => []),
+      },
+    } as never;
     const controller = startStandaloneLaunchDispatcher({
-      headlessDeps: {
-        logger,
-        persistence: {
-          listAbandonableLaunchDispatchLeases: vi.fn(() => []),
-          reapExpiredLaunchDispatchLeases: vi.fn(() => []),
-          claimLaunchDispatchAtomic: vi.fn(() => null),
-        },
-        orchestrator: {
-          startExecution: vi.fn(() => []),
-        },
-      } as never,
+      headlessDeps,
       ownerId: 'owner',
-      createTaskExecutor: () => ({ executeTask: vi.fn(async () => {}) }) as never,
-      setLatestTaskExecutor: vi.fn(),
+      createTaskExecutor: () => executor as never,
+      setLatestTaskExecutor,
     });
 
     controller.stop();
 
+    expect(setLatestTaskExecutor).toHaveBeenCalledWith(executor);
+    expect((headlessDeps as { ownerTaskRunnerProvider?: unknown }).ownerTaskRunnerProvider).toBeUndefined();
     expect(metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {
       boundary: 'launch.topup',
     })?.count).toBeGreaterThan(before);
