@@ -28,7 +28,7 @@ class NonFailingMetricRegistry extends MetricRegistry {
     try {
       return this.delegate.incrementCounter(...args);
     } catch (err) {
-      this.onMetricError?.('counter', err);
+      this.reportMetricError('counter', err);
       return 0;
     }
   }
@@ -37,7 +37,7 @@ class NonFailingMetricRegistry extends MetricRegistry {
     try {
       return this.delegate.setGauge(...args);
     } catch (err) {
-      this.onMetricError?.('gauge', err);
+      this.reportMetricError('gauge', err);
       return 0;
     }
   }
@@ -46,7 +46,7 @@ class NonFailingMetricRegistry extends MetricRegistry {
     try {
       this.delegate.observeHistogram(...args);
     } catch (err) {
-      this.onMetricError?.('histogram', err);
+      this.reportMetricError('histogram', err);
     }
   }
 
@@ -60,6 +60,14 @@ class NonFailingMetricRegistry extends MetricRegistry {
 
   renderPrometheusText(): string {
     return this.delegate.renderPrometheusText();
+  }
+
+  private reportMetricError(operation: MetricOperation, error: unknown): void {
+    try {
+      this.onMetricError?.(operation, error);
+    } catch {
+      // Metrics are best-effort and must not affect the observed operation.
+    }
   }
 }
 

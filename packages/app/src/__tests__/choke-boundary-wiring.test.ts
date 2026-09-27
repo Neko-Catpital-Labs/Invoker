@@ -184,4 +184,21 @@ describe('choke boundary wiring', () => {
     expect(() => metrics.recordEventLoopLag('launch.topup', 3)).not.toThrow();
     expect(() => metrics.recordSqliteTransaction({ outcome: 'committed', durationMs: 1 })).not.toThrow();
   });
+
+  it('does not let metric error callbacks fail the operation', () => {
+    const onMetricError = vi.fn(() => {
+      throw new Error('callback failed');
+    });
+    const metrics = new ChokeBoundaryMetrics({
+      registry: new ThrowingMetricRegistry(),
+      onMetricError,
+    });
+
+    expect(() => metrics.recordRequest('ipc', 'success', { channel: 'x' })).not.toThrow();
+    expect(() => metrics.recordQueueAccepted('mutation', 'intent:1')).not.toThrow();
+    expect(() => metrics.recordEventLoopLag('launch.topup', 3)).not.toThrow();
+    expect(onMetricError).toHaveBeenCalledWith('counter', expect.any(Error));
+    expect(onMetricError).toHaveBeenCalledWith('gauge', expect.any(Error));
+    expect(onMetricError).toHaveBeenCalledWith('histogram', expect.any(Error));
+  });
 });
