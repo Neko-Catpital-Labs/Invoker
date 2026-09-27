@@ -320,7 +320,10 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       const keyedPayload = { ...payload, workKey: key };
       const enqueued = workQueue.enqueue(key, keyedPayload);
       if (!enqueued && activeWorkKey === key) {
-        pendingAfterCurrent.set(key, keyedPayload);
+        pendingAfterCurrent.set(key, {
+          ...keyedPayload,
+          args: keyedPayload.args ?? pendingAfterCurrent.get(key)?.args,
+        });
       }
     }
   };

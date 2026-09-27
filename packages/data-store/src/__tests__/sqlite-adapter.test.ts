@@ -3476,6 +3476,35 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].execution.agentSessionId).toBe('sess-xyz');
     });
 
+    it('writes updateTask session recovery under the merged workflowId', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        id: 'wf-2',
+        name: 'Second Workflow',
+      });
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      adapter.updateTask('t1', {
+        config: { workflowId: 'wf-2' },
+        execution: {
+          agentSessionId: 'sess-moved',
+          workspacePath: '/tmp/wt-moved',
+        },
+      });
+
+      expect(
+        (adapter as any).queryOne(
+          'SELECT workflow_id, agent_session_id, workspace_path FROM task_session_recovery WHERE agent_session_id = ?',
+          ['sess-moved'],
+        ),
+      ).toMatchObject({
+        workflow_id: 'wf-2',
+        agent_session_id: 'sess-moved',
+        workspace_path: '/tmp/wt-moved',
+      });
+    });
+
     it('returns undefined when agentSessionId is not set', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));

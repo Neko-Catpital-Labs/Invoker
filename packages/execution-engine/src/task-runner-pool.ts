@@ -66,6 +66,7 @@ export type PoolSelection = {
   resolvedExecution?: ResolvedExecutionSelection;
   leaseResourceKey?: string;
   leaseHolderId?: string;
+  attemptId?: string;
 };
 
 export type PoolMemberHealth = {
@@ -124,6 +125,21 @@ export type TaskRunnerPoolHost = Pick<
 
 export function poolMemberKey(member: ExecutionPoolMember): string {
   return `${member.type}:${member.id}`;
+}
+
+export type PoolMemberHolder = { taskId: string; kind: 'reservation' | 'execution'; attemptId?: string };
+
+function memoryPoolMemberHolders(host: TaskRunnerPoolHost, poolId: string, memberKey: string): PoolMemberHolder[] {
+  const holders: PoolMemberHolder[] = [];
+  for (const [taskId, selection] of host.pendingPoolSelections) {
+    if (selection.poolId === poolId && selection.memberKey === memberKey) holders.push({ taskId, kind: 'reservation' });
+  }
+  for (const [attemptId, entry] of host.activeExecutions) {
+    if (entry.poolId === poolId && entry.poolMemberKey === memberKey) {
+      holders.push({ taskId: entry.taskId, kind: 'execution', attemptId });
+    }
+  }
+  return holders;
 }
 
 function memoryPoolMemberLoad(host: TaskRunnerPoolHost, poolId: string, memberKey: string): number {
@@ -282,6 +298,7 @@ function poolCapacitySnapshot(
   excluded: boolean;
   down: boolean;
   downForMs?: number;
+  holders: PoolMemberHolder[];
 }> {
   const now = Date.now();
   return pool.members.map((member) => {
@@ -296,6 +313,7 @@ function poolCapacitySnapshot(
       excluded: excludedMemberKeys.has(memberKey),
       down,
       downForMs: down ? health!.downUntil - now : undefined,
+      holders: memoryPoolMemberHolders(host, poolId, memberKey),
     };
   });
 }
@@ -595,8 +613,12 @@ function reclaimStalePoolSelections(
   for (const [taskId, selection] of [...host.pendingPoolSelections.entries()]) {
     const task = getTask(taskId);
     if (task) {
-      if (!UNLAUNCHABLE_TASK_STATUSES.has(task.status)) continue;
-      releaseStalePoolSelection(host, taskId, selection, task.status);
+      if (UNLAUNCHABLE_TASK_STATUSES.has(task.status)) {
+        releaseStalePoolSelection(host, taskId, selection, task.status);
+        continue;
+      }
+      if (selection.attemptId === undefined || selection.attemptId === task.execution.selectedAttemptId) continue;
+      releaseStalePoolSelection(host, taskId, selection, 'superseded-attempt');
       continue;
     }
     if (allTasks.length === 0 || knownTaskIds.has(taskId)) continue;
@@ -639,6 +661,7 @@ function reservePoolMemberSelection(
     memberKey: poolMemberKey(member),
     selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
     resolvedExecution,
+    attemptId: task.execution.selectedAttemptId,
   };
   host.pendingPoolSelections.set(task.id, selection);
   if (member.type !== 'ssh') return selection;

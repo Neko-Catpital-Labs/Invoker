@@ -113,7 +113,7 @@ describe('pending pool selections held by unlaunchable tasks', () => {
     expect(hasCapacity(runner)).toBe(false);
   });
 
-  it.fails('frees a reservation left by an earlier launch attempt of a task that is still queued', () => {
+  it('frees a reservation left by an earlier launch attempt of a task that is still queued', () => {
     const task = makeTask('wf-5/fix-ci', 'queued');
     task.execution.selectedAttemptId = 'wf-5/fix-ci-new';
     const runner = makeRunner([task]);
