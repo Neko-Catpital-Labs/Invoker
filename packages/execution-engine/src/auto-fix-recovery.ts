@@ -50,6 +50,7 @@ import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js
 import type { WorkerRegistry } from './worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from './worker-runtime.js';
 import { isAdminBypassNamedWorkflow } from './workflow-name-gates.js';
+import { uniqueWorkKeys } from './workers/worker-key-utils.js';
 
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
@@ -667,7 +668,8 @@ export function createAutoFixRecoveryTick(baseOptions: AutoFixRecoveryPolicyOpti
     // Drain wake hints (coalesce only). Discover work from a fresh scan —
     // wake snapshots go stale across bare-retry generation bumps.
     options.drainWakeupHints?.();
-    const candidates = listAutoFixRecoveryScanCandidates(options);
+    const candidates = listAutoFixRecoveryScanCandidates(options)
+      .filter((candidate) => ctx.workKey === undefined || candidate.taskId === ctx.workKey);
     const submittedThisTick = new Set<string>();
     const candidateTaskIds = new Set(candidates.map((candidate) => candidate.taskId));
     for (const taskId of recordedSkipKeys.keys()) {
@@ -901,6 +903,16 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
     onTick,
+    listWorkKeys: options.autoFix && !options.onTick
+      ? ({ reason }) => {
+        const wakeupTaskIds = reason === 'wake' ? pendingWakeups.map((hint) => hint.taskId) : [];
+        return uniqueWorkKeys(
+          wakeupTaskIds.length > 0
+            ? wakeupTaskIds
+            : listAutoFixRecoveryScanCandidates({ store: options.autoFix!.store }).map((candidate) => candidate.taskId),
+        );
+      }
+      : () => [RECOVERY_WORKER_KIND],
   });
   if (!options.messageBus || !options.autoFix || options.onTick) {
     return runtime;

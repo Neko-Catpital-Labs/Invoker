@@ -246,6 +246,7 @@ export function createSelfDeployWorker(config: SelfDeployWorkerConfig & { logger
     onTick,
     intervalMs: config.intervalMs ?? DEFAULT_SELF_DEPLOY_INTERVAL_MS,
     tickOnStart: config.tickOnStart ?? true,
+    listWorkKeys: () => [SELF_DEPLOY_WORKER_KIND],
   });
 }
 

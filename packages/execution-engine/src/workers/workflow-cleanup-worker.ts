@@ -28,12 +28,17 @@ export function createWorkflowCleanupWorker(options: WorkflowCleanupWorkerOption
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_WORKFLOW_CLEANUP_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? true,
+    listWorkKeys: () => options.store.listWorkflows()
+      .filter((workflow) => CLEANUP_STATUSES.has(workflow.status))
+      .map((workflow) => workflow.id),
     onTick: async (ctx) => {
       ctx.signal.throwIfAborted();
       await options.onTick?.(ctx);
       ctx.signal.throwIfAborted();
 
-      const candidates = options.store.listWorkflows().filter((workflow) => CLEANUP_STATUSES.has(workflow.status));
+      const candidates = options.store.listWorkflows()
+        .filter((workflow) => CLEANUP_STATUSES.has(workflow.status))
+        .filter((workflow) => ctx.workKey === undefined || workflow.id === ctx.workKey);
       let deleted = 0;
       for (const workflow of candidates) {
         ctx.signal.throwIfAborted();
