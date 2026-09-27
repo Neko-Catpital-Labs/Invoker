@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 jobs:
   probe:
-    runs-on: [eph-canary-proof]
+    runs-on: [eph-canary-proof7]
     timeout-minutes: 10
     steps:
       - run: |
