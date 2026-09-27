@@ -1,0 +1,13 @@
+{
+  "kind": "slack-bug-scan",
+  "name": "empty-state-skip",
+  "state": {
+    "eligible": false
+  },
+  "decisions": [
+    {
+      "type": "skip",
+      "reason": "no-eligible-work"
+    }
+  ]
+}

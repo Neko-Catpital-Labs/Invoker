@@ -1,0 +1,18 @@
+{
+  "kind": "heartbeat-requeue",
+  "name": "non-liveness-skip",
+  "state": {
+    "taskId": "wf-1/gate",
+    "workflowId": "wf-1",
+    "status": "failed",
+    "failureClass": null,
+    "error": "real bug",
+    "attempts": 0,
+    "budget": 3,
+    "backoffMs": 120000,
+    "nowMs": 0
+  },
+  "decisions": [
+    { "type": "skip", "reason": "not-requeueable-failure" }
+  ]
+}
