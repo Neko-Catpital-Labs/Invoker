@@ -166,6 +166,33 @@ describe('choke boundary wiring', () => {
     })?.count).toBe(1);
   });
 
+  it('records launch topup on the shared registry without per-call metrics wiring', () => {
+    const metrics = getChokeBoundaryMetrics();
+    const before = metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {
+      boundary: 'launch.topup',
+    })?.count ?? 0;
+    const dispatcher = new LaunchDispatcher({
+      persistence: {
+        releaseExpiredExecutionResourceLeases: vi.fn(() => 0),
+        listAbandonableLaunchDispatchLeases: vi.fn(() => []),
+        reapExpiredLaunchDispatchLeases: vi.fn(() => []),
+        claimLaunchDispatchAtomic: vi.fn(() => null),
+      } as never,
+      orchestrator: {
+        prepareTaskForNewAttempt: vi.fn(),
+        startExecution: vi.fn(() => []),
+      },
+      taskRunnerProvider: () => ({ executeTask: vi.fn(async () => {}) }),
+      ownerId: 'owner',
+    });
+
+    dispatcher.poll();
+
+    expect(metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {
+      boundary: 'launch.topup',
+    })?.count).toBeGreaterThan(before);
+  });
+
   it('wires standalone launch dispatching to the shared registry', () => {
     const metrics = getChokeBoundaryMetrics();
     const before = metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {

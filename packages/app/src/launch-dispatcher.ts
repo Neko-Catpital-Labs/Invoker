@@ -17,7 +17,7 @@ import {
   type Logger,
 } from '@invoker/contracts';
 import { resolveLaunchDispatchLeaseMsOverride } from './launch-dispatch-defaults.js';
-import type { ChokeBoundaryMetrics } from './choke-boundary-metrics.js';
+import { getChokeBoundaryMetrics, type ChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 
 
 export type LaunchDispatcherPersistence = Pick<
@@ -220,7 +220,7 @@ export class LaunchDispatcher {
     this.topUpReadyLaunchesEnabled = options.topUpReadyLaunchesEnabled;
     this.leaseMs = options.leaseMs ?? resolveLaunchDispatchLeaseMsOverride();
     this.maxLaunchAgeMs = options.maxLaunchAgeMs ?? resolveLaunchDispatchLeaseMsOverride() ?? LAUNCH_STUCK_ABANDON_MS;
-    this.chokeMetrics = options.chokeMetrics;
+    this.chokeMetrics = options.chokeMetrics ?? getChokeBoundaryMetrics();
     // Bound a single poll's work so the dispatcher cannot starve other
     // owner-loop ticks; the leftover rows are picked up on the next tick.
     this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
