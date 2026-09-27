@@ -2123,6 +2123,7 @@ function startHeadlessMode(): void {
             onActivity: noteStandaloneOwnerActivity,
             getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
             resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
+            getChokeSnapshot: () => getChokeBoundaryMetrics().getSnapshot(),
             getStreamSequence: () => 0,
             getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
               registry: createRegisteredWorkerRegistry(),
@@ -3258,6 +3259,7 @@ startMainProcessBootstrap({
         return mutationActions.translateGuiMutationToHeadless(payload);
       },
       guiMutationHandlers: ownerCapabilities,
+      chokeMetrics: getChokeBoundaryMetrics(),
     };
 
     const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
@@ -3397,6 +3399,7 @@ startMainProcessBootstrap({
           ownerModeLabel: 'gui',
           getUiPerfStats: () => getUiPerfStats(),
           resetUiPerfStats: () => resetUiPerfStats(),
+          getChokeSnapshot: () => getChokeBoundaryMetrics().getSnapshot(),
           getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
             registry: createRegisteredWorkerRegistry(),
             persistence,
@@ -3687,6 +3690,7 @@ startMainProcessBootstrap({
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
       recordStartupDuration,
+      chokeMetrics: getChokeBoundaryMetrics(),
     });
     await registerGuiMutationIpcHandlers({
       ipcMain,
