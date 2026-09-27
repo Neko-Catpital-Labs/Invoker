@@ -586,7 +586,11 @@ function validateAutoFixCandidate(
     return undefined;
   }
 
-  if (latest.status === 'failed' && FailureClassifier.isUsageLimit(latest.execution.failureClass)) {
+  if (
+    latest.status === 'failed'
+    && (FailureClassifier.isUsageLimit(latest.execution.failureClass)
+      || FailureClassifier.isUsageLimit(latest.execution.lastFixFailure?.failureClass))
+  ) {
     const breakerState = loadCircuitBreakerState(options.circuitBreakerPath ?? defaultCircuitBreakerPath());
     const alreadyCounted = isFailureCoveredByCircuitBreaker(breakerState, latest.execution.completedAt);
     if (!alreadyCounted) tripAutoFixCircuitBreaker(options, latest.execution.error);
