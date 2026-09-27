@@ -329,9 +329,16 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       }
       return succeeded;
     };
-    inFlight = drain().finally(() => {
+    let resolveDrain!: (value: boolean | PromiseLike<boolean>) => void;
+    let rejectDrain!: (reason?: unknown) => void;
+    const sharedDrain = new Promise<boolean>((resolve, reject) => {
+      resolveDrain = resolve;
+      rejectDrain = reject;
+    });
+    inFlight = sharedDrain.finally(() => {
       inFlight = null;
     });
+    void drain().then(resolveDrain, rejectDrain);
     return inFlight;
   };
 
