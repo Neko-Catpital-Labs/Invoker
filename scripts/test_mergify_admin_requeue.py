@@ -33,7 +33,7 @@ from scripts.mergify_admin_requeue import (
     plan_stack_actions,
 )
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
-from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
+from scripts.mergify_admin_requeue_model import DEFAULT_INVOKER_REPO, LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
 from scripts.mergify_admin_requeue_plan import count_code_repair_attempts, plan_stack_execution, repair_in_flight
@@ -691,6 +691,70 @@ Failing checks
         download.assert_called_once()
         submit.assert_not_called()
         self.assertEqual(result.status, "noop")
+
+    def test_invoker_pr_body_multi_unit_submits_scope_split_once(self):
+        item = pr(13584, checks={"PR Body": check("PR Body", "failure")}, latest=mergify())
+        ledger = self.ledger()
+        repairer = self.repairer(object(), ledger, repo=DEFAULT_INVOKER_REPO)
+        submitted = []
+        validation = {
+            "valid": False,
+            "errors": [
+                "Review lane proof cannot ship with policy files in the same PR.",
+                "Diff atomicity violation: test-assertion-weakened",
+            ],
+            "reviewUnit": "proof",
+            "reviewUnits": ["proof", "tooling-policy"],
+        }
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="job-log.txt"):
+                with mock.patch.object(repairer, "job_log_is_empty", return_value=False):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repairer.validate_current_pr_body",
+                            return_value=validation,
+                        ):
+                            with mock.patch(
+                                "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+                                side_effect=lambda plan: submitted.append(plan),
+                            ):
+                                result = repairer.repair_check(item, "PR Body")
+        checkout.assert_called_once()
+        self.assertEqual(result.status, "submitted")
+        self.assertEqual(len(submitted), 1)
+        self.assertIn("proof, tooling-policy", submitted[0].yaml_text)
+        self.assertIn("scripts/create-pr.mjs", submitted[0].yaml_text)
+        self.assertIn("--scope-split", submitted[0].yaml_text)
+        self.assertNotIn("Diagnose why it is failing", submitted[0].yaml_text)
+        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 1)
+
+    def test_invoker_pr_body_single_unit_stays_in_place(self):
+        item = pr(13584, checks={"PR Body": check("PR Body", "failure")}, latest=mergify())
+        repairer = self.repairer(object(), self.ledger(), repo=DEFAULT_INVOKER_REPO)
+        submitted = []
+        validation = {
+            "valid": False,
+            "errors": ["Diff atomicity violation: test-assertion-weakened"],
+            "reviewUnit": "proof",
+            "reviewUnits": ["proof"],
+        }
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="job-log.txt"):
+                with mock.patch.object(repairer, "job_log_is_empty", return_value=False):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
+                        with mock.patch(
+                            "scripts.mergify_admin_requeue_repairer.validate_current_pr_body",
+                            return_value=validation,
+                        ):
+                            with mock.patch(
+                                "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+                                side_effect=lambda plan: submitted.append(plan),
+                            ):
+                                result = repairer.repair_check(item, "PR Body")
+        self.assertEqual(result.status, "submitted")
+        self.assertEqual(len(submitted), 1)
+        self.assertIn("Diagnose why it is failing", submitted[0].yaml_text)
+        self.assertNotIn("--scope-split", submitted[0].yaml_text)
 
     def test_run_cycle_logs_selected_bottom_repair_context(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])

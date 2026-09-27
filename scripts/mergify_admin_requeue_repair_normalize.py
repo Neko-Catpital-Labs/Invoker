@@ -20,6 +20,7 @@ try:
         invalid_repair_errors,
         is_prereq_split_validation,
         normalize_repair_commit,
+        scope_split_review_units,
         validate_current_pr_body,
     )
     from .mergify_admin_requeue_snapshot import GhClient
@@ -35,6 +36,7 @@ except ImportError:
         invalid_repair_errors,
         is_prereq_split_validation,
         normalize_repair_commit,
+        scope_split_review_units,
         validate_current_pr_body,
     )
     from mergify_admin_requeue_snapshot import GhClient
@@ -111,9 +113,16 @@ def _record_repair_noop_or_invalid_for_pr_body(
         ledger.record("repair-noop", pr_number, start_head, check_name)
         return
     errors = invalid_repair_errors(validation, base)
+    _stop_for_invalid_pr_body(state_file, repo, pr_number, start_head, check_name, errors)
+
+
+def _stop_for_invalid_pr_body(
+    state_file: Path, repo: str, pr_number: int, start_head: str, check_name: str, errors: list[str],
+) -> None:
     if not errors:
         return
-    ledger.record("repair-invalid", pr_number, start_head, check_name, meta={"errors": errors})
+    Ledger(state_file).record("repair-invalid", pr_number, start_head, check_name, meta={"errors": errors})
+    gh = GhClient()
     stop_body = "Mergify repair stopped: " + "\n".join(errors)
     existing = gh.issue_comments(repo, pr_number)
     if not any(str(comment.get("body") or "").strip() == stop_body for comment in existing):
@@ -128,6 +137,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--start-head", required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--trunk", default="master")
+    parser.add_argument("--scope-split", action="store_true")
     parser.add_argument(
         "--state-file",
         default=str(Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"),
@@ -171,6 +181,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if validation.get("valid"):
         print(f"repair commit normalized to {end_head}; ready for safe-push")
         return 0
+
+    if args.scope_split and scope_split_review_units(validation):
+        hard_reset_work_root(cwd, start_head)
+        errors = invalid_repair_errors(validation, args.base)
+        if not errors:
+            errors = [
+                "diff still spans review units: " + ", ".join(scope_split_review_units(validation))
+            ]
+        _stop_for_invalid_pr_body(state_file, args.repo, args.pr, start_head, args.check, errors)
+        print("blocked_invalid: " + "; ".join(errors), file=sys.stderr)
+        return 1
 
     if is_prereq_split_validation(validation, args.base):
         repair_commits = git_lines(cwd, "rev-list", "--reverse", f"{start_head}..{end_head}")
