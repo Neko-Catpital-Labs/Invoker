@@ -1,4 +1,5 @@
 import type { TaskRunner } from '@invoker/execution-engine';
+import { getChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 import type { HeadlessDeps } from './headless.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 
@@ -39,6 +40,7 @@ export function startStandaloneLaunchDispatcher(
     ownerId,
     logger: headlessDeps.logger,
     topUpReadyLaunchesEnabled: options.topUpReadyLaunchesEnabled,
+    chokeMetrics: getChokeBoundaryMetrics(),
   });
 
   const poll = (): void => {
