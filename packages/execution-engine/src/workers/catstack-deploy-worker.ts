@@ -232,6 +232,7 @@ export function createCatstackDeployWorker(config: CatstackDeployWorkerConfig & 
     onTick,
     intervalMs: config.intervalMs ?? DEFAULT_CATSTACK_DEPLOY_INTERVAL_MS,
     tickOnStart: config.tickOnStart ?? true,
+    listWorkKeys: () => ['catstack-deploy:local', ...(config.remoteTargets ?? []).map((target) => `catstack-deploy:${target.name}`)],
   });
 }
 

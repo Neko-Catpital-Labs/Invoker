@@ -68,6 +68,7 @@ export function createWorkerSessionMineWorker(options: WorkerSessionMineWorkerOp
       shell: options.shell,
       spawnProcess: options.spawnProcess,
     }),
+    listWorkKeys: () => [WORKER_SESSION_MINE_WORKER_KIND],
   });
 }
 

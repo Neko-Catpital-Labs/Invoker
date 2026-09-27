@@ -487,6 +487,10 @@ export function createClaudeOauthRefreshWorker(config: ClaudeOauthRefreshWorkerC
     onTick,
     intervalMs: config.intervalMs ?? DEFAULT_CLAUDE_OAUTH_REFRESH_INTERVAL_MS,
     tickOnStart: config.tickOnStart ?? true,
+    listWorkKeys: () => [
+      'claude-oauth-refresh:local',
+      ...(config.remoteTargets ?? []).map((target) => `claude-oauth-refresh:${target.name}`),
+    ],
   });
 }
 

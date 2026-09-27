@@ -59,6 +59,7 @@ export function createDbReaperWorker(options: DbReaperWorkerOptions): WorkerRunt
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_DB_REAPER_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? true,
+    listWorkKeys: () => [DB_REAPER_WORKER_KIND],
     onTick: async (ctx) => {
       ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);
