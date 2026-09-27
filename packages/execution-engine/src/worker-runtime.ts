@@ -13,6 +13,8 @@
  */
 
 import type { Logger } from '@invoker/contracts';
+import { MetricRegistry } from './metrics/metric-registry.js';
+import { WorkQueue } from './metrics/work-queue.js';
 
 /** Why a given tick is running. */
 export type WorkerTickReason = 'startup' | 'poll' | 'wake' | 'manual';
@@ -40,6 +42,11 @@ export interface WorkerTickContext {
 /** The unit of work a worker performs on each tick. */
 export type WorkerTick = (ctx: WorkerTickContext) => void | Promise<void>;
 
+interface WorkerRuntimeWorkPayload {
+  readonly reason: WorkerTickReason;
+  readonly args?: string[];
+}
+
 export interface WorkerHealth {
   consecutiveFailedTicks: number;
   failingSince: number | null;
@@ -63,6 +70,8 @@ export interface WorkerRuntimeOptions {
   logger: Logger;
   /** Work performed on every tick. */
   onTick: WorkerTick;
+  workQueueRegistry?: MetricRegistry;
+  workQueueName?: string;
   /** Periodic poll interval in ms. `<= 0` disables polling (wakeup-only). */
   intervalMs?: number;
   /**
@@ -116,6 +125,7 @@ export interface WorkerRuntime {
 }
 
 const DEFAULT_SHUTDOWN_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+const UNMIGRATED_WORKER_KEY = 'onTick';
 
 let instanceCounter = 0;
 
@@ -133,6 +143,53 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+class NonFailingMetricRegistry extends MetricRegistry {
+  constructor(
+    private readonly delegate: MetricRegistry,
+    private readonly onFailure: (err: unknown) => void,
+  ) {
+    super();
+  }
+
+  incrementCounter(...args: Parameters<MetricRegistry['incrementCounter']>): number {
+    try {
+      return this.delegate.incrementCounter(...args);
+    } catch (err) {
+      this.onFailure(err);
+      return 0;
+    }
+  }
+
+  setGauge(...args: Parameters<MetricRegistry['setGauge']>): number {
+    try {
+      return this.delegate.setGauge(...args);
+    } catch (err) {
+      this.onFailure(err);
+      return 0;
+    }
+  }
+
+  observeHistogram(...args: Parameters<MetricRegistry['observeHistogram']>): void {
+    try {
+      this.delegate.observeHistogram(...args);
+    } catch (err) {
+      this.onFailure(err);
+    }
+  }
+
+  getValue(...args: Parameters<MetricRegistry['getValue']>): number | undefined {
+    return this.delegate.getValue(...args);
+  }
+
+  getHistogram(...args: Parameters<MetricRegistry['getHistogram']>): { count: number; sum: number } | undefined {
+    return this.delegate.getHistogram(...args);
+  }
+
+  renderPrometheusText(): string {
+    return this.delegate.renderPrometheusText();
+  }
+}
+
 /**
  * Create a worker runtime around `onTick`. The runtime does not start until
  * `start()` is called.
@@ -148,14 +205,19 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const shutdownSignals = options.shutdownSignals ?? DEFAULT_SHUTDOWN_SIGNALS;
   const installSignalHandlers = options.installSignalHandlers ?? true;
   const logFields = { module: 'worker-runtime', kind: identity.kind, instanceId: identity.instanceId };
+  const workQueue = new WorkQueue<WorkerRuntimeWorkPayload>({
+    name: options.workQueueName ?? `worker-runtime:${identity.kind}`,
+    registry: new NonFailingMetricRegistry(options.workQueueRegistry ?? new MetricRegistry(), (err) => {
+      options.logger.warn(`[worker:${identity.kind}] work queue metric failed`, { ...logFields, err });
+    }),
+  });
 
   let started = false;
   let stopped = false;
   let interval: ReturnType<typeof setInterval> | null = null;
   let startDelayTimer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<boolean> | null = null;
-  let pendingReason: WorkerTickReason | null = null;
-  let pendingArgs: string[] | undefined;
+  let pendingAfterCurrent: WorkerRuntimeWorkPayload | null = null;
   let tickNumber = 0;
   let lastTickActivityAt = Date.now();
   let watchdogTimer: NodeJS.Timeout | null = null;
@@ -196,14 +258,14 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     setHealth({ consecutiveFailedTicks: 0, failingSince: null, lastFailedAt: null, lastError: null });
   };
 
-  const runOnce = async (reason: WorkerTickReason, args?: string[]): Promise<boolean> => {
+  const runOnce = async (payload: WorkerRuntimeWorkPayload): Promise<boolean> => {
     tickNumber += 1;
     const ctx: WorkerTickContext = {
       identity,
-      reason,
+      reason: payload.reason,
       tickNumber,
       signal: abortController.signal,
-      args,
+      args: payload.args,
     };
     lastTickActivityAt = Date.now();
     try {
@@ -212,10 +274,10 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       return true;
     } catch (err) {
       if (abortController.signal.aborted) {
-        options.logger.info(`[worker:${identity.kind}] tick aborted`, { ...logFields, reason });
+        options.logger.info(`[worker:${identity.kind}] tick aborted`, { ...logFields, reason: payload.reason });
         return true;
       }
-      options.logger.error(`[worker:${identity.kind}] tick failed`, { ...logFields, reason, err });
+      options.logger.error(`[worker:${identity.kind}] tick failed`, { ...logFields, reason: payload.reason, err });
       recordTickFailure(err);
       return false;
     } finally {
@@ -224,31 +286,40 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     }
   };
 
-  // Coalescing scheduler: at most one tick runs at a time. Requests that arrive
-  // while a tick is in flight collapse into a single follow-up (keeping the most
-  // recent reason), so a burst of wakeups never queues a backlog of ticks.
+  const enqueueWork = (payload: WorkerRuntimeWorkPayload): void => {
+    const enqueued = workQueue.enqueue(UNMIGRATED_WORKER_KEY, payload);
+    if (!enqueued) {
+      pendingAfterCurrent = {
+        ...payload,
+        args: payload.args ?? pendingAfterCurrent?.args,
+      };
+    }
+  };
+
   const schedule = (reason: WorkerTickReason, args?: string[]): Promise<boolean> => {
     if (stopped) return Promise.resolve(true);
+    enqueueWork({ reason, args });
     if (inFlight) {
-      pendingReason = reason;
-      pendingArgs = args;
       return inFlight;
     }
-    const drain = async (firstReason: WorkerTickReason, firstArgs?: string[]): Promise<boolean> => {
-      let nextReason: WorkerTickReason | null = firstReason;
-      let nextArgs: string[] | undefined = firstArgs;
+    const drain = async (): Promise<boolean> => {
       let consecutiveFailures = 0;
       let succeeded = true;
-      while (nextReason !== null && !stopped) {
-        const current = nextReason;
-        const currentArgs = nextArgs;
-        pendingReason = null;
-        pendingArgs = undefined;
-        succeeded = await runOnce(current, currentArgs);
+      while (!stopped) {
+        const work = workQueue.take();
+        if (!work) break;
+        pendingAfterCurrent = null;
+        succeeded = await runOnce(work.payload);
         consecutiveFailures = succeeded ? 0 : consecutiveFailures + 1;
-        nextReason = pendingReason;
-        nextArgs = pendingArgs;
-        if (nextReason !== null && !succeeded && !stopped) {
+        if (succeeded) {
+          workQueue.complete(work.key);
+        } else {
+          workQueue.fail(work.key);
+        }
+        if (pendingAfterCurrent && !stopped) {
+          workQueue.enqueue(work.key, pendingAfterCurrent);
+        }
+        if (pendingAfterCurrent !== null && !succeeded && !stopped) {
           const backoffMs = Math.min(
             (options.backoffBaseMs ?? 250) * 2 ** (consecutiveFailures - 1),
             options.backoffMaxMs ?? 30_000,
@@ -258,7 +329,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       }
       return succeeded;
     };
-    inFlight = drain(reason, args).finally(() => {
+    inFlight = drain().finally(() => {
       inFlight = null;
     });
     return inFlight;
@@ -279,7 +350,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const beginStop = (): void => {
     if (stopped) return;
     stopped = true;
-    pendingReason = null;
+    pendingAfterCurrent = null;
     if (!abortController.signal.aborted) {
       if (inFlight) {
         options.logger.warn(`[worker:${identity.kind}] aborting in-flight tick`, {
