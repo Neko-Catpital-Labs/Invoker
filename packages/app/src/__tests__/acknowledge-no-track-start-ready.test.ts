@@ -221,6 +221,39 @@ describe('acknowledgeNoTrackHeadlessExec start-ready', () => {
     );
   });
 
+  it('falls through for unscoped agent-login instead of requiring a workflow id', () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    };
+    const result = acknowledgeNoTrackHeadlessExec(
+      {
+        args: ['agent-login', 'start', 'claude'],
+        noTrack: true,
+      },
+      undefined,
+      'normal',
+      'standalone',
+      {
+        ownerId: 'owner-1',
+        getWorkflowMutationCoordinator: () => ({
+          submit: vi.fn(),
+        }) as never,
+        workflowExists: () => false,
+        logger: logger as never,
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('headless.exec start-ready noTrack fallthrough'),
+      expect.objectContaining({ module: 'ipc-delegate' }),
+    );
+  });
+
   it('still rejects other no-track commands without a workflow id', () => {
     const logger = {
       info: vi.fn(),

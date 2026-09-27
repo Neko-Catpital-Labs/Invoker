@@ -159,6 +159,7 @@ async function main(): Promise<void> {
     repoAliases: runtimeConfig.repoAliases,
     channelRepoBindings: runtimeConfig.channelRepoBindings,
     adminUserIds,
+    runHeadlessCommand: async (args) => client.execWithResult(args),
     runWorkflowOp,
     gatherWorkflowContext,
     onRestartInvoker: async () => {
