@@ -3,6 +3,7 @@ import { MetricRegistry, WorkQueue } from '@invoker/execution-engine';
 type MetricOperation = 'counter' | 'gauge' | 'histogram';
 
 export type ChokeBoundaryQueueName = 'mutation' | 'launch' | 'heartbeat';
+const CHOKE_BOUNDARY_QUEUE_NAMES: ChokeBoundaryQueueName[] = ['mutation', 'launch', 'heartbeat'];
 
 export interface ChokeBoundaryMetricsOptions {
   registry?: MetricRegistry;
@@ -14,6 +15,12 @@ export interface SqliteBoundaryMetricInfo {
   durationMs: number;
   outcome?: string;
   operation?: string;
+}
+
+export interface ChokeBoundarySnapshot {
+  generatedAt: string;
+  queues: Record<ChokeBoundaryQueueName, ReturnType<ChokeBoundaryMetrics['getQueueSnapshot']>>;
+  prometheusText: string;
 }
 
 class NonFailingMetricRegistry extends MetricRegistry {
@@ -148,6 +155,16 @@ export class ChokeBoundaryMetrics {
 
   getQueueSnapshot(queueName: ChokeBoundaryQueueName) {
     return this.queueFor(queueName).snapshot();
+  }
+
+  getSnapshot(): ChokeBoundarySnapshot {
+    return {
+      generatedAt: new Date(this.nowMs()).toISOString(),
+      queues: Object.fromEntries(
+        CHOKE_BOUNDARY_QUEUE_NAMES.map((queueName) => [queueName, this.getQueueSnapshot(queueName)]),
+      ) as ChokeBoundarySnapshot['queues'],
+      prometheusText: this.registry.renderPrometheusText(),
+    };
   }
 
   private queueFor(queueName: ChokeBoundaryQueueName): WorkQueue<unknown> {
