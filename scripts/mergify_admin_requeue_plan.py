@@ -405,6 +405,30 @@ def count_code_repair_attempts(
     return count
 
 
+def count_infra_settles(
+    ledger: Ledger,
+    submit_kind: str,
+    pr_number: int,
+    head_sha: str,
+    key: str,
+) -> int:
+    settled_kind = f"{submit_kind}-settled"
+    count = 0
+    for row in ledger.rows:
+        if row.get("kind") != settled_kind:
+            continue
+        if int(row.get("pr", -1)) != pr_number:
+            continue
+        if str(row.get("headSha") or "") != head_sha:
+            continue
+        if row.get("key") != key:
+            continue
+        outcome = (row.get("meta") or {}).get("outcomeClass")
+        if outcome == "infra":
+            count += 1
+    return count
+
+
 def infra_repair_owns_unit(
     ledger: Ledger,
     pr_number: int,
@@ -642,6 +666,8 @@ def mergify_failed_check_actions(
         if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
             continue
         if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
+            continue
+        if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, name) >= 1:
             continue
         if claim_repair_filing is not None and claim_repair_filing(
             repair_filing_kind_for_check(name), str(pr.number), mergify_check_state_sha(pr, latest),
@@ -1181,6 +1207,8 @@ def plan_direct_repairs(
                 if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
                     continue
                 if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
+                    continue
+                if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, blocker.key) >= 1:
                     continue
                 # Same kind formula as mergify_failed_check_actions -- a claim
                 # made via that path (the Mergify-queue-driven view of this
