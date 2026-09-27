@@ -215,7 +215,12 @@ export function acknowledgeNoTrackHeadlessExec(
   const command = Array.isArray(payload.args) ? payload.args[0] : undefined;
   // Global commands are not workflow-scoped. Fall through to inline execution
   // instead of requiring a mutation-intent workflow id.
-  if (command === 'start-ready' || command === 'check-pr-status' || command === 'repair-filing') {
+  if (
+    command === 'start-ready'
+    || command === 'check-pr-status'
+    || command === 'repair-filing'
+    || command === 'agent-login'
+  ) {
     context.logger.info(
       `headless.exec start-ready noTrack fallthrough ${headlessExecLogFields(payload, mode, Boolean(workflowMutationCoordinator), { workflow: '"<global>"', priority })}`,
       { module: 'ipc-delegate' },
