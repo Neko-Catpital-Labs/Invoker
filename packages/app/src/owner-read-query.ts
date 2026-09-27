@@ -10,6 +10,7 @@ import type {
 } from '@invoker/contracts';
 import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
+import { getChokeBoundaryMetrics, type ChokeBoundarySnapshot } from './choke-boundary-metrics.js';
 import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
 import { listAlertHistoryRows, runReadOnlyHeadlessQueryToString, type HeadlessQueryDeps } from './headless-query-list.js';
 import { listWorkerActionHistory, listWorkerDecisions } from './worker-control.js';
@@ -36,6 +37,7 @@ export interface OwnerReadQueryHandlers {
   onActivity?: () => void;
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
+  getChokeSnapshot?: () => ChokeBoundarySnapshot;
   getQueueStatus: () => Record<string, unknown>;
   listWorkerActionHistory: (request: WorkerActionHistoryRequest) => WorkerActionHistoryResponse;
   listWorkerDecisions: (request: WorkerDecisionsRequest) => WorkerDecisionsResponse;
@@ -113,6 +115,8 @@ export function answerOwnerReadQuery(
     case 'ui-perf':
       if (reset) handlers.resetUiPerfStats();
       return { ownerMode: handlers.ownerModeLabel, ...handlers.getUiPerfStats() };
+    case 'choke':
+      return handlers.getChokeSnapshot?.() ?? getChokeBoundaryMetrics().getSnapshot();
     case 'queue':
       return handlers.getQueueStatus();
     case 'worker-status':
@@ -219,6 +223,7 @@ export interface OwnerReadQueryDeps {
   onActivity?: () => void;
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
+  getChokeSnapshot?: () => ChokeBoundarySnapshot;
   getStreamSequence: () => number;
   getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkers: () => WorkerStatusSnapshot;
@@ -238,6 +243,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     onActivity: deps.onActivity,
     getUiPerfStats: deps.getUiPerfStats,
     resetUiPerfStats: deps.resetUiPerfStats,
+    getChokeSnapshot: deps.getChokeSnapshot ?? (() => getChokeBoundaryMetrics().getSnapshot()),
     getQueueStatus: () => orchestrator.getQueueStatus({ refresh: false }) as unknown as Record<string, unknown>,
     getWorkerStatus: deps.getWorkerStatus,
     getWorkers: deps.getWorkers,
