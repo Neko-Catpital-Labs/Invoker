@@ -364,6 +364,78 @@ def build_repair_check_plan(
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
+def repair_scope_split_plan_name(pr_number: int, start_head: str) -> str:
+    return f"admin-bypass-repair-scope-split-pr-{pr_number}-{start_head[:7]}"
+
+
+def build_repair_scope_split_plan(
+    pr: PrSnapshot,
+    *,
+    repo: str,
+    review_units: Sequence[str],
+    review_unit: str,
+    errors: Sequence[str],
+    details_url: str,
+    start_head: str,
+    state_file: Path,
+) -> AsyncRepairPlan:
+    name = repair_scope_split_plan_name(pr.number, start_head)
+    units = tuple(review_units)
+    declared = review_unit if review_unit in units else units[0]
+    others = [unit for unit in units if unit != declared]
+    error_lines = "\n".join(f"- {error}" for error in errors) or "- (none)"
+    prompt = (
+        "This pull request fails PR Body because its diff spans more than one review unit: "
+        f"{', '.join(units)}.\n\n"
+        f"Partition the existing diff of pull request #{pr.number} ({json.dumps(pr.title)}) on {repo} "
+        "into one stacked PR per review unit. Use scripts/create-pr.mjs for each new PR. "
+        "Do not try to make this mixed diff pass PR Body in place.\n\n"
+        f"PR URL: {pr.url}\n"
+        f"The original pull request stays on branch {pr.head_ref_name} (at {start_head}), "
+        f"base {pr.base_ref_name}, and keeps only the files for review unit {declared}. "
+        "Commit that reduction locally. Do not push.\n\n"
+        "Work directly on its branch:\n"
+        f"  git fetch origin {pr.head_ref_name} && git checkout {pr.head_ref_name}\n\n"
+        f"Publish each other review unit ({', '.join(others)}) as its own stacked PR based on the previous slice. "
+        "Each new PR body declares that one review unit, passes "
+        "`node scripts/validate-pr-body-local.mjs`, and is labeled admin-bypass.\n\n"
+        "A test-assertion change stays on the slice that contains that test file.\n\n"
+        f"Failed check: PR Body\n"
+        f"Details URL: {details_url}\n"
+        f"Validator errors:\n{error_lines}\n\n"
+        "If the pull request is closed or merged, or the diff is already one review unit, "
+        "make no commit and exit 0.\n"
+    )
+    yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
+    yaml_text += _repair_task_yaml(
+        description=f"Split PR #{pr.number} into one PR per review unit",
+        prompt=prompt,
+    )
+    normalize_command = (
+        "set -euo pipefail\n"
+        "python3 -B scripts/mergify_admin_requeue_repair_normalize.py \\\n"
+        f"  --repo {_shlex(repo)} --pr {pr.number} --check 'PR Body' \\\n"
+        f"  --start-head {_shlex(start_head)} --base {_shlex(pr.base_ref_name)} --trunk master \\\n"
+        "  --scope-split\n"
+    )
+    yaml_text += (
+        "  - id: normalize\n"
+        f"    description: {_yaml_str(f'Record repair-invalid when PR #{pr.number} is still more than one review unit')}\n"
+        "    dependencies: [repair]\n"
+        "    command: |\n"
+        f"{_indent_block(normalize_command, 6)}\n"
+    )
+    yaml_text += _safe_push_task_yaml(
+        task_id="safe-push",
+        description=f"Safely push PR #{pr.number} only if its head did not move and the split left one review unit",
+        dependencies="normalize",
+        head_ref=pr.head_ref_name,
+        start_head=start_head,
+        skip_if_prereq=True,
+    )
+    return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
+
+
 def build_aggregated_repair_check_plan(
     pr: PrSnapshot,
     checks: Sequence[RepairCheckSpec],
