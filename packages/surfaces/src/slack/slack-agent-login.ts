@@ -118,11 +118,13 @@ export function redactTokenLike(text: string): string {
   return result;
 }
 
+export const AGENT_LOGIN_COPY_CODE_ACTION_ID = 'agent_login_copy_code';
+
 export interface AgentLoginThreadDeps {
   isAdmin(userId: string | undefined): boolean;
   resolveTarget(channel: string, threadTs: string): Promise<AgentLoginTarget | null>;
   runHeadlessCommand(args: string[]): Promise<unknown>;
-  post(text: string, threadTs: string, channel: string): Promise<void>;
+  post(text: string, threadTs: string, channel: string, blocks?: unknown[]): Promise<void>;
   log?(level: 'info' | 'warn' | 'error', message: string): void;
 }
 
@@ -169,6 +171,64 @@ export function formatAgentLoginStart(view: AgentLoginCommandView, target: Agent
   }
   if (view.message) lines.push(redactTokenLike(view.message));
   return lines.join('\n');
+}
+
+export function formatAgentLoginStartBlocks(
+  view: AgentLoginCommandView,
+  _target: AgentLoginTarget,
+): unknown[] | undefined {
+  if (!view.userCode) return undefined;
+  return [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: formatAgentLoginStart(view, _target) },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          action_id: AGENT_LOGIN_COPY_CODE_ACTION_ID,
+          text: { type: 'plain_text', text: 'Copy code' },
+          value: view.userCode.slice(0, 2000),
+        },
+      ],
+    },
+  ];
+}
+
+export function buildAgentLoginCopyCodeModal(userCode: string): {
+  type: 'modal';
+  title: { type: 'plain_text'; text: string };
+  close: { type: 'plain_text'; text: string };
+  blocks: unknown[];
+} {
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'Copy code' },
+    close: { type: 'plain_text', text: 'Done' },
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'The field below is focused. Press ⌘A / Ctrl+A, then ⌘C / Ctrl+C (or long-press → Copy on mobile).',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'agent_login_code',
+        optional: true,
+        label: { type: 'plain_text', text: 'Device code' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'agent_login_code_value',
+          initial_value: userCode.slice(0, 2000),
+          focus_on_load: true,
+        },
+      },
+    ],
+  };
 }
 
 export function formatAgentLoginOutcome(view: AgentLoginCommandView, target: AgentLoginTarget): string {
@@ -251,7 +311,13 @@ export class AgentLoginThreadController {
         awaitingCode: view.status === 'awaiting_code',
       });
     }
-    await this.deps.post(formatAgentLoginStart(view, target), reply.threadTs, reply.channel);
+    const startText = formatAgentLoginStart(view, target);
+    await this.deps.post(
+      startText,
+      reply.threadTs,
+      reply.channel,
+      formatAgentLoginStartBlocks(view, target),
+    );
   }
 
   private async submitCode(

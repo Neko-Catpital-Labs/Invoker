@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+  AGENT_LOGIN_COPY_CODE_ACTION_ID,
   AGENT_LOGIN_METADATA_EVENT_TYPE,
   AGENT_LOGIN_NOT_ADMIN_MESSAGE,
   AgentLoginThreadController,
   buildAgentLoginAlertMetadata,
+  buildAgentLoginCopyCodeModal,
+  formatAgentLoginStartBlocks,
   normalizeAgentLoginResult,
   parseAgentLoginAlertKey,
   readAgentLoginMetadata,
@@ -24,7 +27,7 @@ const TARGET: AgentLoginTarget = { host: 'DO1', agent: 'claude' };
 interface Harness {
   controller: AgentLoginThreadController;
   execCalls: string[][];
-  posts: string[];
+  posts: Array<{ text: string; blocks?: unknown[] }>;
 }
 
 function makeHarness(options: {
@@ -34,7 +37,7 @@ function makeHarness(options: {
   execError?: Error;
 } = {}): Harness {
   const execCalls: string[][] = [];
-  const posts: string[] = [];
+  const posts: Array<{ text: string; blocks?: unknown[] }> = [];
   const admins = new Set(options.admins ?? [ADMIN]);
   const results = [...(options.results ?? [])];
 
@@ -47,8 +50,8 @@ function makeHarness(options: {
       if (!results.length) throw new Error(`unexpected exec call: ${args.join(' ')}`);
       return results.shift();
     },
-    post: async (text) => {
-      posts.push(text);
+    post: async (text, _threadTs, _channel, blocks) => {
+      posts.push({ text, blocks });
     },
   });
 
@@ -114,9 +117,9 @@ describe('agent-login reply walkthrough', () => {
     expect(handled).toBe(true);
     expect(h.execCalls).toEqual([['agent-login', 'start', 'claude', '--output', 'json']]);
     expect(h.posts).toHaveLength(1);
-    expect(h.posts[0]).toContain(LOGIN_URL);
-    expect(h.posts[0]).toContain('WDJB-MJHT');
-    expect(h.posts[0]).toContain('DO1');
+    expect(h.posts[0].text).toContain(LOGIN_URL);
+    expect(h.posts[0].text).toContain('WDJB-MJHT');
+    expect(h.posts[0].text).toContain('DO1');
   });
 
   it('refuses a non-admin reply and never runs a command', async () => {
@@ -131,7 +134,7 @@ describe('agent-login reply walkthrough', () => {
 
     expect(handled).toBe(true);
     expect(h.execCalls).toEqual([]);
-    expect(h.posts).toEqual([AGENT_LOGIN_NOT_ADMIN_MESSAGE]);
+    expect(h.posts.map((p) => p.text)).toEqual([AGENT_LOGIN_NOT_ADMIN_MESSAGE]);
   });
 
   it('refuses a reply with no user id', async () => {
@@ -140,7 +143,7 @@ describe('agent-login reply walkthrough', () => {
     await h.controller.handleReply({ channel: CHANNEL, threadTs: THREAD, text: 'reauth' });
 
     expect(h.execCalls).toEqual([]);
-    expect(h.posts).toEqual([AGENT_LOGIN_NOT_ADMIN_MESSAGE]);
+    expect(h.posts.map((p) => p.text)).toEqual([AGENT_LOGIN_NOT_ADMIN_MESSAGE]);
   });
 
   it('passes the next admin reply on as the login code and posts the final result', async () => {
@@ -166,7 +169,7 @@ describe('agent-login reply walkthrough', () => {
 
     expect(handled).toBe(true);
     expect(h.execCalls[1]).toEqual(['agent-login', 'code', SESSION, 'WDJB-MJHT', '--output', 'json']);
-    expect(h.posts[1]).toContain('installed');
+    expect(h.posts[1].text).toContain('installed');
   });
 
   it('accepts a JSON stdout line from the headless command', async () => {
@@ -174,7 +177,7 @@ describe('agent-login reply walkthrough', () => {
 
     await h.controller.handleReply({ channel: CHANNEL, threadTs: THREAD, userId: ADMIN, text: 'reauth' });
 
-    expect(h.posts[0]).toContain(LOGIN_URL);
+    expect(h.posts[0].text).toContain(LOGIN_URL);
   });
 
   it('leaves replies in threads without agent-login metadata to the other handlers', async () => {
@@ -204,8 +207,8 @@ describe('agent-login reply walkthrough', () => {
 
     expect(handled).toBe(true);
     expect(h.execCalls).toEqual([]);
-    expect(h.posts[0]).toContain('reauth');
-    expect(h.posts[0]).toContain('DO1');
+    expect(h.posts[0].text).toContain('reauth');
+    expect(h.posts[0].text).toContain('DO1');
   });
 
   it('does not send prose chatter on as a login code', async () => {
@@ -220,7 +223,7 @@ describe('agent-login reply walkthrough', () => {
     });
 
     expect(h.execCalls).toHaveLength(1);
-    expect(h.posts[1]).toContain('reauth');
+    expect(h.posts[1].text).toContain('reauth');
   });
 
   it('stops expecting a code after a failed start and reports the failure', async () => {
@@ -234,8 +237,8 @@ describe('agent-login reply walkthrough', () => {
     await h.controller.handleReply({ channel: CHANNEL, threadTs: THREAD, userId: ADMIN, text: 'WDJB-MJHT' });
 
     expect(h.execCalls).toHaveLength(1);
-    expect(h.posts[0]).toContain('left untouched');
-    expect(h.posts[1]).toContain('reauth');
+    expect(h.posts[0].text).toContain('left untouched');
+    expect(h.posts[1].text).toContain('reauth');
   });
 
   it('reports an expired session from the code command and re-offers reauth', async () => {
@@ -254,8 +257,8 @@ describe('agent-login reply walkthrough', () => {
     await h.controller.handleReply({ channel: CHANNEL, threadTs: THREAD, userId: ADMIN, text: 'reauth' });
     await h.controller.handleReply({ channel: CHANNEL, threadTs: THREAD, userId: ADMIN, text: 'WDJB-MJHT' });
 
-    expect(h.posts[1]).toContain('session expired');
-    expect(h.posts[1]).toContain('reauth');
+    expect(h.posts[1].text).toContain('session expired');
+    expect(h.posts[1].text).toContain('reauth');
   });
 
   it('explains a command that could not run instead of staying silent', async () => {
@@ -269,8 +272,8 @@ describe('agent-login reply walkthrough', () => {
     });
 
     expect(handled).toBe(true);
-    expect(h.posts[0]).toContain('owner is not reachable');
-    expect(h.posts[0]).toContain('left untouched');
+    expect(h.posts[0].text).toContain('owner is not reachable');
+    expect(h.posts[0].text).toContain('left untouched');
   });
 
   it('explains an unreadable result instead of posting it', async () => {
@@ -278,8 +281,8 @@ describe('agent-login reply walkthrough', () => {
 
     await h.controller.handleReply({ channel: CHANNEL, threadTs: THREAD, userId: ADMIN, text: 'reauth' });
 
-    expect(h.posts[0]).toContain('could not read');
-    expect(h.posts.join('\n')).not.toContain(LEAKED_TOKEN);
+    expect(h.posts[0].text).toContain('could not read');
+    expect(h.posts.map((p) => p.text).join('\n')).not.toContain(LEAKED_TOKEN);
   });
 });
 
@@ -316,9 +319,53 @@ describe('agent-login never posts a token', () => {
 
     expect(h.posts).toHaveLength(2);
     for (const post of h.posts) {
-      expect(post).not.toContain(LEAKED_TOKEN);
-      expect(post).not.toMatch(/\bsk-[A-Za-z0-9_-]{12,}/);
+      expect(post.text).not.toContain(LEAKED_TOKEN);
+      expect(post.text).not.toMatch(/\bsk-[A-Za-z0-9_-]{12,}/);
     }
-    expect(h.posts[1]).toContain('[redacted]');
+    expect(h.posts[1].text).toContain('[redacted]');
   });
 });
+
+describe('agent-login copy code affordance', () => {
+  it('attaches a Copy code button next to the device code on start', async () => {
+    const h = makeHarness({ results: [startResult()] });
+    await h.controller.handleReply({
+      channel: CHANNEL,
+      threadTs: THREAD,
+      userId: ADMIN,
+      text: 'reauth',
+    });
+    expect(h.posts).toHaveLength(1);
+    expect(h.posts[0].text).toContain('WDJB-MJHT');
+    const blocks = h.posts[0].blocks as Array<Record<string, unknown>>;
+    expect(blocks).toBeDefined();
+    const actions = blocks.find((b) => b.type === 'actions') as {
+      elements: Array<{ action_id: string; value: string; text: { text: string } }>;
+    };
+    expect(actions.elements[0].action_id).toBe(AGENT_LOGIN_COPY_CODE_ACTION_ID);
+    expect(actions.elements[0].value).toBe('WDJB-MJHT');
+    expect(actions.elements[0].text.text).toBe('Copy code');
+  });
+
+  it('omits Copy blocks when there is no device code', () => {
+    const blocks = formatAgentLoginStartBlocks(
+      {
+        sessionId: SESSION,
+        provider: 'claude',
+        status: 'failed',
+        message: 'no code',
+      },
+      TARGET,
+    );
+    expect(blocks).toBeUndefined();
+  });
+
+  it('builds a focused modal whose initial value is the device code', () => {
+    const modal = buildAgentLoginCopyCodeModal('ABCD-EFGH');
+    expect(modal.type).toBe('modal');
+    const input = (modal.blocks as Array<Record<string, any>>).find((b) => b.type === 'input');
+    expect(input?.element?.initial_value).toBe('ABCD-EFGH');
+    expect(input?.element?.focus_on_load).toBe(true);
+  });
+});
+
