@@ -79,6 +79,49 @@ describe('WorkerRuntime WorkQueue', () => {
     await runtime.stop();
   });
 
+  it('preserves pending manual args when a poll coalesces behind an active tick', async () => {
+    const logger = makeLogger();
+    const registry = new MetricRegistry();
+    const releaseFirstTick = deferred();
+    const secondTickStarted = deferred();
+    const contexts: WorkerTickContext[] = [];
+    const onTick = vi.fn(async (ctx: WorkerTickContext) => {
+      contexts.push(ctx);
+      if (contexts.length === 1) {
+        await releaseFirstTick.promise;
+      }
+      if (contexts.length === 2) {
+        secondTickStarted.resolve();
+      }
+    });
+
+    const runtime = createWorkerRuntime({
+      kind: 'test-queue-manual-args',
+      logger,
+      onTick,
+      intervalMs: 0,
+      tickOnStart: false,
+      installSignalHandlers: false,
+      workQueueRegistry: registry,
+      workQueueName: 'test-worker-runtime-manual-args',
+    });
+
+    runtime.start();
+    runtime.wake('wake');
+    await Promise.resolve();
+    const runPromise = runtime.run(['manual-arg']);
+    runtime.wake('poll');
+
+    releaseFirstTick.resolve();
+    await secondTickStarted.promise;
+    await expect(runPromise).resolves.toBeUndefined();
+
+    expect(onTick).toHaveBeenCalledTimes(2);
+    expect(contexts[1]?.args).toEqual(['manual-arg']);
+
+    await runtime.stop();
+  });
+
   it('records failed work without changing tick failure propagation', async () => {
     const logger = makeLogger();
     const registry = new MetricRegistry();
