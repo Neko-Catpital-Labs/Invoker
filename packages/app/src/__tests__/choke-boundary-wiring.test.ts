@@ -7,6 +7,7 @@ import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
 import { LaunchDispatcher } from '../launch-dispatcher.js';
 import { PersistedWorkflowMutationCoordinator } from '../persisted-workflow-mutation-coordinator.js';
 import { getChokeBoundaryMetrics } from '../choke-boundary-metrics.js';
+import { startStandaloneLaunchDispatcher } from '../headless-standalone-launch-dispatcher.js';
 import { openDetachedViewerDatabase } from '../viewer-db-boundary.js';
 
 class ThrowingMetricRegistry extends MetricRegistry {
@@ -163,6 +164,36 @@ describe('choke boundary wiring', () => {
     expect(metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {
       boundary: 'launch.topup',
     })?.count).toBe(1);
+  });
+
+  it('wires standalone launch dispatching to the shared registry', () => {
+    const metrics = getChokeBoundaryMetrics();
+    const before = metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {
+      boundary: 'launch.topup',
+    })?.count ?? 0;
+    const logger = makeLogger();
+    const controller = startStandaloneLaunchDispatcher({
+      headlessDeps: {
+        logger,
+        persistence: {
+          listAbandonableLaunchDispatchLeases: vi.fn(() => []),
+          reapExpiredLaunchDispatchLeases: vi.fn(() => []),
+          claimLaunchDispatchAtomic: vi.fn(() => null),
+        },
+        orchestrator: {
+          startExecution: vi.fn(() => []),
+        },
+      } as never,
+      ownerId: 'owner',
+      createTaskExecutor: () => ({ executeTask: vi.fn(async () => {}) }) as never,
+      setLatestTaskExecutor: vi.fn(),
+    });
+
+    controller.stop();
+
+    expect(metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {
+      boundary: 'launch.topup',
+    })?.count).toBeGreaterThan(before);
   });
 
   it('wires SQLite callbacks into the shared registry', async () => {
