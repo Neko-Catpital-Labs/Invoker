@@ -443,13 +443,18 @@ def access_denial_controls(work_root: Path, state_dir: Path, auth_dir: str | Non
     profile = base / "profile.sb"
     profile.write_text(sandbox_profile(plan))
     grader = HERE / manifest()["grader"]["file"]
+    personal = realpath("~/.claude")
+    if auth_dir == personal:
+        personal_probe = ("list personal skills in ~/.claude", ["ls", f"{personal}/skills"], "deny")
+    else:
+        personal_probe = ("list personal ~/.claude", ["ls", personal], "deny")
     probes = [
         ("read hidden grader in evaluator repo", ["cat", str(grader)], "deny"),
         ("read committed gold control", ["cat", str(HERE / "controls/baseline/gold.patch")], "deny"),
         ("read evaluator private copy", ["cat", str(private / "gold.patch")], "deny"),
         ("read other arm's trial copy", ["cat", str(other / "other-arm.txt")], "deny"),
         ("list evaluator state/ledger dir", ["ls", str(state_dir)], "deny"),
-        ("list personal ~/.claude", ["ls", realpath("~/.claude")], "deny"),
+        personal_probe,
         ("read gh credentials dir", ["ls", realpath("~/.config/gh")], "deny"),
     ]
     if auth_dir:
