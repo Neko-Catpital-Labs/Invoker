@@ -88,7 +88,7 @@ const CODEX_REMOTE_PROBE_PROMPT = 'Reply with just the word ok';
 
 const ANSI_PATTERN = /\x1b(?:\[[0-9;]*[a-zA-Z]|\][^\x07\x1b]*(?:\x07|\x1b\\))/g;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/;
-const DEVICE_CODE_PATTERN = /\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/;
+const DEVICE_CODE_PATTERN = /\b([A-Z0-9]{4,5}-[A-Z0-9]{4,5})\b/;
 const CLAUDE_OAUTH_TOKEN_PATTERN = /\b(sk-ant-oat\d{2}-[A-Za-z0-9_-]{10,})\b/;
 
 export function stripAnsiColorCodes(text: string): string {
