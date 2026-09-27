@@ -21,7 +21,7 @@ function makeTask(id: string, status: string, selectedAttemptId?: string): TaskS
 }
 
 describe('a launch deferred because a pool member is full', () => {
-  it.fails('names the tasks holding the member in the deferral event', async () => {
+  it('names the tasks holding the member in the deferral event', async () => {
     const holder = makeTask('wf-holder/repair', 'queued', 'wf-holder/repair-a1');
     const waiting = makeTask('wf-waiting/fix-ci', 'pending');
     const tasks = [holder, waiting];
