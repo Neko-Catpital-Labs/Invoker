@@ -61,6 +61,7 @@ export * from './worker-types.js';
 export * from './worker-lock.js';
 export * from './builtin-workers.js';
 export * from './worker-mutation-channels.js';
+export * from './metrics/index.js';
 export * from './auto-fix-recovery.js';
 export * from './workflow-name-gates.js';
 export * from './review-gate-ci-repair.js';
