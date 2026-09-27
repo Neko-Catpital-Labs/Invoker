@@ -1,0 +1,17 @@
+name: v5-container-canary
+on:
+  workflow_dispatch:
+jobs:
+  canary:
+    runs-on: [self-hosted, v5-canary]
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - name: Docker daemon check
+        run: docker info --format 'server {{.ServerVersion}}'
+      - name: Done
+        run: echo "v5 container canary passed"
