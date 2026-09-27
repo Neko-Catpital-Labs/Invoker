@@ -17,7 +17,7 @@ export interface SqliteBoundaryMetricInfo {
   operation?: string;
 }
 
-export interface ChokeBoundarySnapshot {
+export interface ChokeBoundarySnapshot extends Record<string, unknown> {
   generatedAt: string;
   queues: Record<ChokeBoundaryQueueName, ReturnType<ChokeBoundaryMetrics['getQueueSnapshot']>>;
   prometheusText: string;
