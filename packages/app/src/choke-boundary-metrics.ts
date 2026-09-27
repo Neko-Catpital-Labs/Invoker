@@ -1,9 +1,8 @@
-import { MetricRegistry, WorkQueue, type WorkQueueSnapshot } from '@invoker/execution-engine';
+import { MetricRegistry, WorkQueue } from '@invoker/execution-engine';
 
 type MetricOperation = 'counter' | 'gauge' | 'histogram';
 
 export type ChokeBoundaryQueueName = 'mutation' | 'launch' | 'heartbeat';
-const CHOKE_QUEUE_NAMES: readonly ChokeBoundaryQueueName[] = ['mutation', 'launch', 'heartbeat'] as const;
 
 export interface ChokeBoundaryMetricsOptions {
   registry?: MetricRegistry;
@@ -15,11 +14,6 @@ export interface SqliteBoundaryMetricInfo {
   durationMs: number;
   outcome?: string;
   operation?: string;
-}
-
-export interface ChokeBoundarySnapshot {
-  queues: Record<ChokeBoundaryQueueName, WorkQueueSnapshot>;
-  prometheusText: string;
 }
 
 class NonFailingMetricRegistry extends MetricRegistry {
@@ -71,8 +65,8 @@ class NonFailingMetricRegistry extends MetricRegistry {
   private reportMetricError(operation: MetricOperation, error: unknown): void {
     try {
       this.onMetricError?.(operation, error);
-    } catch {
-      // Metrics are best-effort and must not affect the observed operation.
+    } catch (reportingFailure) {
+      void reportingFailure;
     }
   }
 }
@@ -156,19 +150,6 @@ export class ChokeBoundaryMetrics {
     return this.queueFor(queueName).snapshot();
   }
 
-  getSnapshot(): ChokeBoundarySnapshot {
-    const queues = Object.fromEntries(
-      CHOKE_QUEUE_NAMES.map((queueName) => [
-        queueName,
-        this.queues.get(queueName)?.snapshot() ?? zeroQueueSnapshot(queueName),
-      ]),
-    ) as Record<ChokeBoundaryQueueName, WorkQueueSnapshot>;
-    return {
-      queues,
-      prometheusText: this.registry.renderPrometheusText(),
-    };
-  }
-
   private queueFor(queueName: ChokeBoundaryQueueName): WorkQueue<unknown> {
     let queue = this.queues.get(queueName);
     if (!queue) {
@@ -177,19 +158,6 @@ export class ChokeBoundaryMetrics {
     }
     return queue;
   }
-}
-
-function zeroQueueSnapshot(queueName: ChokeBoundaryQueueName): WorkQueueSnapshot {
-  return {
-    name: `choke-${queueName}`,
-    queued: 0,
-    processing: 0,
-    complete: 0,
-    failed: 0,
-    added: 0,
-    deduped: 0,
-    unaccounted: 0,
-  };
 }
 
 const defaultChokeBoundaryMetrics = new ChokeBoundaryMetrics();

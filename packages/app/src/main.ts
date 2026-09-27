@@ -3258,7 +3258,6 @@ startMainProcessBootstrap({
         return mutationActions.translateGuiMutationToHeadless(payload);
       },
       guiMutationHandlers: ownerCapabilities,
-      chokeMetrics: getChokeBoundaryMetrics(),
     };
 
     const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
@@ -3688,7 +3687,6 @@ startMainProcessBootstrap({
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
       recordStartupDuration,
-      chokeMetrics: getChokeBoundaryMetrics(),
     });
     await registerGuiMutationIpcHandlers({
       ipcMain,

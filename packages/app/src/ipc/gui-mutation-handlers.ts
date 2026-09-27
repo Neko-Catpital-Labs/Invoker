@@ -92,7 +92,6 @@ import {
 import { persistShutdownDiagnostic } from '../shutdown-diagnostic.js';
 import { createCachedActionGraphSnapshotReader } from '../action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
-import { getChokeBoundaryMetrics } from '../choke-boundary-metrics.js';
 import {
   createInAppPlanningChatSessions,
   createPlanningChatSession,
@@ -1722,32 +1721,26 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
 
   ipcMain.handle('invoker:refresh-task-graph', async () => {
     const startedAtMs = Date.now();
-    try {
-      const snapshot = await resolveRefreshTaskGraphSnapshot({
-        ownerMode,
-        messageBus,
-        resolveInvokerHomeRoot,
-        orchestrator,
-        persistence,
-        logger,
-        getStreamSequence: getTaskDeltaStreamSequence,
-      });
+    const snapshot = await resolveRefreshTaskGraphSnapshot({
+      ownerMode,
+      messageBus,
+      resolveInvokerHomeRoot,
+      orchestrator,
+      persistence,
+      logger,
+      getStreamSequence: getTaskDeltaStreamSequence,
+    });
 
-      publishForcedRefreshTaskGraphSnapshot(
-        taskGraphEventPublisher,
-        ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
-        snapshot,
-      );
-      recordStartupDuration('refresh-task-graph.return', startedAtMs, {
-        taskCount: snapshot.tasks.length,
-        workflowCount: snapshot.workflows.length,
-        streamSequence: snapshot.streamSequence,
-      });
-      getChokeBoundaryMetrics().recordRequest('ipc', 'success', { channel: 'invoker:refresh-task-graph' });
-    } catch (err) {
-      getChokeBoundaryMetrics().recordRequest('ipc', 'error', { channel: 'invoker:refresh-task-graph' });
-      throw err;
-    }
+    publishForcedRefreshTaskGraphSnapshot(
+      taskGraphEventPublisher,
+      ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
+      snapshot,
+    );
+    recordStartupDuration('refresh-task-graph.return', startedAtMs, {
+      taskCount: snapshot.tasks.length,
+      workflowCount: snapshot.workflows.length,
+      streamSequence: snapshot.streamSequence,
+    });
   });
   registerReadOnlyIpcHandlers({
     ipcMain,
@@ -1762,7 +1755,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     onMutationOwnerUnavailable: markDaemonOwnerUnavailable,
     recordStartupDuration,
     getTaskDeltaStreamSequence,
-    chokeMetrics: getChokeBoundaryMetrics(),
   });
 
   registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
