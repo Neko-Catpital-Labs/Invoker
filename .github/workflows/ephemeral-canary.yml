@@ -1,0 +1,16 @@
+name: ephemeral-canary
+# TEMPORARY - proves on-demand runners execute jobs. Removed after the proof.
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: [eph-canary-proof]
+    timeout-minutes: 10
+    steps:
+      - run: |
+          echo "hello from the ephemeral runner"
+          hostname
+          whoami
+          docker --version
+          sleep 20
+          echo "probe complete"
