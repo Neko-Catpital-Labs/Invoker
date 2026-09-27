@@ -65,8 +65,8 @@ class NonFailingMetricRegistry extends MetricRegistry {
   private reportMetricError(operation: MetricOperation, error: unknown): void {
     try {
       this.onMetricError?.(operation, error);
-    } catch (reportingFailure) {
-      void reportingFailure;
+    } catch {
+      // Metric diagnostics must not change application outcomes.
     }
   }
 }
