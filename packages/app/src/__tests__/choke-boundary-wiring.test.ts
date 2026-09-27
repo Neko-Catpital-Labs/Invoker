@@ -156,6 +156,10 @@ describe('choke boundary wiring', () => {
     expect(dispatcher.acceptDispatch(2)).toBe(false);
 
     expect(metrics.getQueueSnapshot('launch')).toMatchObject({ complete: 1, failed: 1, unaccounted: 0 });
+    expect(metrics.registry.getValue('choke_boundary_requests_total', {
+      boundary: 'launch',
+      code: 'rejected',
+    })).toBe(1);
     expect(metrics.registry.getHistogram('choke_boundary_event_loop_lag_seconds', {
       boundary: 'launch.topup',
     })?.count).toBe(1);

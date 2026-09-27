@@ -713,6 +713,7 @@ export class LaunchDispatcher {
       this.chokeMetrics?.recordQueueAccepted('launch', `dispatch:${dispatchId}`, { dispatchId });
     } else {
       this.chokeMetrics?.recordQueueRejected('launch', `dispatch:${dispatchId}`, { dispatchId });
+      this.chokeMetrics?.recordRequest('launch', 'rejected');
     }
     this.logger?.info?.('[launch-dispatcher] accepted', {
       ownerId: this.ownerId,
