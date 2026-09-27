@@ -1,0 +1,31 @@
+{
+  "kind": "idle-task-cleanup",
+  "name": "retire-completed-workflow",
+  "state": {
+    "workflows": [
+      {
+        "id": "wf-completed",
+        "name": "wf-completed",
+        "status": "completed",
+        "updatedAt": "2026-08-15T12:00:00.000Z"
+      }
+    ],
+    "tasksByWorkflow": {
+      "wf-completed": [
+        { "id": "wf-completed/task-1", "status": "completed" },
+        { "id": "wf-completed/task-2", "status": "closed" },
+        { "id": "wf-completed/task-3", "status": "stale" }
+      ]
+    },
+    "nowMs": 1723723200000
+  },
+  "decisions": [
+    {
+      "type": "mutation",
+      "workflowId": "wf-completed",
+      "channel": "invoker:delete-workflow",
+      "args": ["wf-completed"],
+      "priority": "normal"
+    }
+  ]
+}

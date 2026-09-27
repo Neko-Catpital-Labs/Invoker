@@ -55,3 +55,8 @@ user.bazelrc
 # PR Body diff metadata (scripts/fetch-pr-diff-metadata.sh)
 /changed-files.txt
 /pr.diff
+
+# Python worker package local artifacts
+packages/invoker_worker/.venv/
+packages/invoker_worker/*.egg-info/
+.pytest_cache/
