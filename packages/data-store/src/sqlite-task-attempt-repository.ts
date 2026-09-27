@@ -57,6 +57,7 @@ const SAVE_TASK_COLUMNS = [
   'agent_name',
   'freshness',
   'task_state_version',
+  'last_fix_failure_json',
 ] as const;
 
 const SAVE_TASK_ROW_PLACEHOLDERS = `(${SAVE_TASK_COLUMNS.map(() => '?').join(', ')})`;
@@ -355,6 +356,7 @@ export class SqliteTaskAttemptRepository {
       'agent_name',
       'freshness',
       'task_state_version',
+      'last_fix_failure_json',
     ];
     const sql = `
       INSERT OR REPLACE INTO tasks (
@@ -381,7 +383,8 @@ export class SqliteTaskAttemptRepository {
         execution_model,
         agent_name,
         freshness,
-        task_state_version
+        task_state_version,
+        last_fix_failure_json
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -397,6 +400,7 @@ export class SqliteTaskAttemptRepository {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -469,6 +473,7 @@ export class SqliteTaskAttemptRepository {
       exec.agentName ?? null,
       cfg.freshness !== undefined ? JSON.stringify(cfg.freshness) : null,
       task.taskStateVersion ?? 1,
+      exec.lastFixFailure ? JSON.stringify(exec.lastFixFailure) : null,
     ];
     assertSaveTaskPersistsSelectedAttemptId(columns, values, exec);
     this.exec.runTransaction(() => {
@@ -597,6 +602,7 @@ export class SqliteTaskAttemptRepository {
       exec.agentName ?? null,
       cfg.freshness !== undefined ? JSON.stringify(cfg.freshness) : null,
       task.taskStateVersion ?? 1,
+      exec.lastFixFailure ? JSON.stringify(exec.lastFixFailure) : null,
     ];
     assertSaveTaskPersistsSelectedAttemptId([...SAVE_TASK_COLUMNS], values, exec);
     return { task, values };
@@ -780,6 +786,7 @@ export class SqliteTaskAttemptRepository {
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
         reviewGate: 'review_gate',
+        lastFixFailure: 'last_fix_failure_json',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
