@@ -58,7 +58,6 @@ import {
 } from './headless-shared.js';
 import { parseStartReadyExcludeSelector, runStartReady } from './start-ready.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { getChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 type StartReadyRequestExt = StartReadyRequest & {
   recreateFailedAndPending?: boolean;
   recreateFailedPendingAndRunning?: boolean;
@@ -218,7 +217,6 @@ function startTrackedHeadlessLaunchDispatcher(
     taskRunnerProvider: () => taskExecutor,
     ownerId: `headless-tracked-${process.pid}-${context}`,
     logger: deps.logger,
-    chokeMetrics: getChokeBoundaryMetrics(),
   });
 
   const poll = (): void => {
