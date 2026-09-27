@@ -263,7 +263,7 @@ export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): voi
 }); }
 
 export interface QueryFlags {
-  output: 'text' | 'label' | 'json' | 'jsonl';
+  output: 'text' | 'label' | 'json' | 'jsonl' | 'prometheus';
   filter?: string;
   status?: string;
   workflow?: string;
@@ -282,8 +282,8 @@ export function parseQueryFlags(args: string[]): QueryFlags {
     const arg = args[i];
     if (arg === '--output' && i + 1 < args.length) {
       const val = args[i + 1] as QueryFlags['output'];
-      if (!['text', 'label', 'json', 'jsonl'].includes(val)) {
-        throw new Error(`Invalid --output format: "${val}". Must be text|label|json|jsonl.`);
+      if (!['text', 'label', 'json', 'jsonl', 'prometheus'].includes(val)) {
+        throw new Error(`Invalid --output format: "${val}". Must be text|label|json|jsonl|prometheus.`);
       }
       flags.output = val;
       i += 2;

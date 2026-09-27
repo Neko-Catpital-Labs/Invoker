@@ -26,6 +26,7 @@ import type { CostAttributionAttempt, WorkerActionRecord } from '@invoker/data-s
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
+import { getChokeBoundaryMetrics, type ChokeBoundaryQueueName, type ChokeBoundarySnapshot } from './choke-boundary-metrics.js';
 
 import {
   type HeadlessDeps,
@@ -56,7 +57,7 @@ import {
  * per request, so concurrent delegated queries never cross output.
  */
 const queryOutputSink = new AsyncLocalStorage<(chunk: string) => void>();
-const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, alert-history, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks, capacity';
+const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, alert-history, cost, cost-events, costs, choke, ui-perf, stats, execution-leases, mutation-locks, capacity';
 const QUERY_SUBCOMMAND_USAGE = QUERY_SUBCOMMANDS.replaceAll(', ', '|');
 
 function writeOut(chunk: string): void {
@@ -70,10 +71,15 @@ function writeOut(chunk: string): void {
  * standalone and GUI owners can supply it without building a full
  * {@link HeadlessDeps}.
  */
-export type HeadlessQueryDeps = Pick<
-  HeadlessDeps,
-  'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig' | 'getUiPerfStats' | 'resetUiPerfStats'
->;
+export interface HeadlessQueryDeps {
+  orchestrator: HeadlessDeps['orchestrator'];
+  persistence: HeadlessDeps['persistence'];
+  executionAgentRegistry?: HeadlessDeps['executionAgentRegistry'];
+  invokerConfig: HeadlessDeps['invokerConfig'];
+  getUiPerfStats?: HeadlessDeps['getUiPerfStats'];
+  resetUiPerfStats?: HeadlessDeps['resetUiPerfStats'];
+  getChokeSnapshot?: () => ChokeBoundarySnapshot;
+}
 
 function hasStringProp(value: unknown, key: string): boolean {
   return Boolean(value && typeof value === 'object' && typeof (value as Record<string, unknown>)[key] === 'string');
@@ -114,6 +120,21 @@ export function listAlertHistoryRows(
   persistence: Pick<HeadlessQueryDeps['persistence'], 'listWorkerActions'>,
 ): WorkerActionRecord[] {
   return persistence.listWorkerActions().filter(isAlertWorkerAction);
+}
+
+function chokeSnapshotJsonlRows(snapshot: ChokeBoundarySnapshot): Record<string, unknown>[] {
+  return [
+    ...Object.entries(snapshot.queues).map(([queueName, queue]) => ({
+      kind: 'queue',
+      queueName: queueName as ChokeBoundaryQueueName,
+      ...queue,
+    })),
+    { kind: 'prometheus', prometheusText: snapshot.prometheusText },
+  ];
+}
+
+function writePrometheusText(text: string): void {
+  writeOut(text.endsWith('\n') ? text : `${text}\n`);
 }
 
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
@@ -431,6 +452,29 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         case 'json': writeOut(formatAsJson(alerts.map(serializeWorkerAction)) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(alerts.map(serializeWorkerAction)) + '\n'); break;
         default: writeOut(formatWorkerActions(alerts) + '\n'); break;
+      }
+      break;
+    }
+    case 'choke': {
+      if (flags.reset) {
+        throw new Error('query choke --reset is not supported');
+      }
+      const snapshot = deps.getChokeSnapshot?.() ?? getChokeBoundaryMetrics().getSnapshot();
+      switch (flags.output) {
+        case 'label':
+          writeOut(Object.keys(snapshot.queues).join('\n') + '\n');
+          break;
+        case 'json':
+          writeOut(formatAsJson(snapshot) + '\n');
+          break;
+        case 'jsonl':
+          writeOut(formatAsJsonl(chokeSnapshotJsonlRows(snapshot)) + '\n');
+          break;
+        case 'prometheus':
+        case 'text':
+        default:
+          writePrometheusText(snapshot.prometheusText);
+          break;
       }
       break;
     }
