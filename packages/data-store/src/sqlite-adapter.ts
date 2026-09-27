@@ -94,6 +94,10 @@ import { SlowQueryAggregator, type SlowQueryShapeStats } from './slow-query-aggr
 import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
+import {
+  preserveTaskSessionRecoveryForWorkflow,
+  resolveDefaultClaudeWorkerConfigDir,
+} from './session-recovery.js';
 import { SQLITE_MAX_VARIABLE_NUMBER, SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
 import { appendJournalEntry } from './sync-journal.js';
 
@@ -2139,6 +2143,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (!existingWorkflow) return;
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
+      preserveTaskSessionRecoveryForWorkflow(
+        this.executor,
+        workflowId,
+        resolveDefaultClaudeWorkerConfigDir(),
+      );
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
