@@ -273,6 +273,7 @@ export function createSpendCircuitBreakerWorker(options: SpendCircuitBreakerWork
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_SPEND_CIRCUIT_BREAKER_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? true,
+    listWorkKeys: () => [SPEND_CIRCUIT_BREAKER_WORKER_KIND],
     onTick: async (ctx) => {
       ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);
