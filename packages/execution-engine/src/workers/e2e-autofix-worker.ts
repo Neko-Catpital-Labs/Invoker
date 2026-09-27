@@ -300,15 +300,14 @@ function checkRedDefaultBranchAlert(
     alertState.lastAlertedUtcDate = readPersistedAlertDate(options, alertStatePath);
   }
   if (alertState.lastAlertedUtcDate === utcDate) return;
-  alertState.lastAlertedUtcDate = utcDate;
-  persistAlertDate(options, alertStatePath, utcDate);
+  if (options.messageBus === undefined) return;
 
   const redForDays = redForHours / 24;
   const lastGreenText = entry.lastGreenDefaultBranchRunAt
     ? `last green at ${entry.lastGreenDefaultBranchRunAt}`
     : 'no green run on record';
 
-  options.messageBus?.publish(Channels.SURFACE_EVENT, {
+  options.messageBus.publish(Channels.SURFACE_EVENT, {
     type: 'alert',
     alert: {
       severity: 'critical',
@@ -318,6 +317,8 @@ function checkRedDefaultBranchAlert(
       alertKey: `default-branch-red:${utcDate}`,
     },
   });
+  alertState.lastAlertedUtcDate = utcDate;
+  persistAlertDate(options, alertStatePath, utcDate);
 }
 
 function readPersistedAlertDate(options: E2eAutoFixTickOptions, path: string): string | undefined {

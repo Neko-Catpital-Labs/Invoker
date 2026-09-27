@@ -507,6 +507,32 @@ describe('e2e auto-fix worker', () => {
     expect(secondBus.publish).not.toHaveBeenCalled();
   });
 
+  it('red default branch alert: does not mark the day alerted when no message bus is available', async () => {
+    const repoRoot = makeRepoRoot();
+    const stateDir = makeCiWatchStateDir();
+    writeSweepLogLastLine(stateDir, { defaultBranchRedForHours: 72, lastGreenDefaultBranchRunAt: '2026-09-21T00:00:00.000Z' });
+
+    const tickWithoutBus = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+    await tickWithoutBus(makeCtx());
+
+    const bus = makeMessageBus();
+    const tickWithBus = createE2eAutoFixTick({
+      logger: makeLogger(),
+      repoRoot,
+      env: { INVOKER_CI_WATCH_STATE_DIR: stateDir },
+      messageBus: bus,
+      spawnProcess: makeSpawnHarness({ exitCode: 0 }).spawnProcess,
+    });
+    await tickWithBus(makeCtx());
+
+    expect(bus.publish).toHaveBeenCalledTimes(1);
+  });
+
   it('red default branch alert: warns and publishes nothing when the sweep log is unreadable', async () => {
     const repoRoot = makeRepoRoot();
     const stateDir = makeCiWatchStateDir();
