@@ -15,6 +15,7 @@ import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.j
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 import { isAdminBypassNamedWorkflow } from '../workflow-name-gates.js';
+import { uniqueWorkKeys } from './worker-key-utils.js';
 
 export const AUTO_APPROVE_WORKER_KIND = 'autoapprove';
 export const DEFAULT_AUTO_APPROVE_WORKER_INTERVAL_MS = 60_000;
@@ -445,7 +446,7 @@ export function createAutoApproveTick(options: AutoApproveWorkerPolicyOptions): 
       wakeupCandidates.length > 0 && ctx.reason === 'wake'
         ? wakeupCandidates
         : listAutoApproveScanCandidates(options),
-    );
+    ).filter((candidate) => ctx.workKey === undefined || candidate.taskId === ctx.workKey);
     const submittedThisTick = new Set<string>();
 
     for (const candidate of collectValidatedAutoApproveCandidates(options, candidates)) {
@@ -503,6 +504,17 @@ export function createAutoApproveWorker(options: AutoApproveWorkerOptions): Work
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
     onTick,
+    listWorkKeys: options.autoApprove && !options.onTick
+      ? ({ reason }) => {
+        if (options.autoApprove?.enabled !== true) return [];
+        const wakeupTaskIds = reason === 'wake' ? pendingWakeups.map((hint) => hint.taskId) : [];
+        return uniqueWorkKeys(
+          wakeupTaskIds.length > 0
+            ? wakeupTaskIds
+            : listAutoApproveScanCandidates({ store: options.autoApprove.store }).map((candidate) => candidate.taskId),
+        );
+      }
+      : () => [AUTO_APPROVE_WORKER_KIND],
   });
 
   if (!options.messageBus || !options.autoApprove || options.onTick) return runtime;

@@ -288,6 +288,7 @@ import {
   type TerminalSessionPersistenceHandle,
 } from './terminal-session-ipc.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
+import { getChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
 import { seedStressFixture, type StressFixtureOptions } from './stress-fixture.js';
 import {
@@ -2029,7 +2030,7 @@ function startHeadlessMode(): void {
                 activeMutationContext = undefined;
               }
             },
-            { logger },
+            { logger, chokeMetrics: getChokeBoundaryMetrics() },
           );
         }
 
@@ -2122,6 +2123,7 @@ function startHeadlessMode(): void {
             onActivity: noteStandaloneOwnerActivity,
             getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
             resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
+            getChokeSnapshot: () => getChokeBoundaryMetrics().getSnapshot(),
             getStreamSequence: () => 0,
             getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
               registry: createRegisteredWorkerRegistry(),
@@ -3257,6 +3259,7 @@ startMainProcessBootstrap({
         return mutationActions.translateGuiMutationToHeadless(payload);
       },
       guiMutationHandlers: ownerCapabilities,
+      chokeMetrics: getChokeBoundaryMetrics(),
     };
 
     const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
@@ -3303,6 +3306,7 @@ startMainProcessBootstrap({
             if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) return;
             mainWindow.webContents.send('invoker:workflow-mutation-failed', event);
           },
+          chokeMetrics: getChokeBoundaryMetrics(),
         },
       );
       launchDispatcher = new LaunchDispatcher({
@@ -3326,6 +3330,7 @@ startMainProcessBootstrap({
         ownerId: workflowMutationOwnerId,
         logger,
         topUpReadyLaunchesEnabled: () => !invokerConfig.disableAutoRunOnStartup,
+        chokeMetrics: getChokeBoundaryMetrics(),
       });
       const sweptLeases = persistence.releaseExpiredExecutionResourceLeases?.() ?? 0;
       if (sweptLeases > 0) {
@@ -3394,6 +3399,7 @@ startMainProcessBootstrap({
           ownerModeLabel: 'gui',
           getUiPerfStats: () => getUiPerfStats(),
           resetUiPerfStats: () => resetUiPerfStats(),
+          getChokeSnapshot: () => getChokeBoundaryMetrics().getSnapshot(),
           getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
             registry: createRegisteredWorkerRegistry(),
             persistence,
@@ -3684,6 +3690,7 @@ startMainProcessBootstrap({
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
       recordStartupDuration,
+      chokeMetrics: getChokeBoundaryMetrics(),
     });
     await registerGuiMutationIpcHandlers({
       ipcMain,

@@ -22,6 +22,14 @@ import {
 } from './reaper-reclaim.js';
 
 export const REAPER_WORKER_KIND = 'reaper';
+export const REAPER_WORK_KEYS = [
+  'reaper:orphans',
+  'reaper:checkouts',
+  'reaper:temp-dirs',
+  'reaper:snapshots-artifacts',
+  'reaper:worktrees',
+  'reaper:development-homes',
+] as const;
 
 export const DEFAULT_REAPER_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -75,7 +83,9 @@ export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime 
     logger: options.logger,
     intervalMs: options.intervalMs ?? resolveReaperIntervalMs(),
     tickOnStart: options.tickOnStart ?? true,
+    listWorkKeys: () => [...REAPER_WORK_KEYS],
     onTick: async (ctx) => {
+      if (ctx.workKey !== undefined && ctx.workKey !== REAPER_WORK_KEYS[0]) return;
       ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);
       ctx.signal?.throwIfAborted();

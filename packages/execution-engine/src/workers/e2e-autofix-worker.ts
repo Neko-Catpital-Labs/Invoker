@@ -109,6 +109,7 @@ export function createE2eAutoFixWorker(options: E2eAutoFixWorkerOptions): Worker
       messageBus: options.messageBus,
       spawnProcess: options.spawnProcess,
     }),
+    listWorkKeys: () => [E2E_AUTOFIX_WORKER_KIND],
   });
 }
 
