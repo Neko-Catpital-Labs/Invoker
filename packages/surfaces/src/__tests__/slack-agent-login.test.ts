@@ -8,6 +8,7 @@ import {
   parseAgentLoginAlertKey,
   readAgentLoginMetadata,
   redactTokenLike,
+  shouldPassAgentLoginHost,
   type AgentLoginTarget,
 } from '../slack/slack-agent-login.js';
 
@@ -320,5 +321,22 @@ describe('agent-login never posts a token', () => {
       expect(post).not.toMatch(/\bsk-[A-Za-z0-9_-]{12,}/);
     }
     expect(h.posts[1]).toContain('[redacted]');
+  });
+});
+
+describe('shouldPassAgentLoginHost', () => {
+  it('keeps Claude/owner-local hosts local and passes remote Codex hosts', async () => {
+    expect(shouldPassAgentLoginHost('DO1')).toBe(false);
+    expect(shouldPassAgentLoginHost('owner')).toBe(false);
+    expect(shouldPassAgentLoginHost('remote_digital_ocean_1')).toBe(true);
+
+    const h = makeHarness({
+      target: { host: 'remote_digital_ocean_1', agent: 'codex' },
+      results: [startResult({ provider: 'codex', status: 'awaiting_user', userCode: 'ABCD-EFGH' })],
+    });
+    await h.controller.handleReply({ channel: CHANNEL, threadTs: THREAD, userId: ADMIN, text: 'reauth' });
+    expect(h.execCalls[0]).toEqual([
+      'agent-login', 'start', 'codex', '--output', 'json', '--host', 'remote_digital_ocean_1',
+    ]);
   });
 });

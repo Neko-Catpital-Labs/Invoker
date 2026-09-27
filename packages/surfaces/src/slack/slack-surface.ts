@@ -52,14 +52,16 @@ import {
   buildAgentLoginAlertMetadata,
   readAgentLoginMetadata,
 } from './slack-agent-login.js';
-import type { AgentLoginTarget, SlackMessageMetadata } from './slack-agent-login.js';
+import type { AgentLoginAgent, AgentLoginTarget, SlackMessageMetadata } from './slack-agent-login.js';
+import { buildAgentAuthReauthPrompt } from './agent-auth-reauth-prompt.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, PlanningDraft, SlackPlanDraft, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 import { SlackPlanDraftRepository } from '@invoker/data-store';
-import { formatCodexPlannerStdout, materializeLocalAgentPrompt } from '@invoker/execution-engine';
-import type { HarnessSessionDriver } from '@invoker/execution-engine';
+import { classifyAgentAuthFailure, decideAgentAuthReauthRetry, formatCodexPlannerStdout, materializeLocalAgentPrompt } from '@invoker/execution-engine';
+import type { AgentAuthFailureKind, HarnessSessionDriver } from '@invoker/execution-engine';
+import { readAgentAccountEmail } from './agent-account-email.js';
 
 function truncateWords(text: string, maxWords: number): string {
   const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
@@ -415,6 +417,13 @@ export class SlackSurface implements Surface {
   private runHeadlessCommand?: (args: string[]) => Promise<unknown>;
   private agentLogin: AgentLoginThreadController;
   private agentLoginThreadTargets = new Map<string, AgentLoginTarget | null>();
+  private pendingAgentAuthReauth = new Map<string, {
+    kind: AgentAuthFailureKind;
+    agent: AgentLoginAgent;
+    failedEmail?: string;
+    channel: string;
+    threadTs?: string;
+  }>();
   private instanceId: string;
   private harnessSessionDriverFactory?: (preset: HarnessPreset) => HarnessSessionDriver | undefined;
   /** Guard key -> last lobby alert post timestamp, held in-process like watchdog cooldowns. */
@@ -512,6 +521,9 @@ export class SlackSurface implements Surface {
         await this.postMessage({ text: sanitizeSlackOutbound(text), blocks: [] }, channel, threadTs);
       },
       log: coreLog,
+      onInstalled: async ({ channel, threadTs, target }) => {
+        await this.handleAgentAuthReauthInstalled({ channel, threadTs, target });
+      },
     });
     this.planDrafts = new PlanDraftLifecycle({
       platformName: 'Slack',
@@ -690,6 +702,17 @@ export class SlackSurface implements Surface {
         const ts = await this.postMessage(message, channel);
         if (ts) {
           this.taskMessages.set(taskId, ts);
+        }
+      }
+      if (delta.type === 'updated' && delta.changes.status === 'failed') {
+        const errorText = delta.changes.execution?.error;
+        const agentHint = delta.changes.config?.executionAgent;
+        if (typeof errorText === 'string' && errorText.trim() !== '') {
+          await this.maybePostAgentAuthReauthPrompt({
+            channel,
+            errorText,
+            agentHint,
+          });
         }
       }
       return;
@@ -2644,14 +2667,102 @@ ${text}`;
       }
       this.sessionMetrics.errors++;
       try {
+        const errText = err instanceof Error ? err.message : String(err);
         await this.sayWithRateLimitRetry(say, {
-          text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+          text: `Error: ${errText}`,
           thread_ts: threadTs,
+        });
+        await this.maybePostAgentAuthReauthPrompt({
+          channel,
+          threadTs,
+          errorText: errText,
+          agentHint: this.resolveHarnessPreset(this.loadPlanningContext(threadTs)?.presetKey).tool,
         });
       } finally {
         await cleanupHeartbeats();
       }
     }
+  }
+
+  private async maybePostAgentAuthReauthPrompt(input: {
+    channel: string;
+    threadTs?: string;
+    errorText: string;
+    agentHint?: string;
+  }): Promise<void> {
+    const failure = classifyAgentAuthFailure(input.errorText, input.agentHint);
+    if (!failure) return;
+    const prompt = buildAgentAuthReauthPrompt({
+      host: 'DO1',
+      agent: failure.agent,
+      kind: failure.kind,
+    });
+    const ts = await this.postMessage(
+      { text: prompt.text, blocks: [] },
+      input.channel,
+      input.threadTs,
+      prompt.metadata,
+    );
+    if (!ts) return;
+    const replyThread = input.threadTs ?? ts;
+    this.agentLoginThreadTargets.set(ts, prompt.target);
+    this.agentLoginThreadTargets.set(replyThread, prompt.target);
+    this.pendingAgentAuthReauth.set(replyThread, {
+      kind: failure.kind,
+      agent: failure.agent,
+      failedEmail: prompt.email,
+      channel: input.channel,
+      threadTs: replyThread,
+    });
+  }
+
+  private async handleAgentAuthReauthInstalled(input: {
+    channel: string;
+    threadTs: string;
+    target: AgentLoginTarget;
+  }): Promise<void> {
+    const pending = this.pendingAgentAuthReauth.get(input.threadTs);
+    if (!pending || pending.agent !== input.target.agent) return;
+    this.pendingAgentAuthReauth.delete(input.threadTs);
+    const installedEmail = readAgentAccountEmail(input.target.agent);
+    const decision = decideAgentAuthReauthRetry({
+      kind: pending.kind,
+      failedEmail: pending.failedEmail,
+      installedEmail,
+    });
+    if (decision.action === 'skip' && decision.reason === 'same-email-usage-limit') {
+      await this.postMessage(
+        {
+          text: [
+            `Installed as \`${installedEmail ?? 'the same account'}\`.`,
+            'Quota is unchanged for that email — pick another account on the provider page next time, or wait for the usage limit to reset.',
+          ].join('\n'),
+          blocks: [],
+        },
+        input.channel,
+        input.threadTs,
+      );
+      return;
+    }
+    if (decision.action === 'skip') {
+      await this.postMessage(
+        {
+          text: 'Login installed. Could not confirm a different account email, so the failed turn was not auto-retried.',
+          blocks: [],
+        },
+        input.channel,
+        input.threadTs,
+      );
+      return;
+    }
+    await this.postMessage(
+      {
+        text: 'Login installed. Retry the failed planning turn or task once now that credentials changed.',
+        blocks: [],
+      },
+      input.channel,
+      input.threadTs,
+    );
   }
 
   private logResponsePosted(threadTs: string, sourceEventTs: string | undefined, replyTs: string | undefined, disposition: string): void {
