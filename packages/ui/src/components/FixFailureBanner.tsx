@@ -38,7 +38,7 @@ export function FixFailureBanner({
   onDismissRecordKey,
   onRetry,
 }: FixFailureBannerProps): ReactElement | null {
-  const recordKey = `${taskId}:${String(record.at)}`;
+  const recordKey = `${taskId}:${record.at instanceof Date ? record.at.toISOString() : record.at}`;
   if (dismissedRecordKeys.has(recordKey)) return null;
 
   const retryAgents = agents.filter((agent) => agent !== record.agent);
