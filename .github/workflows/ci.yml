@@ -1468,6 +1468,16 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install system libraries for Node
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_NO_APT_ERROR: docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
