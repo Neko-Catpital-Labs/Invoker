@@ -31,6 +31,7 @@ const expectedExecutionFields = [
   'fixedIntegrationSource',
   'agentSessionId',
   'lastAgentSessionId',
+  'lastFixFailure',
   'agentName',
   'lastAgentName',
   'workspacePath',
