@@ -899,6 +899,34 @@ describe('infra-repair worker', () => {
     expect(h.submit).not.toHaveBeenCalled();
   });
 
+  it('waits for the reset time saved on a failed fix before recreating the task', async () => {
+    const failedAt = new Date('2026-09-27T13:23:00.000Z');
+    const h = makeHarness([
+      makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree', command: 'pnpm test' },
+        execution: {
+          error: 'AssertionError: p95=865.2ms budget=200ms',
+          completedAt: failedAt,
+          lastFixFailure: {
+            agent: 'claude',
+            failureClass: 'agent-usage-limit',
+            message: "You've hit your weekly limit · resets Oct 1, 1am (UTC)",
+            resetsAt: new Date('2026-10-01T01:00:00.000Z'),
+            at: failedAt,
+          },
+        },
+      }),
+    ]);
+    h.setNow(Date.parse('2026-09-27T15:00:00.000Z'));
+    await h.tick(POLL_CTX);
+    expect(h.submit).not.toHaveBeenCalled();
+
+    h.setNow(Date.parse('2026-10-01T01:01:00.000Z'));
+    await h.tick({ ...POLL_CTX, tickNumber: 2 });
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
+  });
+
   it('leaves usage-limit tasks in admin-bypass workflows to the requeue worker', async () => {
     const h = makeHarness([
       makeTask({
