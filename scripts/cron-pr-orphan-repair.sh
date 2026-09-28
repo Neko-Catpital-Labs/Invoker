@@ -164,8 +164,10 @@ scan_repo() {
         printf 'Repair the existing pull request #%s ("%s") on %s.\n' "$num" "$title" "$repo"
         printf 'PR URL: %s\n' "$url"
         printf 'Head branch: %s (at %s), base branch: %s\n\n' "$head_ref" "$head_oid" "$base_ref"
-        printf 'This PR has no Invoker workflow; work directly on its branch:\n'
-        printf '  git fetch origin %s && git checkout %s\n\n' "$head_ref" "$head_ref"
+        printf 'Stay in this Invoker task checkout for every edit and commit. Do not run `git clone`, `git worktree add`, or commit from any other directory — safe-push only publishes commits made here.\n'
+        printf 'Fetch the PR tip in place (do not leave this directory):\n'
+        printf '  git fetch origin %s\n' "$head_ref"
+        printf 'If HEAD is not already origin/%s, update in place with `git reset --hard origin/%s` or `git checkout --detach origin/%s`. Never create a second worktree when the branch is checked out elsewhere.\n\n' "$head_ref" "$head_ref" "$head_ref"
         printf 'Blockers to clear, strictly in this order:\n'
         i=1
         for b in "${blockers[@]}"; do
