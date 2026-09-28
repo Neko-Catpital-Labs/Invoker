@@ -31,8 +31,8 @@ must_contain "Capture whatever partial signal actually IS visible" \
 must_contain "substitute an image that doesn't actually demonstrate the claim" \
   "visual-proof skill must forbid substituting an unrelated image for an uncapturable claim"
 
-# Match proof source to claim (ported from catstack personal visual-proof).
-# Fails if the section is quietly removed or weakened to allow proxy/mock captures.
+# Match proof source to claim — Invoker enforceable core (live surface,
+# Expected before capture, OR case-coverage). No personal-skill dependency.
 must_contain "Match the proof source to the claim" \
   "visual-proof skill must keep the match-proof-source section heading"
 must_contain "pixel capture from the actual rendered flow" \
@@ -45,8 +45,8 @@ must_contain "Slack/\`packages/surfaces\`" \
   "visual-proof skill must name Slack/packages/surfaces as a live capture surface"
 must_contain "Expected surface and Expected predicates" \
   "visual-proof skill must require declaring Expected surface/predicates before capture"
-must_contain "Mechanical enforcement of that declaration is Backlog" \
-  "visual-proof skill must mark Expected-surface mechanical gates as Backlog"
+must_contain "Capture only after that list exists" \
+  "visual-proof skill must require Expected declaration before capture"
 must_contain "multiple major cases" \
   "visual-proof skill must require Expected case-coverage for multi-case OR claims"
 must_contain "enumerate each case" \
