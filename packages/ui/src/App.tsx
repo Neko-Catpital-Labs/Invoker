@@ -5121,6 +5121,7 @@ export function App() {
                 />
               ) : (
                 <WorkflowInspector
+                  onFix={handleFix}
                   workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
                   task={selectedTask}
                   workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
