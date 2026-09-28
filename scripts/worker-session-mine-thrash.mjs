@@ -299,6 +299,36 @@ function extractCodexExecCommandFromArguments(args) {
   }
 }
 
+const GIT_C_FLAG_RE = /\bgit\s+-C\s+(\S+)/i;
+const WORKTREE_ADD_PATH_RE = /\bworktree\s+add\s+(?:--[a-z-]+\s+)*(\S+)/i;
+const GIT_COMMIT_RE = /\bgit(?:\s+-C\s+\S+)?\s+commit\b/i;
+
+function normalizeFsPath(p) {
+  if (typeof p !== 'string' || !p) return '';
+  return p.replace(/\/+$/, '') || '/';
+}
+
+function extractGitCommandPath(cmd) {
+  const cFlag = GIT_C_FLAG_RE.exec(cmd);
+  if (cFlag) return cFlag[1].replace(/^['"]|['"]$/g, '');
+  const worktree = WORKTREE_ADD_PATH_RE.exec(cmd);
+  if (worktree) return worktree[1].replace(/^['"]|['"]$/g, '');
+  return '';
+}
+
+export function classifySideCheckoutCommand(cmd, sessionCwd) {
+  if (typeof cmd !== 'string' || !cmd.trim()) return null;
+  const lower = cmd.toLowerCase();
+  if (/\bworktree\s+add\b/.test(lower)) return 'worktree_add';
+  if (GIT_COMMIT_RE.test(cmd)) {
+    const target = extractGitCommandPath(cmd);
+    if (target && sessionCwd && normalizeFsPath(target) !== normalizeFsPath(sessionCwd)) {
+      return 'commit_cwd_divergence';
+    }
+  }
+  return null;
+}
+
 export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   let assistantTurns = 0;
@@ -307,7 +337,16 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   let totalTokens = 0;
   let codexTotalTokens = 0;
   const bashCounts = new Map();
+  const observedCommands = [];
+  let sessionCwd = '';
   let workflowHint = '';
+
+  const noteCommand = (cmd) => {
+    const trimmed = String(cmd ?? '').trim();
+    if (!trimmed) return;
+    bashCounts.set(trimmed, (bashCounts.get(trimmed) ?? 0) + 1);
+    observedCommands.push(trimmed);
+  };
 
   for (const line of lines) {
     let row;
@@ -318,6 +357,11 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     }
     let countedByFormat = false;
 
+    if (row.type === 'session_meta') {
+      const cwd = row.payload?.cwd ?? row.cwd;
+      if (typeof cwd === 'string' && cwd && !sessionCwd) sessionCwd = cwd;
+    }
+
     // Legacy Codex stream
     if (row.type === 'turn.completed' || row.type === 'turn.failed') {
       assistantTurns += 1;
@@ -327,8 +371,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       countedByFormat = true;
     }
     if (row.type === 'item.completed' && row.item?.type === 'command_execution') {
-      const cmd = String(row.item?.command ?? row.item?.cmd ?? '').trim();
-      if (cmd) bashCounts.set(cmd, (bashCounts.get(cmd) ?? 0) + 1);
+      noteCommand(row.item?.command ?? row.item?.cmd);
       countedByFormat = true;
     }
 
@@ -350,7 +393,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       } else if (payload.type === 'function_call' && payload.name === 'exec_command') {
         codexCmd = extractCodexExecCommandFromArguments(payload.arguments);
       }
-      if (codexCmd) bashCounts.set(codexCmd, (bashCounts.get(codexCmd) ?? 0) + 1);
+      if (codexCmd) noteCommand(codexCmd);
       countedByFormat = true;
     }
     const msg = row.message ?? row;
@@ -366,8 +409,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       const content = Array.isArray(msg.content) ? msg.content : [];
       for (const block of content) {
         if (block?.type === 'tool_use' && (block.name === 'Bash' || block.name === 'bash')) {
-          const cmd = String(block.input?.command ?? block.input?.cmd ?? '').trim();
-          if (cmd) bashCounts.set(cmd, (bashCounts.get(cmd) ?? 0) + 1);
+          noteCommand(block.input?.command ?? block.input?.cmd);
         }
       }
     }
@@ -413,6 +455,17 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     reasons.push(`same_bash_argv=${maxSameBash}>=${thresholds.minSameBashArgv}`);
   }
 
+  let sideCheckoutKind = null;
+  for (const cmd of observedCommands) {
+    const kind = classifySideCheckoutCommand(cmd, sessionCwd);
+    if (kind === 'commit_cwd_divergence') {
+      sideCheckoutKind = kind;
+      break;
+    }
+    if (kind === 'worktree_add' && !sideCheckoutKind) sideCheckoutKind = kind;
+  }
+  if (sideCheckoutKind) reasons.push(`side_checkout=${sideCheckoutKind}`);
+
   const structuralSummary = summarizeSessionStructure(text);
   return {
     assistantTurns,
@@ -421,6 +474,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     maxSameBashCmd: maxSameBashCmd.slice(0, 200),
     workflowHint,
     totalTokens,
+    sessionCwd,
     thrash: reasons.length > 0,
     reasons,
     structuralSummary,
@@ -659,6 +713,28 @@ function selfTest() {
     throw new Error(`expected codex exploration semantic classification repeated-exploration, got ${JSON.stringify(codexExploration.semanticClassification)}`);
   }
 
+  const sideCheckout = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'codex-side-checkout-commit.jsonl'));
+  if (!sideCheckout.thrash) throw new Error('expected side-checkout fixture to fire thrash');
+  if (!sideCheckout.reasons.some((r) => r === 'side_checkout=commit_cwd_divergence' || r === 'side_checkout=worktree_add')) {
+    throw new Error(`expected side_checkout reason, got ${JSON.stringify(sideCheckout.reasons)}`);
+  }
+  if (!sideCheckout.reasons.includes('side_checkout=commit_cwd_divergence')) {
+    throw new Error(`expected commit_cwd_divergence to win when both worktree add and side commit present, got ${JSON.stringify(sideCheckout.reasons)}`);
+  }
+  const inCwdCommit = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'codex-in-cwd-commit.jsonl'));
+  if (inCwdCommit.reasons.some((r) => r.startsWith('side_checkout='))) {
+    throw new Error(`in-cwd commit must not flag side_checkout, got ${JSON.stringify(inCwdCommit.reasons)}`);
+  }
+  if (classifySideCheckoutCommand('git worktree add /tmp/pr1198-repair pr/skills-registry', '/task') !== 'worktree_add') {
+    throw new Error('expected worktree_add classification');
+  }
+  if (classifySideCheckoutCommand('git -C /tmp/pr1198-repair commit -m x', '/task') !== 'commit_cwd_divergence') {
+    throw new Error('expected commit_cwd_divergence classification');
+  }
+  if (classifySideCheckoutCommand('git commit -m x', '/task') !== null) {
+    throw new Error('plain commit in session cwd must not classify as side checkout');
+  }
+
   console.log(JSON.stringify({
     ok: true,
     positiveReasons: pos.reasons,
@@ -668,6 +744,8 @@ function selfTest() {
     codexJsReasons: codexJsPos.reasons,
     codexFnCallReasons: codexFnCallPos.reasons,
     codexNegativeThrash: codexNeg.thrash,
+    sideCheckoutReasons: sideCheckout.reasons,
+    inCwdSideCheckout: inCwdCommit.reasons.some((r) => r.startsWith('side_checkout=')),
     productiveStructuralSummary: productive.structuralSummary,
     explorationStructuralSummary: exploration.structuralSummary,
     codexProductiveStructuralSummary: codexProductive.structuralSummary,
