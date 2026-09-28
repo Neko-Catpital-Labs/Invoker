@@ -854,6 +854,7 @@ jobs:
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
               e2e/renderer-memory-pressure-recovery.spec.ts
+              e2e/fix-failure-banner.spec.ts
           - name: 6-of-9
             files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
