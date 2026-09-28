@@ -1367,11 +1367,15 @@ export async function autoFixOnFailure(
       savedErrorLength: persistedSavedError.length,
     });
     if (recoveryRoute.kind === 'resolveConflict') {
+      const settings = conflictSettings;
+      if (settings === undefined) {
+        throw new Error('Conflict resolution settings were not initialized for resolveConflict recovery');
+      }
       await taskExecutor.resolveConflict(
         taskId,
         persistedSavedError,
-        conflictSettings.agent,
-        conflictSettings.model,
+        settings.agent,
+        settings.model,
       );
     } else {
       const output = persistence.getTaskOutput(taskId);
