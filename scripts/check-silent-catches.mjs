@@ -49,6 +49,7 @@ function scriptKindFor(filePath) {
 
 function isSilentStatement(statement) {
   if (ts.isEmptyStatement(statement)) return true;
+  if (ts.isExpressionStatement(statement) && ts.isVoidExpression(statement.expression)) return true;
   if (ts.isBlock(statement)) return statement.statements.every(isSilentStatement);
   if (ts.isIfStatement(statement)) {
     return isSilentStatement(statement.thenStatement)
@@ -175,7 +176,7 @@ function runGate(args) {
   const violations = results.flatMap((result) => result.violations);
   const unchecked = results.flatMap((result) => result.unchecked);
   if (violations.length > 0) {
-    console.error(`[silent-catches] Found ${violations.length} newly-added empty catch block(s).`);
+    console.error(`[silent-catches] Found ${violations.length} newly-added silent catch block(s).`);
     console.error('[silent-catches] Handle, rethrow, or explicitly report every caught error.');
     for (const violation of violations) console.error(`[silent-catches] ${violation.path}:${violation.line} (${violation.source}) ${violation.text}`);
   }
@@ -185,7 +186,7 @@ function runGate(args) {
   }
   if (violations.length > 0) return 1;
   if (unchecked.length > 0) return 3;
-  console.log('[silent-catches] Parsed changed source files; no newly-added empty catch blocks found.');
+  console.log('[silent-catches] Parsed changed source files; no newly-added silent catch blocks found.');
   return 0;
 }
 
@@ -210,13 +211,23 @@ function selftest() {
     'sample.mjs': 'try { a(); } catch { }\ntry { b(); } catch (e) { if (Date.now() > 0) { } }\ntry {\n  c();\n} catch (e) {\n  // nothing\n}\ntry { d(); } catch (e) { report(e); }\n',
   });
   process.stdout.write(hits.output);
-  if (hits.status !== 1 || !hits.output.includes('Found 3 newly-added empty catch block(s)')) {
+  if (hits.status !== 1 || !hits.output.includes('Found 3 newly-added silent catch block(s)')) {
     failures.push(`expected three-case sample to report "Found 3" with exit 1, got exit ${hits.status}`);
   }
   const twoCase = runSelfSample({ 'two.mjs': 'try { a(); } catch { }\ntry { b(); } catch (e) { if (Date.now() > 0) { } }\n' });
   process.stdout.write(twoCase.output);
-  if (twoCase.status !== 1 || !twoCase.output.includes('Found 2 newly-added empty catch block(s)')) {
+  if (twoCase.status !== 1 || !twoCase.output.includes('Found 2 newly-added silent catch block(s)')) {
     failures.push(`expected two-case sample to report "Found 2" with exit 1, got exit ${twoCase.status}`);
+  }
+  const voidDiscard = runSelfSample({
+    'void.mjs': 'try { a(); } catch (e) { void e; }\ntry { b(); } catch (e) { console.error(e); }\n',
+  });
+  process.stdout.write(voidDiscard.output);
+  if (voidDiscard.status !== 1 || !voidDiscard.output.includes('Found 1 newly-added silent catch block(s)') || !voidDiscard.output.includes('void e')) {
+    failures.push(`expected void-discard sample to report the void catch with exit 1, got exit ${voidDiscard.status}`);
+  }
+  if (voidDiscard.output.includes('console.error')) {
+    failures.push('expected a catch that logs with console.error to stay unreported');
   }
   const broken = runSelfSample({ 'broken.mjs': 'try { a( } catch {\n' });
   process.stdout.write(broken.output);
