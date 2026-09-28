@@ -199,6 +199,9 @@ test('execute labels every verified PR bottom-to-top', () => {
     'api --silent --method POST repos/{owner}/{repo}/issues/2174/labels -f labels[]=admin-bypass',
     'api --silent --method POST repos/{owner}/{repo}/issues/2175/labels -f labels[]=admin-bypass',
   ]);
+  assert.match(res.stdout, /Labeled 2 PR\(s\) with admin-bypass/);
+  assert.match(res.stdout, /batch_size is 1/);
+  assert.doesNotMatch(res.stdout, /one stack unit/);
 });
 
 test('execute refuses a guarded diff without current-head human approval', () => {

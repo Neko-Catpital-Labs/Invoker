@@ -76,6 +76,8 @@ queue_rules:
       - check-success = UI Vitest
       - "#review-threads-unresolved = 0"
 
+  # batch_size stays 1 (#2354): a speculative multi-PR draft used to dequeue
+  # the whole admin-bypass stack when one check failed only in batch.
   - name: admin-bypass
     merge_method: squash
     batch_size: 1

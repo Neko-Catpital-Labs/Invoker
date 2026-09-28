@@ -18,6 +18,20 @@ branch name (an auto-generated workflow branch PR and the intended `stack/...`
 PR). You must land by **SHA-verified PR number**, and every PR must pass the guard
 before any write (label, thread-resolve, queue, merge).
 
+## How Mergify lands a stack (batch_size: 1)
+
+The admin-bypass queue in `.mergify.yml` has `batch_size: 1` and requires
+`base=master`. Only the current bottom PR can enter the queue. After it
+squash-merges, Mergify retargets the next PR onto master and that PR can queue.
+A repaired, fully labeled stack still lands **one PR per queue cycle** (~20 min
+each). Repairing the whole stack does not put every layer into one Mergify
+batch. That batching was dropped in #2354 after speculative-batch flakes
+dequeued entire stacks; nothing in the repo restores it.
+
+`--execute` labels every verified PR with `admin-bypass`. That clears the
+babysitter's upper-stack-acceptance gate and lets each next bottom auto-queue
+after retarget. It is not a single-batch merge of the stack.
+
 ## Steps
 
 1. **Resolve PR numbers, bottom of stack first.** If the user gives numbers or
@@ -55,22 +69,26 @@ before any write (label, thread-resolve, queue, merge).
    head; the bottom's base is the trunk), and all are OPEN. If any check FAILs,
    stop and resolve the mismatch with a fresh discovery pass — do not work around it.
 
-3. **Land bottom-up:**
+3. **Label the full verified stack once:**
 
    ```bash
    node scripts/land-stack.mjs <bottom-pr> ... --execute
    ```
 
-   This re-verifies, then adds `admin-bypass` to the bottom PR (base == trunk)
-   to enter the Mergify queue. Use `admin-bypass` only because self-authored PRs
-   cannot be self-approved; if a human can approve, prefer a real approval +
-   `ready-to-merge`.
+   Pass every open stack PR number, bottom-to-top. This re-verifies, then adds
+   `admin-bypass` to **every** PR in the stack. Only the bottom (base == trunk)
+   enters the Mergify queue immediately. Use `admin-bypass` only because
+   self-authored PRs cannot be self-approved; if a human can approve, prefer a
+   real approval + `ready-to-merge`.
 
-4. **Wait for the bottom PR to merge.** Mergify re-runs the full suite on the
-   queued batch (can take ~20 min). When it merges, the next PR auto-re-targets
-   the trunk.
+4. **Wait for each bottom PR to merge in turn.** Mergify re-runs the full suite
+   on that one queued PR (can take ~20 min). When it merges, the next PR
+   auto-re-targets the trunk. If it already has `admin-bypass`, it auto-queues;
+   otherwise the babysitter or a fresh land-stack pass can re-label/requeue.
 
-5. **Re-run step 3 with the remaining PR numbers** until the stack is landed.
+5. **Watch remaining open stack PRs until they merge.** Do not expect one
+   Mergify batch for the whole stack. Re-run the guard only if a later PR lost
+   its label, failed checks, or needs a new human decision.
 
 ## Do not
 
@@ -78,6 +96,7 @@ before any write (label, thread-resolve, queue, merge).
 - Do not resolve review threads to unblock a merge unless the user has decided
   to defer those findings; record the deferral on the PR.
 - Do not act on a PR whose head SHA is not in your local clone.
+- Do not tell the user that labeling the stack merges it as one Mergify batch.
 
 ## Prove state before reporting it
 
