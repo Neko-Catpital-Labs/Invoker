@@ -278,9 +278,9 @@ export function summarizeSessionStructure(text) {
   };
 }
 
-function extractCodexExecCommandFromJsInput(input) {
+function extractCodexExecStringFieldFromJsInput(input, field) {
   if (typeof input !== 'string') return '';
-  const match = /cmd\s*:\s*"((?:\\.|[^"\\])*)"/.exec(input);
+  const match = new RegExp(`["']?${field}["']?\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(input);
   if (!match) return '';
   try {
     return String(JSON.parse(`"${match[1]}"`)).trim();
@@ -289,30 +289,81 @@ function extractCodexExecCommandFromJsInput(input) {
   }
 }
 
-function extractCodexExecCommandFromArguments(args) {
-  if (typeof args !== 'string') return '';
+function extractCodexExecFromJsInput(input) {
+  return {
+    cmd: extractCodexExecStringFieldFromJsInput(input, 'cmd'),
+    workdir: extractCodexExecStringFieldFromJsInput(input, 'workdir'),
+  };
+}
+
+function extractCodexExecCommandFromJsInput(input) {
+  return extractCodexExecFromJsInput(input).cmd;
+}
+
+function extractCodexExecFromArguments(args) {
+  if (typeof args !== 'string') return { cmd: '', workdir: '' };
   try {
     const parsed = JSON.parse(args);
-    return String(parsed?.cmd ?? parsed?.command ?? '').trim();
+    return {
+      cmd: String(parsed?.cmd ?? parsed?.command ?? '').trim(),
+      workdir: String(parsed?.workdir ?? parsed?.cwd ?? '').trim(),
+    };
   } catch {
-    return '';
+    return { cmd: '', workdir: '' };
   }
 }
 
-const GIT_C_FLAG_RE = /\bgit\s+-C\s+(\S+)/i;
-const WORKTREE_ADD_PATH_RE = /\bworktree\s+add\s+(?:--[a-z-]+\s+)*(\S+)/i;
-const GIT_COMMIT_RE = /\bgit(?:\s+-C\s+\S+)?\s+commit\b/i;
+function extractCodexExecCommandFromArguments(args) {
+  return extractCodexExecFromArguments(args).cmd;
+}
+
+const SHELL_WORD = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)`;
+const GIT_C_FLAG_RE = new RegExp(String.raw`\bgit\s+-C\s+(${SHELL_WORD})`, 'i');
+const WORKTREE_ADD_PATH_RE = new RegExp(String.raw`\bworktree\s+add\s+(?:--[a-z-]+\s+)*(${SHELL_WORD})`, 'i');
+const GIT_COMMIT_RE = new RegExp(String.raw`\bgit(?:\s+-C\s+${SHELL_WORD})?\s+commit\b`, 'i');
+const LEADING_CD_RE = new RegExp(String.raw`^\s*cd\s+(${SHELL_WORD})(?:\s*(?:&&|;)\s*)`, 'i');
 
 function normalizeFsPath(p) {
   if (typeof p !== 'string' || !p) return '';
   return normalize(p).replace(/\/+$/, '') || '/';
 }
 
+function unquoteShellWord(word) {
+  if (typeof word !== 'string' || !word) return '';
+  if (word.length >= 2 && word.startsWith('"') && word.endsWith('"')) {
+    try {
+      return String(JSON.parse(word)).trim();
+    } catch {
+      return word.slice(1, -1);
+    }
+  }
+  if (word.length >= 2 && word.startsWith("'") && word.endsWith("'")) {
+    return word.slice(1, -1);
+  }
+  return word;
+}
+
 function extractGitCommandPath(cmd) {
   const cFlag = GIT_C_FLAG_RE.exec(cmd);
-  if (cFlag) return cFlag[1].replace(/^['"]|['"]$/g, '');
+  if (cFlag) return unquoteShellWord(cFlag[1]);
   const worktree = WORKTREE_ADD_PATH_RE.exec(cmd);
-  if (worktree) return worktree[1].replace(/^['"]|['"]$/g, '');
+  if (worktree) return unquoteShellWord(worktree[1]);
+  return '';
+}
+
+function extractLeadingCdPath(cmd) {
+  const cd = LEADING_CD_RE.exec(cmd);
+  if (!cd) return '';
+  const target = unquoteShellWord(cd[1]);
+  if (!target || target === '-') return '';
+  return target;
+}
+
+function effectiveGitCommandCwd(cmd, sessionCwd, commandWorkdir = '') {
+  const baseCwd = commandWorkdir || sessionCwd;
+  const cdTarget = extractLeadingCdPath(cmd);
+  if (cdTarget) return normalizeGitCommandPath(cdTarget, baseCwd);
+  if (baseCwd) return normalizeFsPath(baseCwd);
   return '';
 }
 
@@ -322,13 +373,15 @@ function normalizeGitCommandPath(target, sessionCwd) {
   return normalizeFsPath(resolve(sessionCwd, target));
 }
 
-export function classifySideCheckoutCommand(cmd, sessionCwd) {
+export function classifySideCheckoutCommand(cmd, sessionCwd, commandWorkdir = '') {
   if (typeof cmd !== 'string' || !cmd.trim()) return null;
   const lower = cmd.toLowerCase();
   if (/\bworktree\s+add\b/.test(lower)) return 'worktree_add';
   if (GIT_COMMIT_RE.test(cmd)) {
+    const commandCwd = effectiveGitCommandCwd(cmd, sessionCwd, commandWorkdir);
     const target = extractGitCommandPath(cmd);
-    if (target && sessionCwd && normalizeGitCommandPath(target, sessionCwd) !== normalizeFsPath(sessionCwd)) {
+    const commitCwd = target ? normalizeGitCommandPath(target, commandCwd) : commandCwd;
+    if (commitCwd && sessionCwd && commitCwd !== normalizeFsPath(sessionCwd)) {
       return 'commit_cwd_divergence';
     }
   }
@@ -347,11 +400,11 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   let sessionCwd = '';
   let workflowHint = '';
 
-  const noteCommand = (cmd) => {
+  const noteCommand = (cmd, workdir = '') => {
     const trimmed = String(cmd ?? '').trim();
     if (!trimmed) return;
     bashCounts.set(trimmed, (bashCounts.get(trimmed) ?? 0) + 1);
-    observedCommands.push(trimmed);
+    observedCommands.push({ cmd: trimmed, workdir: String(workdir ?? '').trim() });
   };
 
   for (const line of lines) {
@@ -377,7 +430,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       countedByFormat = true;
     }
     if (row.type === 'item.completed' && row.item?.type === 'command_execution') {
-      noteCommand(row.item?.command ?? row.item?.cmd);
+      noteCommand(row.item?.command ?? row.item?.cmd, row.item?.workdir ?? row.item?.cwd);
       countedByFormat = true;
     }
 
@@ -393,13 +446,13 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     }
     if (row.type === 'response_item') {
       const payload = row.payload ?? {};
-      let codexCmd = '';
+      let codexExec = { cmd: '', workdir: '' };
       if (payload.type === 'custom_tool_call' && payload.name === 'exec') {
-        codexCmd = extractCodexExecCommandFromJsInput(payload.input);
+        codexExec = extractCodexExecFromJsInput(payload.input);
       } else if (payload.type === 'function_call' && payload.name === 'exec_command') {
-        codexCmd = extractCodexExecCommandFromArguments(payload.arguments);
+        codexExec = extractCodexExecFromArguments(payload.arguments);
       }
-      if (codexCmd) noteCommand(codexCmd);
+      if (codexExec.cmd) noteCommand(codexExec.cmd, codexExec.workdir);
       countedByFormat = true;
     }
     const msg = row.message ?? row;
@@ -415,7 +468,7 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
       const content = Array.isArray(msg.content) ? msg.content : [];
       for (const block of content) {
         if (block?.type === 'tool_use' && (block.name === 'Bash' || block.name === 'bash')) {
-          noteCommand(block.input?.command ?? block.input?.cmd);
+          noteCommand(block.input?.command ?? block.input?.cmd, block.input?.workdir ?? block.input?.cwd);
         }
       }
     }
@@ -462,8 +515,8 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   }
 
   let sideCheckoutKind = null;
-  for (const cmd of observedCommands) {
-    const kind = classifySideCheckoutCommand(cmd, sessionCwd);
+  for (const { cmd, workdir } of observedCommands) {
+    const kind = classifySideCheckoutCommand(cmd, sessionCwd, workdir);
     if (kind === 'commit_cwd_divergence') {
       sideCheckoutKind = kind;
       break;
@@ -746,6 +799,31 @@ function selfTest() {
   if (classifySideCheckoutCommand('git commit -m x', '/task') !== null) {
     throw new Error('plain commit in session cwd must not classify as side checkout');
   }
+  if (classifySideCheckoutCommand('cd /tmp/pr1198-repair && git commit -m x', '/task') !== 'commit_cwd_divergence') {
+    throw new Error('leading cd before git commit must classify as side checkout');
+  }
+  if (classifySideCheckoutCommand('cd /task && git commit -m x', '/task') !== null) {
+    throw new Error('leading cd into session cwd before git commit must not classify as side checkout');
+  }
+  if (classifySideCheckoutCommand('git commit -m x', '/task', '/tmp/pr1198-repair') !== 'commit_cwd_divergence') {
+    throw new Error('exec workdir outside session cwd must classify plain git commit as side checkout');
+  }
+
+  const codexExecWorkdirSideCheckout = [
+    JSON.stringify({ type: 'session_meta', cwd: '/task' }),
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: JSON.stringify({ cmd: 'git commit -m x', workdir: '/tmp/pr1198-repair' }),
+      },
+    }),
+  ].join('\n');
+  const codexExecWorkdirSideCheckoutRes = analyzeClaudeJsonl(codexExecWorkdirSideCheckout);
+  if (!codexExecWorkdirSideCheckoutRes.reasons.includes('side_checkout=commit_cwd_divergence')) {
+    throw new Error(`expected Codex exec workdir side_checkout reason, got ${JSON.stringify(codexExecWorkdirSideCheckoutRes.reasons)}`);
+  }
 
   console.log(JSON.stringify({
     ok: true,
@@ -758,6 +836,7 @@ function selfTest() {
     codexNegativeThrash: codexNeg.thrash,
     sideCheckoutReasons: sideCheckout.reasons,
     inCwdSideCheckout: inCwdCommit.reasons.some((r) => r.startsWith('side_checkout=')),
+    codexExecWorkdirSideCheckoutReasons: codexExecWorkdirSideCheckoutRes.reasons,
     productiveStructuralSummary: productive.structuralSummary,
     explorationStructuralSummary: exploration.structuralSummary,
     codexProductiveStructuralSummary: codexProductive.structuralSummary,
