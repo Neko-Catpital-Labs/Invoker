@@ -1278,6 +1278,125 @@ describe('selectFailureRecoveryRoute', () => {
   });
 });
 
+describe('fix failure record wiring', () => {
+  function makeFixDeps(taskOverrides: Parameters<typeof makeTask>[0], fixWithAgent: ReturnType<typeof vi.fn>) {
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask(taskOverrides)),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      retryTask: vi.fn(() => started),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent,
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+    return {
+      orchestrator,
+      taskExecutor,
+      deps: {
+        orchestrator: orchestrator as unknown as Orchestrator,
+        persistence: persistence as unknown as SQLiteAdapter,
+        taskExecutor: taskExecutor as unknown as TaskRunner,
+        commandService: makeCommandService(),
+      },
+    };
+  }
+
+  const quotaError = () => Object.assign(
+    new Error("You've hit your weekly limit · resets Oct 1, 1am (UTC)"),
+    { failureClass: 'agent-usage-limit' },
+  );
+
+  it('manual fix records the agent and the thrown failure class', async () => {
+    const { orchestrator, deps } = makeFixDeps(
+      { status: 'failed', config: { workflowId: 'wf-1' }, execution: { error: 'boom', workspacePath: '/tmp/task-a' } },
+      vi.fn().mockRejectedValue(quotaError()),
+    );
+
+    await expect(fixWithAgentAction('task-a', deps, { agentName: 'claude' })).rejects.toThrow('weekly limit');
+
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', expect.objectContaining({
+      savedError: 'boom',
+      fixFailure: expect.objectContaining({ agent: 'claude', failureClass: 'agent-usage-limit' }),
+    }));
+  });
+
+  it('manual fix records the agent without a failure class for an ordinary error', async () => {
+    const { orchestrator, deps } = makeFixDeps(
+      { status: 'failed', config: { workflowId: 'wf-1' }, execution: { error: 'boom', workspacePath: '/tmp/task-a' } },
+      vi.fn().mockRejectedValue(new Error('agent crashed')),
+    );
+
+    await expect(fixWithAgentAction('task-a', deps, { agentName: 'codex' })).rejects.toThrow('agent crashed');
+
+    const fixFailure = orchestrator.revertFixSession.mock.calls[0]?.[1]?.fixFailure;
+    expect(fixFailure).toMatchObject({ agent: 'codex' });
+    expect(fixFailure).not.toHaveProperty('failureClass');
+  });
+
+  it('auto-fix records the selected agent and failure class when the fix hits a usage limit', async () => {
+    const { orchestrator, deps } = makeFixDeps(
+      { status: 'failed', execution: { error: 'boom', workspacePath: '/tmp/task-a' } },
+      vi.fn().mockRejectedValue(quotaError()),
+    );
+
+    await autoFixOnFailure('task-a', deps);
+
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', expect.objectContaining({
+      fixFailure: expect.objectContaining({ agent: 'codex', failureClass: 'agent-usage-limit' }),
+    }));
+  });
+
+  it('auto-fix does not start a fix with an agent whose saved usage-limit reset is still ahead', async () => {
+    const fixWithAgent = vi.fn().mockResolvedValue(undefined);
+    const { orchestrator, deps } = makeFixDeps({
+      status: 'failed',
+      execution: {
+        error: 'boom',
+        workspacePath: '/tmp/task-a',
+        lastFixFailure: {
+          agent: 'codex',
+          failureClass: 'agent-usage-limit',
+          message: "You've hit your weekly limit",
+          resetsAt: new Date(Date.now() + 60 * 60 * 1000),
+          at: new Date(),
+        },
+      },
+    }, fixWithAgent);
+
+    await autoFixOnFailure('task-a', deps);
+
+    expect(orchestrator.beginFixSession).not.toHaveBeenCalled();
+    expect(fixWithAgent).not.toHaveBeenCalled();
+  });
+
+  it('auto-fix still runs when the saved usage limit belongs to a different agent or has reset', async () => {
+    for (const lastFixFailure of [
+      { agent: 'claude', failureClass: 'agent-usage-limit' as const, message: 'limit', resetsAt: new Date(Date.now() + 60 * 60 * 1000), at: new Date() },
+      { agent: 'codex', failureClass: 'agent-usage-limit' as const, message: 'limit', resetsAt: new Date(Date.now() - 60 * 1000), at: new Date() },
+    ]) {
+      const fixWithAgent = vi.fn().mockResolvedValue(undefined);
+      const { deps } = makeFixDeps({ status: 'failed', execution: { error: 'boom', workspacePath: '/tmp/task-a', lastFixFailure } }, fixWithAgent);
+
+      await autoFixOnFailure('task-a', deps);
+
+      expect(fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    }
+  });
+});
+
 describe('fixWithAgentAction', () => {
   it('dispatches plain failures to taskExecutor.fixWithAgent', async () => {
     const orchestrator = {
@@ -1354,6 +1473,10 @@ describe('fixWithAgentAction', () => {
     expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', {
       savedError: 'boom',
       fixError: 'Cannot apply a fix because this task has no saved workspace. This task state is stale or corrupted. Recreate the task or recreate the workflow, then rerun it.',
+      fixFailure: {
+        agent: 'codex',
+        message: 'Cannot apply a fix because this task has no saved workspace. This task state is stale or corrupted. Recreate the task or recreate the workflow, then rerun it.',
+      },
     });
   });
 
@@ -1390,7 +1513,11 @@ describe('fixWithAgentAction', () => {
       'task-a',
       '\n[Fix with custom-agent] Failed: agent failed',
     );
-    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'boom', fixError: 'agent failed' });
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', {
+      savedError: 'boom',
+      fixError: 'agent failed',
+      fixFailure: { agent: 'custom-agent', message: 'agent failed' },
+    });
   });
 
   it('dispatches merge conflicts with a workspace to taskExecutor.resolveConflict', async () => {
@@ -1581,7 +1708,11 @@ describe('fixWithAgentAction', () => {
       'merge-a',
       expect.stringContaining('\n[Fix with Codex] Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
     );
-    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('merge-a', { savedError: 'Unable to resolve merge worktree ref "plan/old-base"', fixError: expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.') });
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('merge-a', {
+      savedError: 'Unable to resolve merge worktree ref "plan/old-base"',
+      fixError: expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+      fixFailure: expect.objectContaining({ message: expect.stringContaining('Cannot apply a fix because this merge gate') }),
+    });
     expect(orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
   });
 });
@@ -2673,6 +2804,7 @@ describe('fixWithAgentAction review-gate CI context', () => {
     expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', {
       savedError: 'ci failed',
       fixError: 'agent exploded',
+      fixFailure: expect.objectContaining({ message: 'agent exploded' }),
     });
   });
 });
