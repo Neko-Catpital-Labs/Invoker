@@ -11,7 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { normalizeWorkflowBaseBranch, parseTaskFreshnessSpec, planPublicationAuthorityViolation } from '@invoker/workflow-core';
+import { hasReservedTaskIdPrefix, isPathSafeId, normalizeWorkflowBaseBranch, parseTaskFreshnessSpec, planPublicationAuthorityViolation } from '@invoker/workflow-core';
 import { isInvokerRepoUrl, reviewClaimSlices } from '@invoker/execution-engine';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -404,6 +404,11 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
   if (!raw.name || typeof raw.name !== 'string') {
     throw new PlanParseError(`${ownerLabel} must have a "name" field`);
   }
+  if (!isPathSafeId(raw.name)) {
+    throw new PlanParseError(
+      `Plan name "${raw.name}" contains unsafe characters. Plan names must not contain "..", "/", "\\", or start with ".".`,
+    );
+  }
 
   if (!raw.tasks || !Array.isArray(raw.tasks) || raw.tasks.length === 0) {
     throw new PlanParseError(`${ownerLabel} must have a non-empty "tasks" array`);
@@ -509,6 +514,16 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
     }
+    if (!isPathSafeId(task.id)) {
+      throw new PlanParseError(
+        `Task id "${task.id}" contains unsafe characters. Task ids must not contain "..", "/", "\\", or start with ".".`,
+      );
+    }
+    if (hasReservedTaskIdPrefix(task.id)) {
+      throw new PlanParseError(
+        `Task id "${task.id}" uses a reserved prefix. Task ids must not start with "__merge__".`,
+      );
+    }
     assertNoDuplicateTaskIds(rawTasks.slice(0, index + 1) as { id: string }[]);
 
     if (!task.description || typeof task.description !== 'string') {
@@ -561,12 +576,21 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       );
     }
 
-    const experimentVariants = task.experimentVariants?.map((v) => ({
-      id: v.id ?? '',
-      description: v.description ?? '',
-      prompt: v.prompt,
-      command: v.command,
-    }));
+    const experimentVariants = task.experimentVariants?.map((v, variantIndex) => {
+      const variantId = v.id ?? '';
+      if (variantId && !isPathSafeId(variantId)) {
+        throw new PlanParseError(
+          `Task "${task.id}" experimentVariants[${variantIndex}] id "${variantId}" contains unsafe characters. ` +
+          'Variant ids must not contain "..", "/", "\\", control characters, or start with ".".',
+        );
+      }
+      return {
+        id: variantId,
+        description: v.description ?? '',
+        prompt: v.prompt,
+        command: v.command,
+      };
+    });
 
     if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
       throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);

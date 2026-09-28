@@ -1526,3 +1526,44 @@ ${taskFields}
     expect(parsePlan(planWithTask('    command: echo ok')).tasks[0].command).toBe('echo ok');
   });
 });
+
+describe('parsePlan path-safe id validation', () => {
+  const plan = ({ name = 'Safe Ids', taskId = 'step', variantId }: { name?: string; taskId?: string; variantId?: string }) => `
+name: "${name}"
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: "${taskId}"
+    description: Do the step
+    command: echo ok
+${variantId === undefined ? '' : `    experimentVariants:
+      - id: "${variantId}"
+        description: Variant
+        prompt: Try it
+`}`;
+
+  it('rejects a plan name that escapes a directory', () => {
+    expect(() => parsePlan(plan({ name: '../escape' }))).toThrow('Plan name "../escape" contains unsafe characters');
+  });
+
+  it('rejects a task id with a slash', () => {
+    expect(() => parsePlan(plan({ taskId: 'a/b' }))).toThrow('Task id "a/b" contains unsafe characters');
+  });
+
+  it('rejects a task id starting with a dot', () => {
+    expect(() => parsePlan(plan({ taskId: '.hidden' }))).toThrow(PlanParseError);
+  });
+
+  it('rejects a task id that uses the reserved merge prefix', () => {
+    expect(() => parsePlan(plan({ taskId: '__merge__step' }))).toThrow('Task id "__merge__step" uses a reserved prefix');
+  });
+
+  it('rejects an experiment variant id with a backslash', () => {
+    expect(() => parsePlan(plan({ variantId: 'v\\\\1' }))).toThrow(/experimentVariants\[0\] id .* contains unsafe characters/);
+  });
+
+  it('accepts ordinary plan names, task ids, and variant ids', () => {
+    const parsed = parsePlan(plan({ name: 'Hook fleet dispatcher: measure the herd', taskId: 'metrics-event-uid', variantId: 'v1' }));
+    expect(parsed.tasks[0].id).toBe('metrics-event-uid');
+    expect(parsed.tasks[0].experimentVariants?.[0].id).toBe('v1');
+  });
+});
