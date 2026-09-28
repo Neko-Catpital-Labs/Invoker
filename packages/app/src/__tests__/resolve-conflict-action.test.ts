@@ -156,7 +156,11 @@ describe('resolveConflictAction', () => {
       'task-a',
       expect.stringContaining('[Resolve Conflict] Failed:'),
     );
-    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'saved-err', fixError: 'claude failed' });
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', {
+      savedError: 'saved-err',
+      fixError: 'claude failed',
+      fixFailure: expect.objectContaining({ message: 'claude failed' }),
+    });
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
   });
 });
