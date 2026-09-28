@@ -71,6 +71,15 @@ function assertStepBefore(job, firstStepName, secondStepName, jobName) {
   assert(firstIndex < secondIndex, `${jobName} must run "${firstStepName}" before "${secondStepName}"`);
 }
 
+function assertInstallSkipsElectron(jobName, reason) {
+  const installDepsStep = jobs[jobName].steps.find((step) => step.name === 'Install dependencies');
+  assert(
+    installDepsStep?.env?.INVOKER_SKIP_ELECTRON_INSTALL === '1'
+      && installDepsStep?.env?.ELECTRON_SKIP_BINARY_DOWNLOAD === '1',
+    `${jobName} must skip installing Electron during pnpm install -- ${reason}`,
+  );
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -94,6 +103,11 @@ assert(dependencyCruiseEntry, 'quality-required matrix must include Dependency C
 assert(
   !('runner_label' in dependencyCruiseEntry),
   'Dependency Cruise must not pin to the disk-constrained self-hosted core runner',
+);
+assertInstallSkipsElectron(
+  'quality-required',
+  'its matrix runs static quality commands, and downloading the Electron binary is an unnecessary network dependency '
+    + 'that can fail before the selected check command starts',
 );
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
@@ -197,15 +211,10 @@ assertUsesSharedInstaller('required-fast-extra', 'Install system libraries for N
   CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }} but cannot be installed without sudo.',
   CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
 });
-const requiredFastExtraInstallDepsStep = jobs['required-fast-extra'].steps.find(
-  (step) => step.name === 'Install dependencies',
-);
-assert(
-  requiredFastExtraInstallDepsStep?.env?.INVOKER_SKIP_ELECTRON_INSTALL === '1'
-    && requiredFastExtraInstallDepsStep?.env?.ELECTRON_SKIP_BINARY_DOWNLOAD === '1',
-  'required-fast-extra must skip installing Electron during pnpm install -- none of its suites launch the app, '
-  + 'and downloading the Electron binary is an unnecessary network dependency that can fail independently of '
-  + 'the system packages required-fast-extra actually needs',
+assertInstallSkipsElectron(
+  'required-fast-extra',
+  'none of its suites launch the app, and downloading the Electron binary is an unnecessary network dependency '
+    + 'that can fail independently of the system packages required-fast-extra actually needs',
 );
 const requiredFastExtraEntries = jobs['required-fast-extra'].strategy?.matrix?.include ?? [];
 const branchCarryForwardEntry = requiredFastExtraEntries.find((entry) => entry.name === 'Branch Carry Forward');
