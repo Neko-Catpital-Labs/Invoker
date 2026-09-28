@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -305,7 +305,7 @@ const GIT_COMMIT_RE = /\bgit(?:\s+-C\s+\S+)?\s+commit\b/i;
 
 function normalizeFsPath(p) {
   if (typeof p !== 'string' || !p) return '';
-  return p.replace(/\/+$/, '') || '/';
+  return normalize(p).replace(/\/+$/, '') || '/';
 }
 
 function extractGitCommandPath(cmd) {
@@ -316,13 +316,19 @@ function extractGitCommandPath(cmd) {
   return '';
 }
 
+function normalizeGitCommandPath(target, sessionCwd) {
+  if (!target) return '';
+  if (isAbsolute(target) || !sessionCwd) return normalizeFsPath(target);
+  return normalizeFsPath(resolve(sessionCwd, target));
+}
+
 export function classifySideCheckoutCommand(cmd, sessionCwd) {
   if (typeof cmd !== 'string' || !cmd.trim()) return null;
   const lower = cmd.toLowerCase();
   if (/\bworktree\s+add\b/.test(lower)) return 'worktree_add';
   if (GIT_COMMIT_RE.test(cmd)) {
     const target = extractGitCommandPath(cmd);
-    if (target && sessionCwd && normalizeFsPath(target) !== normalizeFsPath(sessionCwd)) {
+    if (target && sessionCwd && normalizeGitCommandPath(target, sessionCwd) !== normalizeFsPath(sessionCwd)) {
       return 'commit_cwd_divergence';
     }
   }
@@ -730,6 +736,12 @@ function selfTest() {
   }
   if (classifySideCheckoutCommand('git -C /tmp/pr1198-repair commit -m x', '/task') !== 'commit_cwd_divergence') {
     throw new Error('expected commit_cwd_divergence classification');
+  }
+  if (classifySideCheckoutCommand('git -C . commit -m x', '/task') !== null) {
+    throw new Error('git -C . commit in session cwd must not classify as side checkout');
+  }
+  if (classifySideCheckoutCommand('git -C /task/. commit -m x', '/task') !== null) {
+    throw new Error('normalized absolute git -C target in session cwd must not classify as side checkout');
   }
   if (classifySideCheckoutCommand('git commit -m x', '/task') !== null) {
     throw new Error('plain commit in session cwd must not classify as side checkout');
