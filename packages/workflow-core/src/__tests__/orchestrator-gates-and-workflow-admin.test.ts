@@ -667,20 +667,49 @@ describe('Orchestrator', () => {
       expect(failedDeltas).toHaveLength(1);
     });
 
-    it('revertFixSession uses agent-agnostic fix failure prefix', () => {
+    it('revertFixSession records the fix failure apart from the task error', () => {
       const { savedError } = orchestrator.beginFixSession('t2');
       orchestrator.revertFixSession('t2', { savedError: savedError, fixError: 'startup failed' });
       const task = orchestrator.getTask('t2')!;
-      expect(task.execution.error).toContain('[Fix with Agent failed] startup failed');
+      expect(task.execution.error).toBe(savedError);
+      expect(task.execution.lastFixFailure).toMatchObject({ agent: 'unknown', message: 'startup failed' });
+      expect(task.execution.lastFixFailure?.at).toBeInstanceOf(Date);
     });
 
-    it('revertFixSession does not duplicate an existing fix failure wrapper', () => {
+    it('revertFixSession records the fix agent and failure class passed by the caller', () => {
+      const { savedError } = orchestrator.beginFixSession('t2');
+      orchestrator.revertFixSession('t2', {
+        savedError,
+        fixError: 'quota',
+        fixFailure: { agent: 'codex', failureClass: 'agent-usage-limit', message: "You've hit your weekly limit · resets Oct 1, 1am (UTC)" },
+      });
+      const record = orchestrator.getTask('t2')!.execution.lastFixFailure!;
+      expect(record.agent).toBe('codex');
+      expect(record.failureClass).toBe('agent-usage-limit');
+      expect(record.resetsAt?.getUTCMonth()).toBe(9);
+      expect(record.resetsAt?.getUTCDate()).toBe(1);
+      expect(record.resetsAt?.getUTCHours()).toBe(1);
+    });
+
+    it('two failed fix sessions leave the task error without any fix failure text', () => {
+      const multiLineFixError = "SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\nYou've hit your weekly limit";
+      const first = orchestrator.beginFixSession('t2');
+      orchestrator.revertFixSession('t2', { savedError: first.savedError, fixError: multiLineFixError });
+      const second = orchestrator.beginFixSession('t2');
+      orchestrator.revertFixSession('t2', { savedError: second.savedError, fixError: multiLineFixError });
+      const task = orchestrator.getTask('t2')!;
+      expect(task.execution.error).toBe(first.savedError);
+      expect(task.execution.error).not.toContain('Fix with Agent failed');
+      expect(task.execution.lastFixFailure?.message).toBe(multiLineFixError);
+    });
+
+    it('revertFixSession adds no wrapper to a legacy wrapped saved error and keeps its merge-conflict details', () => {
       const wrappedSavedError =
         '[Fix with Claude failed] first attempt failed\n\n' + mergeConflictError;
       orchestrator.revertFixSession('t2', { savedError: wrappedSavedError, fixError: 'second attempt failed' });
       const task = orchestrator.getTask('t2')!;
-      expect(task.execution.error).toContain('[Fix with Agent failed] second attempt failed');
-      expect(task.execution.error).not.toContain('first attempt failed');
+      expect(task.execution.lastFixFailure?.message).toBe('second attempt failed');
+      expect(task.execution.error).toBe(wrappedSavedError);
       expect(task.execution.mergeConflict).toEqual({
         failedBranch: 'experiment/upstream-branch-abc123',
         conflictFiles: ['src/App.tsx', 'src/utils.ts'],
@@ -827,7 +856,7 @@ describe('Orchestrator', () => {
       expect(persistence.loadAttempt(during.execution.selectedAttemptId!)?.status).toBe('failed');
     });
 
-    it('restores failed entries with the wrapped error and clears the session', () => {
+    it('restores failed entries with the task error and the fix failure record, and clears the session', () => {
       const { savedError } = orchestrator.beginFixSession('s2');
       expect(orchestrator.getTask('s2')!.execution.fixSessionEntryStatus).toBe('failed');
 
@@ -835,7 +864,8 @@ describe('Orchestrator', () => {
 
       const task = orchestrator.getTask('s2')!;
       expect(task.status).toBe('failed');
-      expect(task.execution.error).toContain('[Fix with Agent failed] startup failed');
+      expect(task.execution.error).toBe(savedError);
+      expect(task.execution.lastFixFailure?.message).toBe('startup failed');
       expect(task.execution.fixSessionEntryStatus).toBeUndefined();
     });
 
@@ -883,7 +913,8 @@ describe('Orchestrator', () => {
       orchestrator.revertFixSession('s2', { savedError: 'boom', fixError: 'legacy' });
       const task = orchestrator.getTask('s2')!;
       expect(task.status).toBe('failed');
-      expect(task.execution.error).toContain('[Fix with Agent failed] legacy');
+      expect(task.execution.error).toBe('boom');
+      expect(task.execution.lastFixFailure?.message).toBe('legacy');
     });
 
     it('approve of a parked fix clears the recorded entry', async () => {

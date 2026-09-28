@@ -483,6 +483,14 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt.toISOString() : task.execution.lastHeartbeatAt;
   if (task.execution.pendingFixError != null) execution.pendingFixError = task.execution.pendingFixError;
   if (task.execution.failureClass != null) execution.failureClass = task.execution.failureClass;
+  if (task.execution.lastFixFailure != null) {
+    const { resetsAt, at, ...rest } = task.execution.lastFixFailure;
+    execution.lastFixFailure = {
+      ...rest,
+      ...(resetsAt ? { resetsAt: resetsAt instanceof Date ? resetsAt.toISOString() : resetsAt } : {}),
+      at: at instanceof Date ? at.toISOString() : at,
+    };
+  }
   if (task.execution.mergeConflict != null) {
     execution.mergeConflict = {
       failedBranch: task.execution.mergeConflict.failedBranch,

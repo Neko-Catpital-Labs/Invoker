@@ -102,6 +102,39 @@ describe('auto-fix circuit breaker integration', () => {
     expect(isCircuitBreakerPaused(state, Date.now())).toBe(true);
   });
 
+  it('skips a command task whose last fix failed on an agent usage limit, reading the fix failure record', async () => {
+    const commandTask = makeFailedTask({
+      id: 'wf-1/test-latency',
+      execution: {
+        generation: 2, selectedAttemptId: 'a1', branch: 'x',
+        error: 'AssertionError: p95=865.2ms budget=200ms',
+        lastFixFailure: {
+          agent: 'claude',
+          failureClass: 'agent-usage-limit',
+          message: "You've hit your weekly limit · resets Oct 1, 1am (UTC)",
+          resetsAt: new Date('2026-10-01T01:00:00.000Z'),
+          at: new Date(),
+        },
+      },
+    });
+    const submitted: string[] = [];
+    const submitter = { submit: vi.fn((_wf, _prio, _channel, args: unknown[]) => { submitted.push(args[0] as string); return 1; }) };
+
+    const tick = createAutoFixRecoveryTick({
+      store: makeStore([commandTask]), submitter, logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 3,
+      circuitBreakerPath,
+      circuitBreakerPauseMs: 60 * 60 * 1000,
+    });
+
+    await tick({} as any);
+
+    expect(commandTask.execution.failureClass).toBeUndefined();
+    expect(submitted).not.toContain('wf-1/test-latency');
+    expect(loadCircuitBreakerState(circuitBreakerPath).reason).toBe('usage-limit');
+  });
+
   it('an unrelated failed task dispatches normally once the pause window has elapsed', async () => {
     tripCircuitBreaker(circuitBreakerPath, {
       now: new Date(Date.now() - 2 * 60 * 60 * 1000),
