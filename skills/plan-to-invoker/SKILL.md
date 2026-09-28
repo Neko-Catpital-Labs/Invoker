@@ -67,7 +67,7 @@ Use this mode when invoked by the installed command or MCP prompt.
 
 ### Local vs remote Invoker
 
-Default owner is local (`invoker-cli mcp`). If the current turn names a host, IP, or SSH alias, follow [references/local-vs-remote-mcp.md](references/local-vs-remote-mcp.md) before prepare/submit: probe SSH, rewrite harness MCP only on success, never clobber local on failure. “Local” / “this machine” restores local MCP. Do not invent HTTP/SSE MCP.
+Before the first human-triggered prepare/submit, ask where it runs unless this turn already names the owner. Follow [references/local-vs-remote-mcp.md](references/local-vs-remote-mcp.md): one question, local plus each configured remote target, then probe SSH and rewrite harness MCP only after a remote answer. Never clobber local on a failed probe. “Local” / “this machine”, and a self-triggered `auto_submit` with no named host, stay on local `invoker-cli mcp`. Do not invent HTTP/SSE MCP.
 
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
