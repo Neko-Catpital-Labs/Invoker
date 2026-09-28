@@ -63,6 +63,8 @@ export function FixFailureBanner({
             key={agent}
             type="button"
             data-testid={`fix-failure-retry-${agent}`}
+            data-sidebar-nav-item
+            data-sidebar-nav-order="17"
             className="rounded border border-amber-400/50 px-2 py-1 text-xs text-amber-100 hover:bg-amber-900/60"
             onClick={() => onRetry(agent)}
           >
@@ -72,6 +74,8 @@ export function FixFailureBanner({
         <button
           type="button"
           data-testid="fix-failure-dismiss"
+          data-sidebar-nav-item
+          data-sidebar-nav-order="18"
           className="rounded px-2 py-1 text-xs text-amber-200/80 hover:text-amber-100"
           onClick={() => onDismissRecordKey(recordKey)}
         >

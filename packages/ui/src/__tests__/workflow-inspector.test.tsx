@@ -1294,9 +1294,19 @@ describe('WorkflowInspector fix failure banner', () => {
   it('offers retry with every other registered agent and calls onFix with the chosen one', () => {
     const onFix = renderWithRecord({ agent: 'claude', failureClass: 'agent-usage-limit', message: 'limit', at: '2026-09-27T13:23:00.000Z' });
 
+    const codexRetry = screen.getByTestId('fix-failure-retry-codex');
+    const geminiRetry = screen.getByTestId('fix-failure-retry-gemini');
+    const dismiss = screen.getByTestId('fix-failure-dismiss');
+
     expect(screen.queryByTestId('fix-failure-retry-claude')).toBeNull();
-    expect(screen.getByTestId('fix-failure-retry-gemini')).toHaveTextContent('Retry fix with gemini');
-    fireEvent.click(screen.getByTestId('fix-failure-retry-codex'));
+    expect(geminiRetry).toHaveTextContent('Retry fix with gemini');
+    expect(codexRetry).toHaveAttribute('data-sidebar-nav-item');
+    expect(codexRetry).toHaveAttribute('data-sidebar-nav-order', '17');
+    expect(geminiRetry).toHaveAttribute('data-sidebar-nav-item');
+    expect(geminiRetry).toHaveAttribute('data-sidebar-nav-order', '17');
+    expect(dismiss).toHaveAttribute('data-sidebar-nav-item');
+    expect(dismiss).toHaveAttribute('data-sidebar-nav-order', '18');
+    fireEvent.click(codexRetry);
 
     expect(onFix).toHaveBeenCalledWith('task-1', 'codex');
   });
