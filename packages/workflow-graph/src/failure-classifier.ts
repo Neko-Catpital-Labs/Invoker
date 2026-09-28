@@ -36,6 +36,8 @@ const agentQuotaRefusalPattern = new RegExp([
   'hit your session limit',
 ].join('|'), 'i');
 
+const RESET_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
 export class FailureClassifier {
   static classifyAgentQuotaRefusal(agentOutput: string | undefined): AgentFailureClass | undefined {
     if (typeof agentOutput !== 'string') return undefined;
@@ -159,15 +161,27 @@ export class FailureClassifier {
   }
 
   static agentUsageResetAtMs(agentOutput: string | undefined, failedAtMs: number): number | undefined {
-    const match = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(UTC\)/i.exec(agentOutput ?? '');
+    const match = /resets\s+(?:([a-z]{3})\s+(\d{1,2}),\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(UTC\)/i.exec(agentOutput ?? '');
     if (!match) return undefined;
-    const clockHour = Number(match[1]);
-    const minute = Number(match[2] ?? '0');
+    const clockHour = Number(match[3]);
+    const minute = Number(match[4] ?? '0');
     if (clockHour < 1 || clockHour > 12 || minute > 59) return undefined;
-    const hour = (clockHour % 12) + (match[3].toLowerCase() === 'pm' ? 12 : 0);
+    const hour = (clockHour % 12) + (match[5].toLowerCase() === 'pm' ? 12 : 0);
     const failedAt = new Date(failedAtMs);
-    const resetMs = Date.UTC(failedAt.getUTCFullYear(), failedAt.getUTCMonth(), failedAt.getUTCDate(), hour, minute);
-    return resetMs > failedAtMs ? resetMs : resetMs + 24 * 60 * 60 * 1000;
+    if (match[1] === undefined) {
+      const resetMs = Date.UTC(failedAt.getUTCFullYear(), failedAt.getUTCMonth(), failedAt.getUTCDate(), hour, minute);
+      return resetMs > failedAtMs ? resetMs : resetMs + 24 * 60 * 60 * 1000;
+    }
+    const month = RESET_MONTHS.indexOf(match[1].toLowerCase());
+    const day = Number(match[2]);
+    if (month === -1) return undefined;
+    const datedResetMs = (year: number): number | undefined => {
+      const resetMs = Date.UTC(year, month, day, hour, minute);
+      return new Date(resetMs).getUTCDate() === day ? resetMs : undefined;
+    };
+    const thisYear = datedResetMs(failedAt.getUTCFullYear());
+    if (thisYear === undefined) return undefined;
+    return thisYear > failedAtMs ? thisYear : datedResetMs(failedAt.getUTCFullYear() + 1);
   }
 
   static isUsageLimit(failureClass: FailureClass | undefined): boolean {
