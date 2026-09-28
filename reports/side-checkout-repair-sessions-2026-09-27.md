@@ -2,7 +2,7 @@
 
 ## Dominant mechanism
 
-**Repair agents leave the Invoker task checkout by creating a second git worktree when `git checkout <pr-branch>` fails** (branch already checked out elsewhere, or the task worktree directory was deleted mid-run). They then commit in `/home/invoker/pr…-repair…` or `/tmp/pr…-repair` and report “did not push.” `pr_worker_safe_push` only sees the original task checkout, so the PR head never moves.
+**Repair agents leave the Invoker task checkout by creating a second git worktree when `git checkout <pr-branch>` fails** (branch already checked out elsewhere, or the task worktree directory was deleted mid-run). They then commit in `/home/invoker/pr…-repair…` or `/tmp/pr…-repair` and report “did not push.” Non-foreign Invoker repairs invoke `pr_worker_safe_push` with `--cwd .`; foreign repairs use an inline guarded `git push`. Attribute each missed publication to the path used by that session.
 
 A second, related Vitest pattern: fix-ci sessions intentionally add detached repro worktrees under `/tmp/invoker-…` and edit there without committing back into the task checkout.
 
@@ -21,6 +21,8 @@ Non-Vitest repairs that day: `other` 20, `committed-in-cwd-claimed-no-push` 9, `
 
 ## Catstack #1198 (head `bc9ad0c319`, three attempts)
 
+Publication path: Catstack is a foreign repair plan, so the terminal publisher was the inline guarded `git push`, not `pr_worker_safe_push`.
+
 ### `01a0e0f4-53b6-…` — side-worktree-then-commit
 
 - **Task cwd:** `…/experiment-wf-1790480470895-153-repair-…`
@@ -37,16 +39,18 @@ Non-Vitest repairs that day: `other` 20, `committed-in-cwd-claimed-no-push` 9, `
 
 ### `01a0e1ac-a513-…` — committed-in-cwd-claimed-no-push
 
-- Switched onto `pr/skills-registry` inside the task worktree and committed there; still ended with “did not push” (prompt-mandated). That attempt is the intended local-commit path for safe-push, not a side-checkout.
+- Switched onto `pr/skills-registry` inside the task worktree and committed there; still ended with “did not push” (prompt-mandated). That attempt is the intended local-commit path for the foreign inline guarded `git push`, not a side-checkout.
 
 ## Vitest Workspace (fix-ci)
+
+Publication path: these Vitest fix-ci sessions were non-foreign Invoker repairs, so the terminal publisher was `pr_worker_safe_push --cwd .`.
 
 Agents follow a “detached repro worktree” habit, e.g.:
 
 - `git worktree add --detach /tmp/invoker-repro-c3942a5-vitest c3942a5b…`
 - Final messages: “Implemented the narrow fix in … `/tmp/invoker-fix-ci-…`” with **no commit in the task cwd**.
 
-So the Vitest repeats are the same publication miss (edits not on the branch safe-push reads), driven by repro-worktree practice rather than a locked PR branch.
+So the Vitest repeats are the same publication miss (edits not committed in the task checkout that the terminal publisher reads), driven by repro-worktree practice rather than a locked PR branch.
 
 ## Prompt link
 
