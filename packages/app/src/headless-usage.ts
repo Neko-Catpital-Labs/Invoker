@@ -23,6 +23,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query worker-decisions [--workflow <id>] [--decision act|skip] [--reason <substr>]
                                                       Show what each worker decided: submitted vs skipped, and why
   query ui-perf [--output F] [--reset]               Print live UI perf stats
+  query choke [--output text|json|jsonl]             Print live choke metrics (Prometheus text by default)
   query stats [--output F]                           Aggregate stats across all workflows
   query execution-leases [--output F]               List live SSH/host execution resource leases
 
