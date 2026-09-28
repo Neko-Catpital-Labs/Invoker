@@ -1377,7 +1377,13 @@ type UsageLimitCandidate = InfraRepairScanCandidate & { readonly task: TaskState
 
 function isUsageLimitTask(task: TaskState): boolean {
   return FailureClassifier.isUsageLimit(task.execution.failureClass)
+    || FailureClassifier.isUsageLimit(task.execution.lastFixFailure?.failureClass)
     || FailureClassifier.classifyAgentQuotaRefusal(task.execution.error) === 'agent-usage-limit';
+}
+
+function usageWindowReopensAtMsForTask(task: TaskState, failedAtMs: number): number {
+  const recordedResetMs = task.execution.lastFixFailure?.resetsAt?.getTime();
+  return recordedResetMs ?? usageWindowReopensAtMs(task.execution.error, failedAtMs);
 }
 
 export function usageWindowReopensAtMs(error: string | undefined, failedAtMs: number): number {
@@ -1424,7 +1430,7 @@ async function handleUsageLimitRecovery(
     });
     return;
   }
-  const reopensAtMs = usageWindowReopensAtMs(candidate.task.execution.error, failedAtMs);
+  const reopensAtMs = usageWindowReopensAtMsForTask(candidate.task, failedAtMs);
   const nowMs = options.now?.() ?? Date.now();
   if (nowMs < reopensAtMs) return;
   await submitFollowUpMutation(
