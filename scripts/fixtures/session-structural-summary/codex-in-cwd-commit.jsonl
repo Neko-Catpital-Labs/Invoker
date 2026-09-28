@@ -1,0 +1,4 @@
+{"type":"session_meta","payload":{"cwd":"/home/invoker/.invoker/worktrees/w/experiment-wf-1-2-repair-g0.t0.a-x"}}
+{"type":"item.completed","item":{"type":"command_execution","command":"git fetch origin stack/example","status":"completed","exit_code":0}}
+{"type":"item.completed","item":{"type":"command_execution","command":"git commit -m \"fix check\"","status":"completed","exit_code":0}}
+{"type":"item.completed","item":{"type":"agent_message","text":"Committed locally. I did not push."}}
