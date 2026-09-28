@@ -238,29 +238,49 @@ describe('choke boundary wiring', () => {
     })?.count ?? 0)).toBeGreaterThan(before);
   });
 
-  it('does not let metric registry failures fail the operation', () => {
-    const metrics = new ChokeBoundaryMetrics({ registry: new ThrowingMetricRegistry() });
+  it('logs metric registry failures without failing the operation', () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const metrics = new ChokeBoundaryMetrics({ registry: new ThrowingMetricRegistry() });
 
-    expect(() => metrics.recordRequest('ipc', 'success', { channel: 'x' })).not.toThrow();
-    expect(() => metrics.recordQueueAccepted('mutation', 'intent:1')).not.toThrow();
-    expect(() => metrics.recordEventLoopLag('launch.topup', 3)).not.toThrow();
-    expect(() => metrics.recordSqliteTransaction({ outcome: 'committed', durationMs: 1 })).not.toThrow();
+      expect(() => metrics.recordRequest('ipc', 'success', { channel: 'x' })).not.toThrow();
+      expect(() => metrics.recordQueueAccepted('mutation', 'intent:1')).not.toThrow();
+      expect(() => metrics.recordEventLoopLag('launch.topup', 3)).not.toThrow();
+      expect(() => metrics.recordSqliteTransaction({ outcome: 'committed', durationMs: 1 })).not.toThrow();
+      expect(errorLog).toHaveBeenCalledWith('choke boundary metric counter failed', expect.any(Error));
+      expect(errorLog).toHaveBeenCalledWith('choke boundary metric histogram failed', expect.any(Error));
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
-  it('does not let metric error callbacks fail the operation', () => {
+  it('logs metric error callback failures without failing the operation', () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     const onMetricError = vi.fn(() => {
       throw new Error('callback failed');
     });
-    const metrics = new ChokeBoundaryMetrics({
-      registry: new ThrowingMetricRegistry(),
-      onMetricError,
-    });
+    try {
+      const metrics = new ChokeBoundaryMetrics({
+        registry: new ThrowingMetricRegistry(),
+        onMetricError,
+      });
 
-    expect(() => metrics.registry.incrementCounter('test_counter_total', {}, 1, 'test counter')).not.toThrow();
-    expect(() => metrics.registry.setGauge('test_gauge', {}, 1, 'test gauge')).not.toThrow();
-    expect(() => metrics.registry.observeHistogram('test_histogram_seconds', {}, 1, 'test histogram')).not.toThrow();
-    expect(onMetricError).toHaveBeenCalledWith('counter', expect.any(Error));
-    expect(onMetricError).toHaveBeenCalledWith('gauge', expect.any(Error));
-    expect(onMetricError).toHaveBeenCalledWith('histogram', expect.any(Error));
+      expect(() => metrics.registry.incrementCounter('test_counter_total', {}, 1, 'test counter')).not.toThrow();
+      expect(() => metrics.registry.setGauge('test_gauge', {}, 1, 'test gauge')).not.toThrow();
+      expect(() => metrics.registry.observeHistogram('test_histogram_seconds', {}, 1, 'test histogram')).not.toThrow();
+      expect(onMetricError).toHaveBeenCalledWith('counter', expect.any(Error));
+      expect(onMetricError).toHaveBeenCalledWith('gauge', expect.any(Error));
+      expect(onMetricError).toHaveBeenCalledWith('histogram', expect.any(Error));
+      for (const operation of ['counter', 'gauge', 'histogram']) {
+        expect(errorLog).toHaveBeenCalledWith(`choke boundary metric ${operation} failed`, expect.any(Error));
+        expect(errorLog).toHaveBeenCalledWith(
+          `choke boundary metric error callback failed for ${operation}`,
+          expect.any(Error),
+          expect.objectContaining({ message: 'callback failed' }),
+        );
+      }
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 });
