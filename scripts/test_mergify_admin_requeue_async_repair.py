@@ -399,6 +399,50 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("git push --force-with-lease=refs/heads/'stack/2647':", plan.yaml_text)
         self.assertIn(HEAD, plan.yaml_text)
 
+    def test_foreign_safe_push_exits_21_when_local_head_equals_start_sha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote = root / "remote.git"
+            repo = root / "repo"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", str(remote), str(repo)], check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "worker@example.invalid"],
+                cwd=repo, check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Worker Test"],
+                cwd=repo, check=True, capture_output=True,
+            )
+            subprocess.run(["git", "checkout", "-B", "main"], cwd=repo, check=True, capture_output=True)
+            (repo / "file.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+            start = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "push", "origin", "HEAD:refs/heads/main"],
+                cwd=repo, check=True, capture_output=True,
+            )
+            command = async_repair._foreign_safe_push_command(
+                head_ref="main", start_head=start, skip_guard="",
+            )
+            result = subprocess.run(
+                ["bash", "-c", command],
+                cwd=repo,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 21, result.stderr)
+            self.assertIn("head-unchanged", result.stderr)
+            remote_head = subprocess.run(
+                ["git", "ls-remote", "origin", "refs/heads/main"],
+                cwd=repo, check=True, capture_output=True, text=True,
+            ).stdout.split()[0]
+            self.assertEqual(remote_head, start)
+
     def test_foreign_rebase_and_bot_thread_plans_omit_invoker_safe_push(self):
         rebase_plan = async_repair.build_rebase_onto_master_plan(
             pr(), "GitHub reports merge conflict", repo="some-org/catstack",
