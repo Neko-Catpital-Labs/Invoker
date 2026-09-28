@@ -65,6 +65,22 @@ def _indent_block(text: str, spaces: int) -> str:
     return "\n".join(prefix + line if line else prefix.rstrip() for line in lines)
 
 
+def _stay_in_task_checkout_instructions(head_ref: str, *, fetch_extra: str | None = None) -> str:
+    # Safe-push only reads this task checkout; never steer agents into a side worktree.
+    fetch_refs = head_ref if not fetch_extra else f"{head_ref} {fetch_extra}"
+    return (
+        "Stay in this Invoker task checkout for every edit and commit. "
+        "Do not run `git clone`, `git worktree add`, or commit from any other "
+        "directory — safe-push only publishes commits made here.\n"
+        "Fetch the PR tip in place (do not leave this directory):\n"
+        f"  git fetch origin {fetch_refs}\n"
+        f"If HEAD is not already origin/{head_ref}, update in place with "
+        f"`git reset --hard origin/{head_ref}` or "
+        f"`git checkout --detach origin/{head_ref}`. "
+        "Never create a second worktree when the branch is checked out elsewhere.\n"
+    )
+
+
 def _repo_url(repo: str) -> str:
     return f"https://github.com/{repo}.git"
 
@@ -313,8 +329,7 @@ def build_repair_check_plan(
         f"Repair the existing pull request #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
         f"PR URL: {pr.url}\n"
         f"Head branch: {pr.head_ref_name} (at {start_head}), base branch: {pr.base_ref_name}\n\n"
-        "Work directly on its branch:\n"
-        f"  git fetch origin {pr.head_ref_name} && git checkout {pr.head_ref_name}\n\n"
+        f"{_stay_in_task_checkout_instructions(pr.head_ref_name)}\n"
         f"Failed check: {check_name}\n"
         f"Details URL: {details_url}\n"
         f"Job log (tail):\n{_job_log_excerpt(log_path)}\n"
@@ -394,8 +409,7 @@ def build_repair_scope_split_plan(
         f"The original pull request stays on branch {pr.head_ref_name} (at {start_head}), "
         f"base {pr.base_ref_name}, and keeps only the files for review unit {declared}. "
         "Commit that reduction locally. Do not push.\n\n"
-        "Work directly on its branch:\n"
-        f"  git fetch origin {pr.head_ref_name} && git checkout {pr.head_ref_name}\n\n"
+        f"{_stay_in_task_checkout_instructions(pr.head_ref_name)}\n"
         f"Publish each other review unit ({', '.join(others)}) as its own stacked PR based on the previous slice. "
         "Each new PR body declares that one review unit, passes "
         "`node scripts/validate-pr-body-local.mjs`, and is labeled admin-bypass.\n\n"
@@ -461,6 +475,7 @@ def build_aggregated_repair_check_plan(
             "This PR's CI check is failing. Diagnose why it is failing, then fix it. Add or "
             "update a repro if the failure is reproducible.\n\n"
             "Work from the checkout and committed history left by the preceding repair task. "
+            "Stay in this Invoker task checkout; do not run `git clone` or `git worktree add`. "
             "If a code change fixes this check, commit it locally and do not push. If local proof "
             "shows the check is already green on the current history, make no commit and exit 0.\n\n"
             f"Repair PR #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
@@ -513,13 +528,13 @@ def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, 
     onto_ref = onto or pr.base_ref_name or "master"
     return (
         f"Rebase this pull request onto `{onto_ref}`.\n\n"
-        f"Checkout the PR head branch, rebase it onto origin/{onto_ref} while preserving the PR's intended "
+        f"In this Invoker task checkout, rebase onto origin/{onto_ref} while preserving the PR's intended "
         "changes, resolve any conflicts if they appear, then commit locally. Do not push.\n\n"
         "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
         f"Head SHA: {start_head}\nRebase onto: {onto_ref}\nReason: {reason}\n"
-        f"Work directly on its branch:\n"
-        f"  git fetch origin {pr.head_ref_name} {onto_ref} && git checkout {pr.head_ref_name}\n"
+        f"{_stay_in_task_checkout_instructions(pr.head_ref_name, fetch_extra=onto_ref)}"
+        f"Then rebase in place:\n"
         f"  git rebase origin/{onto_ref}\n"
     )
 
