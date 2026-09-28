@@ -14,7 +14,7 @@
  * exactly so merge/experiment behavior and the TASK_DELTA contract stay stable.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges, TaskStatus, Attempt } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskStatus, Attempt, FailureClass, FixFailureRecord } from '@invoker/workflow-graph';
 import { FailureClassifier } from '@invoker/workflow-graph';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Logger } from '@invoker/contracts';
@@ -31,10 +31,30 @@ import type {
 } from '../orchestrator.js';
 import { buildTaskUpdateDelta, publishTaskDelta } from './events.js';
 
-const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
+export interface FixFailureInput {
+  readonly agent: string;
+  readonly failureClass?: FailureClass;
+  readonly message: string;
+}
 
-function stripFixFailureWrapper(errorText: string): string {
-  return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
+export function buildFixFailureRecord(
+  fixFailure: FixFailureInput | undefined,
+  fixError: string | undefined,
+  at: Date,
+): FixFailureRecord | undefined {
+  const message = fixFailure?.message ?? fixError;
+  if (message === undefined) return undefined;
+  const failureClass = fixFailure?.failureClass ?? FailureClassifier.classifyAgentQuotaRefusal(message);
+  const resetsAtMs = FailureClassifier.isUsageLimit(failureClass)
+    ? FailureClassifier.agentUsageResetAtMs(message, at.getTime())
+    : undefined;
+  return {
+    agent: fixFailure?.agent ?? 'unknown',
+    ...(failureClass ? { failureClass } : {}),
+    message,
+    ...(resetsAtMs !== undefined ? { resetsAt: new Date(resetsAtMs) } : {}),
+    at,
+  };
 }
 
 // ── Host Interface ──────────────────────────────────────────
@@ -253,6 +273,7 @@ export function revertFixSessionImpl(
   opts: {
     savedError: string;
     fixError?: string;
+    fixFailure?: FixFailureInput;
     expectedLineage?: TaskLineageExpectation;
   },
 ): void {
@@ -281,14 +302,13 @@ export function revertFixSessionImpl(
   }
 
   if (entryStatus === 'failed') {
-    restoreFailedEntry(host, task, opts.savedError, opts.fixError);
+    restoreFailedEntry(host, task, opts.savedError, buildFixFailureRecord(opts.fixFailure, opts.fixError, new Date()));
     return;
   }
 
   const completedAt = new Date();
-  const attemptError = opts.fixError
-    ? `[Fix with Agent failed] ${opts.fixError}`
-    : opts.savedError;
+  const lastFixFailure = buildFixFailureRecord(opts.fixFailure, opts.fixError, completedAt);
+  const attemptError = lastFixFailure?.message ?? opts.savedError;
   const changes: TaskStateChanges = {
     status: entryStatus,
     execution: {
@@ -297,6 +317,7 @@ export function revertFixSessionImpl(
       pendingFixError: undefined,
       fixSessionEntryStatus: undefined,
       completedAt,
+      ...(lastFixFailure ? { lastFixFailure } : {}),
     },
   };
   const updated = host.writeAndSync(taskId, changes);
@@ -356,33 +377,27 @@ function restoreFailedEntry(
   host: MergeHost,
   task: TaskState,
   savedError: string,
-  fixError?: string,
+  lastFixFailure: FixFailureRecord | undefined,
 ): void {
   const id = task.id;
-  const normalizedSavedError = stripFixFailureWrapper(savedError);
-  const mergeConflict = parseMergeConflictError(normalizedSavedError);
-
-  const displayError = fixError
-    ? `[Fix with Agent failed] ${fixError}\n\n${normalizedSavedError}`
-    : savedError;
-  const fixFailureClass = fixError ? FailureClassifier.classifyAgentQuotaRefusal(fixError) : undefined;
-  const completedAt = new Date();
+  const mergeConflict = parseMergeConflictError(savedError);
+  const completedAt = lastFixFailure?.at ?? new Date();
   const changes: TaskStateChanges = {
     status: 'failed',
     execution: {
-      error: displayError,
+      error: savedError,
       mergeConflict,
       isFixingWithAI: false,
       pendingFixError: undefined,
       fixSessionEntryStatus: undefined,
       completedAt,
-      ...(fixFailureClass ? { failureClass: fixFailureClass } : {}),
+      ...(lastFixFailure ? { lastFixFailure } : {}),
     },
   };
   const revertUpdated = host.writeAndSync(id, changes);
   host.updateSelectedAttempt(id, {
     status: 'failed',
-    error: displayError,
+    error: savedError,
     mergeConflict,
     completedAt,
   });
