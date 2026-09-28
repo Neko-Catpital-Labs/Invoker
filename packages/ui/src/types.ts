@@ -142,6 +142,7 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
+  readonly lastFixFailure?: FixFailureRecord;
   readonly fixSessionEntryStatus?: TaskStatus;
   readonly isFixingWithAI?: boolean;
   readonly reviewUrl?: string;
@@ -243,6 +244,14 @@ export interface WorkflowStatusCounts {
   closed: number;
   running: number;
   pending: number;
+}
+
+export interface FixFailureRecord {
+  readonly agent: string;
+  readonly failureClass?: FailureClass;
+  readonly message: string;
+  readonly resetsAt?: string | Date;
+  readonly at: string | Date;
 }
 
 export interface WorkflowRollupTaskIssue {
