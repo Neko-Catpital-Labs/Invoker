@@ -201,14 +201,14 @@ const GENERIC_DELEGATABLE_READ_COMMANDS = new Set([
 
 /**
  * Read-only query commands the owner can answer over the generic `cli-query`
- * channel. `queue`, `ui-perf`, and `action-graph` are excluded here — they have
+ * channel. `queue`, `ui-perf`, `choke`, and `action-graph` are excluded here — they have
  * bespoke owner-required handling in {@link delegateReadOnlyQuery}.
  */
 function isGenericDelegatableReadCommand(args: string[]): boolean {
   const command = args[0];
   if (command === 'query') {
     const sub = args[1];
-    return sub !== undefined && sub !== 'workers' && sub !== 'queue' && sub !== 'ui-perf' && sub !== 'action-graph';
+    return sub !== undefined && sub !== 'workers' && sub !== 'queue' && sub !== 'ui-perf' && sub !== 'choke' && sub !== 'action-graph';
   }
   if (command === 'worker') {
     return (args[1] ?? 'list') === 'status';
@@ -333,9 +333,23 @@ function shouldBootstrapStandaloneReadQuery(
 ): boolean {
   if (!standaloneMode || internalOwnerServe) return false;
   const isSpecialRead =
-    (args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'action-graph'))
+    (args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'choke' || args[1] === 'action-graph'))
     || args[0] === 'queue';
   return isSpecialRead;
+}
+
+function renderChokeQueryResponse(response: Record<string, unknown>, args: string[]): void {
+  const outputIndex = args.indexOf('--output');
+  const output = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+  if (output === 'json') {
+    process.stdout.write(`${JSON.stringify(response)}\n`);
+    return;
+  }
+  if (output === 'jsonl') {
+    process.stdout.write(`${JSON.stringify(response)}\n`);
+    return;
+  }
+  process.stdout.write(String(response.prometheusText ?? ''));
 }
 
 async function delegateReadOnlyQuery(
@@ -344,13 +358,14 @@ async function delegateReadOnlyQuery(
   refreshMessageBus?: () => Promise<MessageBus>,
 ): Promise<boolean> {
   const isUiPerf = args[0] === 'query' && args[1] === 'ui-perf';
+  const isChoke = args[0] === 'query' && args[1] === 'choke';
   const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
   const isActionGraph = args[0] === 'query' && args[1] === 'action-graph';
-  if (!isUiPerf && !isQueue && !isActionGraph) {
+  if (!isUiPerf && !isChoke && !isQueue && !isActionGraph) {
     return delegateGenericReadQuery(args, bus, refreshMessageBus, process.env.INVOKER_HEADLESS_STANDALONE === '1');
   }
-  if (isUiPerf && args.includes('--reset')) {
-    throw new Error('query ui-perf --reset is not a read-only query');
+  if ((isUiPerf || isChoke) && args.includes('--reset')) {
+    throw new Error(`query ${isChoke ? 'choke' : 'ui-perf'} --reset is not a read-only query`);
   }
 
   // Use the resolver to wait for any reachable owner
@@ -364,14 +379,14 @@ async function delegateReadOnlyQuery(
   let messageBus = bus;
   if (ownerResult.resolved) {
     messageBus = ownerResult.bus;
-  } else if (
-    (!isQueue && !isActionGraph) ||
-    !hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))
-  ) {
-    if (isQueue || isActionGraph) return false;
-    throw new Error(isUiPerf
-      ? 'query ui-perf requires a running shared owner process'
-      : 'query queue requires a running shared owner process');
+  } else {
+    const liveWritableOwner = hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'));
+    if (isChoke && liveWritableOwner) {
+    } else if (!liveWritableOwner || (!isQueue && !isActionGraph)) {
+      if (isQueue || isActionGraph) return false;
+      if (isChoke && process.env.INVOKER_HEADLESS_STANDALONE === '1') return false;
+      throw new Error(`query ${isChoke ? 'choke' : 'ui-perf'} requires a running shared owner process`);
+    }
   }
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   let response: Record<string, unknown> | null = null;
@@ -379,6 +394,8 @@ async function delegateReadOnlyQuery(
     if (isUiPerf) {
       const reset = args.includes('--reset');
       response = await tryDelegateQueryUiPerf(messageBus, reset, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
+    } else if (isChoke) {
+      response = await tryDelegateQuery(messageBus, { kind: 'choke' }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
     } else if (isActionGraph) {
       response = await tryDelegateQuery(messageBus, { kind: 'action-graph' }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
     } else {
@@ -394,7 +411,13 @@ async function delegateReadOnlyQuery(
     if (isActionGraph) return false;
     throw new Error(isUiPerf
       ? 'Live owner is present but did not serve ui-perf query'
-      : 'Live owner is present but did not serve queue query');
+      : isChoke
+        ? 'Live owner is present but did not serve choke query'
+        : 'Live owner is present but did not serve queue query');
+  }
+  if (isChoke) {
+    renderChokeQueryResponse(response, args);
+    return true;
   }
   if (isActionGraph) {
     const outputIndex = args.indexOf('--output');
