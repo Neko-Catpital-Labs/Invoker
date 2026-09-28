@@ -40,6 +40,10 @@ describe('execution.lastFixFailure persistence', () => {
     return adapter.loadTasks('wf-1').find((task) => task.id === taskId)?.execution.lastFixFailure;
   }
 
+  function replaceStoredRecord(json: string): void {
+    (adapter as any).db.run('UPDATE tasks SET last_fix_failure_json = ? WHERE id = ?', [json, 't1']);
+  }
+
   beforeEach(async () => {
     adapter = await SQLiteAdapter.create(':memory:');
     adapter.saveWorkflow(workflow);
@@ -94,5 +98,28 @@ describe('execution.lastFixFailure persistence', () => {
     expect(execution.lastFixFailure).toBeUndefined();
     expect(execution.error).toBe('plain failure');
     expect(execution.pendingFixError).toBe('awaiting approval');
+  });
+
+  it('rejects a persisted JSON null record while loading', () => {
+    adapter.saveTask('wf-1', makeTask('t1', { lastFixFailure: fullRecord }));
+    replaceStoredRecord('null');
+
+    expect(() => adapter.loadTasks('wf-1')).toThrow('Invalid last_fix_failure_json: value must be an object');
+  });
+
+  it('rejects persisted non-object fix failure records while loading', () => {
+    adapter.saveTask('wf-1', makeTask('t1', { lastFixFailure: fullRecord }));
+
+    for (const json of ['[]', '"codex"', '42']) {
+      replaceStoredRecord(json);
+      expect(() => adapter.loadTasks('wf-1')).toThrow('Invalid last_fix_failure_json: value must be an object');
+    }
+  });
+
+  it('rejects persisted records missing required fields while loading', () => {
+    adapter.saveTask('wf-1', makeTask('t1', { lastFixFailure: fullRecord }));
+    replaceStoredRecord(JSON.stringify({ agent: 'codex', at: '2026-09-27T13:30:00.000Z' }));
+
+    expect(() => adapter.loadTasks('wf-1')).toThrow('Invalid last_fix_failure_json: message must be a string');
   });
 });
