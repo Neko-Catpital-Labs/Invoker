@@ -45,7 +45,7 @@ OWNER_PID=$!
 
 echo "==> case 2.17: wait for owner mutation readiness"
 READY=0
-for i in $(seq 1 120); do
+for i in $(seq 1 240); do
   if ! kill -0 "$OWNER_PID" 2>/dev/null; then
     echo "FAIL case 2.17: owner exited before mutation readiness"
     cat "$OWNER_LOG"

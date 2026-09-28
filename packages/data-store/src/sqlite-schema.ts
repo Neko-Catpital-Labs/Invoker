@@ -111,6 +111,26 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_task_crash_preservation_preserved_at
         ON task_crash_preservation(preserved_at);
 
+      CREATE TABLE IF NOT EXISTS task_session_recovery (
+        workflow_id TEXT NOT NULL,
+        agent_session_id TEXT NOT NULL,
+        task_id TEXT,
+        config_dir TEXT,
+        workspace_path TEXT,
+        pool_id TEXT,
+        transcript_path TEXT,
+        crash_preserved_at TEXT,
+        crash_report_path TEXT,
+        crash_diagnostic_summary TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (workflow_id, agent_session_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_session_recovery_session
+        ON task_session_recovery(agent_session_id);
+      CREATE INDEX IF NOT EXISTS idx_task_session_recovery_task
+        ON task_session_recovery(task_id);
+
       CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id TEXT NOT NULL,
@@ -638,6 +658,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
   'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
   'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
+  'ALTER TABLE tasks ADD COLUMN last_fix_failure_json TEXT',
   // fix_session_entry_status: resting status recorded while a fix session is open
   'ALTER TABLE tasks ADD COLUMN fix_session_entry_status TEXT',
   // failure_class: structured recovery routing class (e.g. 'liveness_stall').
@@ -821,6 +842,23 @@ export const POST_MIGRATION_STATEMENTS = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_filings_kind_subject_sha ON repair_filings(kind, subject, state_sha)',
+  `CREATE TABLE IF NOT EXISTS task_session_recovery (
+    workflow_id TEXT NOT NULL,
+    agent_session_id TEXT NOT NULL,
+    task_id TEXT,
+    config_dir TEXT,
+    workspace_path TEXT,
+    pool_id TEXT,
+    transcript_path TEXT,
+    crash_preserved_at TEXT,
+    crash_report_path TEXT,
+    crash_diagnostic_summary TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (workflow_id, agent_session_id)
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_task_session_recovery_session ON task_session_recovery(agent_session_id)',
+  'CREATE INDEX IF NOT EXISTS idx_task_session_recovery_task ON task_session_recovery(task_id)',
   'CREATE INDEX IF NOT EXISTS idx_conversations_surface_thread ON conversations(surface, thread_ts)',
   'CREATE INDEX IF NOT EXISTS idx_slack_launch_contexts_surface_thread ON slack_launch_contexts(surface, thread_ts)',
   'CREATE INDEX IF NOT EXISTS idx_slack_plan_drafts_surface_thread ON slack_plan_drafts(surface, thread_ts)',

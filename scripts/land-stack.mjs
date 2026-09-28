@@ -14,8 +14,12 @@
  *   - every PR is OPEN.
  *
  * Only after ALL checks pass does `--execute` add the `admin-bypass` label to
- * every PR in the verified stack, bottom-to-top. That lets Mergify land the
- * whole stack as one unit of work instead of one PR per manual re-run.
+ * every PR in the verified stack, bottom-to-top. The admin-bypass queue is
+ * `batch_size: 1` and requires `base=master`, so only the current bottom enters
+ * the queue immediately; each upper PR auto-queues after Mergify retargets it
+ * onto master. Labeling the whole stack up front clears the babysitter's
+ * upper-stack-acceptance gate and avoids a second land-stack pass per layer —
+ * it does not merge the stack in one Mergify batch (see #2354).
  *
  * Background: a raw workflow branch PR (#505) once shared a branch name with the
  * intended stack (#2174/#2175). Landing "the PR on this branch" queued the wrong
@@ -23,7 +27,7 @@
  *
  * Usage:
  *   node scripts/land-stack.mjs <pr> [<pr> ...]              # verify confirmed numbers (safe default)
- *   node scripts/land-stack.mjs <pr> [<pr> ...] --execute    # re-verify, then queue the whole stack
+ *   node scripts/land-stack.mjs <pr> [<pr> ...] --execute    # re-verify, then label the stack with admin-bypass
  *   node scripts/land-stack.mjs <pr> ... --base main         # trunk branch (default: master)
  *   node scripts/land-stack.mjs <pr> ... --stack-prefix s/   # required head-branch prefix
  *   node scripts/land-stack.mjs --help
@@ -263,14 +267,16 @@ function parseArgs(argv) {
 const HELP = `land-stack — verify and land a Mergify PR stack by confirmed PR number
 
   node scripts/land-stack.mjs <pr> [<pr> ...]              verify confirmed numbers (safe default)
-  node scripts/land-stack.mjs <pr> [<pr> ...] --execute    re-verify, then queue the whole stack
+  node scripts/land-stack.mjs <pr> [<pr> ...] --execute    re-verify, then label the stack with admin-bypass
   node scripts/land-stack.mjs <pr> ... --base <branch>     trunk branch (default: master)
   node scripts/land-stack.mjs <pr> ... --stack-prefix <p>  required head-branch prefix (default: stack/)
 
 Pass confirmed PR numbers bottom-of-stack first. If numbers are missing, broadly
 list open PRs, filter to stack heads, order by base/head links, ask the user to
 confirm the suggested numbers, then run this guard. Verification must pass before
-anything is queued. --execute adds the admin-bypass label to every verified PR.`;
+any label write. --execute adds admin-bypass to every verified PR. Only the
+current bottom (base=master) enters the queue now; each upper PR queues after
+retarget. admin-bypass batch_size is 1, so the stack lands one PR per cycle.`;
 
 function printReport(result) {
   const byPr = new Map();
@@ -346,7 +352,10 @@ function main() {
   console.log('\nRESULT: verification passed.');
 
   if (!args.execute) {
-    console.log('Re-run with --execute to queue the whole verified stack via admin-bypass.');
+    console.log(
+      'Re-run with --execute to label the verified stack with admin-bypass '
+      + '(bottom queues now; each upper PR queues after retarget; batch_size is 1).',
+    );
     return;
   }
 
@@ -395,7 +404,11 @@ function main() {
     console.log(`  PR #${pr.number} (head ${short(pr.headRefOid)}, base ${pr.baseRefName})`);
     addAdminBypassLabel(pr.number);
   }
-  console.log(`Queued ${targets.length} PR(s) as one stack unit.`);
+  console.log(
+    `Labeled ${targets.length} PR(s) with admin-bypass. `
+    + 'Only the current bottom (base=master) enters the queue now; '
+    + 'each upper PR queues after retarget. admin-bypass batch_size is 1.',
+  );
 }
 
 const invokedDirectly = (() => {

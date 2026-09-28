@@ -56,6 +56,7 @@ import { recordWorkerDecisionRow } from '../worker-decision-ledger.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
+import { uniqueWorkKeys } from './worker-key-utils.js';
 
 export const INFRA_REPAIR_WORKER_KIND = 'infra-repair';
 export const DEFAULT_INFRA_REPAIR_WORKER_INTERVAL_MS = 60_000;
@@ -1445,12 +1446,13 @@ export function createInfraRepairTick(options: InfraRepairWorkerPolicyOptions): 
         .map(candidateFromWakeup)
         .filter((candidate): candidate is InfraRepairScanCandidate => Boolean(candidate)),
     );
-    const scanCandidates = ctx.reason === 'wake' && wakeupCandidates.length > 0
+    const scanCandidates = (ctx.reason === 'wake' && wakeupCandidates.length > 0
       ? wakeupCandidates
       : [
         ...listInfraRepairScanCandidates(options.store),
         ...listLocalOauthInfraRepairScanCandidates(options.store),
-      ];
+      ])
+      .filter((candidate) => ctx.workKey === undefined || candidate.taskId === ctx.workKey);
 
     for (const candidate of dedupeScanCandidates(scanCandidates)) {
       const validated = validateGenericSshInfraCandidate(candidate, options);
@@ -1464,7 +1466,8 @@ export function createInfraRepairTick(options: InfraRepairWorkerPolicyOptions): 
       }
     }
     if (ctx.reason !== 'wake' || wakeupCandidates.length === 0) {
-      for (const candidate of listUsageLimitRecoveryCandidates(options.store)) {
+      for (const candidate of listUsageLimitRecoveryCandidates(options.store)
+        .filter((candidate) => ctx.workKey === undefined || candidate.taskId === ctx.workKey)) {
         await handleUsageLimitRecovery(options, candidate);
       }
     }
@@ -1491,6 +1494,20 @@ export function createInfraRepairWorker(options: InfraRepairWorkerOptions): Work
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
     onTick,
+    listWorkKeys: options.infraRepair && !options.onTick
+      ? ({ reason }) => {
+        const wakeupTaskIds = reason === 'wake' ? pendingWakeups.map((hint) => hint.taskId) : [];
+        return uniqueWorkKeys(
+          wakeupTaskIds.length > 0
+            ? wakeupTaskIds
+            : [
+              ...listInfraRepairScanCandidates(options.infraRepair!.store).map((candidate) => candidate.taskId),
+              ...listLocalOauthInfraRepairScanCandidates(options.infraRepair!.store).map((candidate) => candidate.taskId),
+              ...listUsageLimitRecoveryCandidates(options.infraRepair!.store).map((candidate) => candidate.taskId),
+            ],
+        );
+      }
+      : () => [INFRA_REPAIR_WORKER_KIND],
   });
 
   if (!options.messageBus || !options.infraRepair || options.onTick) {

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "invoker-worker"
+version = "0.1.0"
+description = "Inheritable Invoker durable worker decide/execute API (Python)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["invoker_worker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

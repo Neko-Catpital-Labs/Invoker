@@ -13,6 +13,7 @@ import {
   resolveHeadlessExecCommand,
   summarizeMutationFailureMessage,
 } from './mutation-failure-message.js';
+import type { ChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 
 export type WorkflowMutationFailedHandler = (event: WorkflowMutationFailedEvent) => void;
 
@@ -126,7 +127,11 @@ export class PersistedWorkflowMutationCoordinator {
     private readonly persistence: SQLiteAdapter,
     private readonly ownerId: string,
     private readonly dispatch: (channel: string, args: unknown[], context: WorkflowMutationContext) => Promise<unknown>,
-    private readonly options?: { logger?: Logger; onIntentFailed?: WorkflowMutationFailedHandler },
+    private readonly options?: {
+      logger?: Logger;
+      onIntentFailed?: WorkflowMutationFailedHandler;
+      chokeMetrics?: ChokeBoundaryMetrics;
+    },
   ) {
     this.enableTraceLogs = process.env.INVOKER_TRACE_MUTATION_QUEUE === '1';
   }
@@ -151,6 +156,7 @@ export class PersistedWorkflowMutationCoordinator {
     args: unknown[],
   ): Promise<T> {
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
+    this.options?.chokeMetrics?.recordQueueAccepted('mutation', `intent:${intentId}`, { workflowId, channel });
     this.enqueueStartedAtMs.set(intentId, Date.now());
     this.createTiming(workflowId, channel, intentId, args)
       .mark('PersistedWorkflowMutationCoordinator.enqueue', 'queued', { priority });
@@ -189,10 +195,12 @@ export class PersistedWorkflowMutationCoordinator {
       } else {
         this.scheduleWorkflowDrain(drainWorkflowId);
       }
+      this.options?.chokeMetrics?.recordRequest('mutation', 'coalesced', { channel });
       return coalesced.id;
     }
 
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
+    this.options?.chokeMetrics?.recordQueueAccepted('mutation', `intent:${intentId}`, { workflowId, channel });
     this.enqueueStartedAtMs.set(intentId, Date.now());
     this.createTiming(workflowId, channel, intentId, args)
       .mark('PersistedWorkflowMutationCoordinator.submit', 'queued', {
@@ -371,6 +379,10 @@ export class PersistedWorkflowMutationCoordinator {
         minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
         minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
       });
+      this.options?.chokeMetrics?.recordQueueAccepted('heartbeat', `mutation:${intent.id}:${Date.now()}`, {
+        workflowId,
+        channel: intent.channel,
+      });
     }, this.leaseHeartbeatMs);
     try {
       this.evictQueuedWorkflowIntentsForFence(workflowId, intent);
@@ -422,6 +434,10 @@ export class PersistedWorkflowMutationCoordinator {
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
         minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
         minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
+      });
+      this.options?.chokeMetrics?.recordQueueAccepted('heartbeat', `mutation-final:${intent.id}`, {
+        workflowId,
+        channel: intent.channel,
       });
       this.inFlightPromises.delete(intent.id);
       this.enqueueStartedAtMs.delete(intent.id);

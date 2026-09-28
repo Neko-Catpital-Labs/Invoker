@@ -251,6 +251,7 @@ export function createAgentLoginWatchWorker(options: AgentLoginWatchWorkerOption
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_AGENT_LOGIN_WATCH_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? true,
+    listWorkKeys: () => planAgentLoginProbes(planOptions()).map((request) => `${request.host}:${request.agent}`),
     onTick: async (ctx) => {
       ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);
@@ -264,6 +265,7 @@ export function createAgentLoginWatchWorker(options: AgentLoginWatchWorkerOption
       }
 
       for (const request of planAgentLoginProbes(planOptions())) {
+        if (ctx.workKey !== undefined && ctx.workKey !== `${request.host}:${request.agent}`) continue;
         if (ctx.signal?.aborted) return;
 
         let outcome: AgentLoginProbeOutcome;

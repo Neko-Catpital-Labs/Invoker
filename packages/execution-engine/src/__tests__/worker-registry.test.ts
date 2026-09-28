@@ -39,6 +39,7 @@ import { MERGIFY_QUEUE_RESEARCH_WORKER_KIND } from '../workers/mergify-queue-res
 import { SPEND_CIRCUIT_BREAKER_WORKER_KIND } from '../workers/spend-circuit-breaker-worker.js';
 import { WORKFLOW_CLEANUP_WORKER_KIND } from '../workers/workflow-cleanup-worker.js';
 import { AGENT_LOGIN_WATCH_WORKER_KIND } from '../workers/agent-login-watch-worker.js';
+import { BUILTIN_WORKER_KINDS } from '../builtin-worker-kinds.js';
 
 const silentLogger = {
   debug: () => {},
@@ -114,6 +115,13 @@ describe('worker registry', () => {
       WORKFLOW_CLEANUP_WORKER_KIND,
       AGENT_LOGIN_WATCH_WORKER_KIND,
     ]);
+    expect(registry.list().map((d) => d.kind)).toEqual([...BUILTIN_WORKER_KINDS]);
+    for (const kind of BUILTIN_WORKER_KINDS) {
+      expect(registry.get(kind)).toBeDefined();
+    }
+    expect(registry.get(SELF_DEPLOY_WORKER_KIND)).toBeDefined();
+    expect(registry.get(WORKFLOW_CLEANUP_WORKER_KIND)).toBeDefined();
+    expect(registry.get(AGENT_LOGIN_WATCH_WORKER_KIND)).toBeDefined();
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(REQUEUE_WORKER_KIND)).toBeDefined();
     expect(registry.get(WORKFLOW_RESUME_WORKER_KIND)).toBeDefined();
@@ -122,6 +130,7 @@ describe('worker registry', () => {
     expect(registry.get(DISK_HEADROOM_WORKER_KIND)).toBeDefined();
     expect(registry.get(CLAUDE_OAUTH_REFRESH_WORKER_KIND)).toBeDefined();
     expect(registry.get(REAPER_WORKER_KIND)).toBeDefined();
+    expect(registry.get(DB_REAPER_WORKER_KIND)).toBeDefined();
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_ORPHAN_REPAIR_WORKER_KIND)).toBeDefined();

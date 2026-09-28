@@ -252,6 +252,22 @@ def is_prereq_split_validation(value: Mapping[str, object], base_ref_name: str) 
     return is_proof_tooling_policy_validation(value) or is_incidental_tooling_docs_addition(value)
 
 
+def scope_split_review_units(value: Mapping[str, object]) -> tuple[str, ...]:
+    if value.get("valid") is True:
+        return ()
+    review_units = value.get("reviewUnits")
+    if not isinstance(review_units, list):
+        return ()
+    ordered: list[str] = []
+    for unit in review_units:
+        text = str(unit).strip()
+        if text and text not in ordered:
+            ordered.append(text)
+    if len(ordered) < 2:
+        return ()
+    return tuple(ordered)
+
+
 def is_manual_split_validation(value: Mapping[str, object]) -> bool:
     errors = value.get("errors")
     review_units = value.get("reviewUnits")

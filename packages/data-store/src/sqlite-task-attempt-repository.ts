@@ -22,6 +22,10 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { appendJournalEntry, appendJournalEntryWithoutReadback, LOCAL_SYNC_ORIGIN } from './sync-journal.js';
 import { SQLITE_MAX_VARIABLE_NUMBER } from './sqlite-workflow-repository.js';
+import {
+  resolveDefaultClaudeWorkerConfigDir,
+  upsertTaskSessionRecovery,
+} from './session-recovery.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -53,6 +57,7 @@ const SAVE_TASK_COLUMNS = [
   'agent_name',
   'freshness',
   'task_state_version',
+  'last_fix_failure_json',
 ] as const;
 
 const SAVE_TASK_ROW_PLACEHOLDERS = `(${SAVE_TASK_COLUMNS.map(() => '?').join(', ')})`;
@@ -129,6 +134,7 @@ export class SqliteTaskAttemptRepository {
   ) {}
 
   private hasCrashPreservationTableCache: boolean | null = null;
+  private hasSessionRecoveryTableCache: boolean | null = null;
 
   private loadTaskJournalPayload(taskId: string): Record<string, unknown> | undefined {
     return this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
@@ -231,6 +237,37 @@ export class SqliteTaskAttemptRepository {
     return this.hasCrashPreservationTableCache;
   }
 
+  private hasSessionRecoveryTable(): boolean {
+    if (this.hasSessionRecoveryTableCache !== null) return this.hasSessionRecoveryTableCache;
+    const row = this.exec.queryOne(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'task_session_recovery'",
+    ) as { present?: number } | undefined;
+    this.hasSessionRecoveryTableCache = row?.present === 1;
+    return this.hasSessionRecoveryTableCache;
+  }
+
+  private syncSessionRecoveryFromTask(
+    workflowId: string,
+    task: TaskState,
+  ): void {
+    const sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
+    if (!sessionId) return;
+    if (!this.hasSessionRecoveryTable()) return;
+    upsertTaskSessionRecovery(this.exec, {
+      workflowId,
+      agentSessionId: sessionId,
+      taskId: task.id,
+      configDir: resolveDefaultClaudeWorkerConfigDir(),
+      workspacePath: task.execution.workspacePath,
+      poolId: task.config.poolId,
+      crashPreservedAt: task.execution.crashPreservedAt instanceof Date
+        ? task.execution.crashPreservedAt.toISOString()
+        : null,
+      crashReportPath: task.execution.crashPreservedReportPath ?? null,
+      crashDiagnosticSummary: task.execution.crashPreservedDiagnosticSummary ?? null,
+    });
+  }
+
   private syncCrashPreservationState(
     taskId: string,
     beforeTask: TaskState | undefined,
@@ -319,6 +356,7 @@ export class SqliteTaskAttemptRepository {
       'agent_name',
       'freshness',
       'task_state_version',
+      'last_fix_failure_json',
     ];
     const sql = `
       INSERT OR REPLACE INTO tasks (
@@ -345,7 +383,8 @@ export class SqliteTaskAttemptRepository {
         execution_model,
         agent_name,
         freshness,
-        task_state_version
+        task_state_version,
+        last_fix_failure_json
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -361,6 +400,7 @@ export class SqliteTaskAttemptRepository {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -433,11 +473,13 @@ export class SqliteTaskAttemptRepository {
       exec.agentName ?? null,
       cfg.freshness !== undefined ? JSON.stringify(cfg.freshness) : null,
       task.taskStateVersion ?? 1,
+      exec.lastFixFailure ? JSON.stringify(exec.lastFixFailure) : null,
     ];
     assertSaveTaskPersistsSelectedAttemptId(columns, values, exec);
     this.exec.runTransaction(() => {
       this.exec.execRun(sql, values);
       this.syncCrashPreservationState(task.id, undefined, task.execution);
+      this.syncSessionRecoveryFromTask(workflowId, task);
       const payload = this.loadTaskJournalPayload(task.id);
       if (!payload) {
         throw new Error(`Failed to load task ${task.id} after insert for sync journal`);
@@ -474,6 +516,7 @@ export class SqliteTaskAttemptRepository {
       }
       for (const record of records) {
         this.syncCrashPreservationState(record.task.id, undefined, record.task.execution);
+        this.syncSessionRecoveryFromTask(workflowId, record.task);
       }
 
       this.appendTaskJournalEntries(records.map((record) => {
@@ -559,6 +602,7 @@ export class SqliteTaskAttemptRepository {
       exec.agentName ?? null,
       cfg.freshness !== undefined ? JSON.stringify(cfg.freshness) : null,
       task.taskStateVersion ?? 1,
+      exec.lastFixFailure ? JSON.stringify(exec.lastFixFailure) : null,
     ];
     assertSaveTaskPersistsSelectedAttemptId([...SAVE_TASK_COLUMNS], values, exec);
     return { task, values };
@@ -742,6 +786,7 @@ export class SqliteTaskAttemptRepository {
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
         reviewGate: 'review_gate',
+        lastFixFailure: 'last_fix_failure_json',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
@@ -827,6 +872,20 @@ export class SqliteTaskAttemptRepository {
 
     this.exec.runTransaction(() => {
       this.exec.execRun(updateSql, values);
+      const mergedForRecovery: TaskState = {
+        ...beforeTask,
+        ...changes,
+        config: changes.config
+          ? ({ ...beforeTask.config, ...changes.config } as TaskState['config'])
+          : beforeTask.config,
+        execution: changes.execution
+          ? { ...beforeTask.execution, ...changes.execution }
+          : beforeTask.execution,
+      };
+      if (mergedForRecovery.execution.agentSessionId || mergedForRecovery.execution.lastAgentSessionId) {
+        const recoveryWorkflowId = mergedForRecovery.config.workflowId;
+        if (recoveryWorkflowId) this.syncSessionRecoveryFromTask(recoveryWorkflowId, mergedForRecovery);
+      }
       const taskPayload = this.loadTaskJournalPayload(taskId);
       if (!taskPayload) {
         throw new Error(`Failed to load task ${taskId} after update for sync journal`);
