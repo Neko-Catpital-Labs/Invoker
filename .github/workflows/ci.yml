@@ -921,7 +921,13 @@ jobs:
             .node-version
 
       - name: Install native build tools
-        run: apt-get update && apt-get install -y unzip make g++ python3
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: unzip make g++ python3
+          CI_INSTALL_PROBE_COMMANDS: unzip make g++ python3
+          CI_INSTALL_NO_APT_ERROR: Playwright shards require unzip, make, g++, and python3, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'Playwright shards require unzip, make, g++, and python3; run as root or provide passwordless sudo for apt-get.'
+        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
