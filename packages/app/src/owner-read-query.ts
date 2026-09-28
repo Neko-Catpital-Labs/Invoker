@@ -37,7 +37,7 @@ export interface OwnerReadQueryHandlers {
   onActivity?: () => void;
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
-  getChokeSnapshot?: () => ChokeBoundarySnapshot;
+  getChokeSnapshot: () => ChokeBoundarySnapshot;
   getQueueStatus: () => Record<string, unknown>;
   listWorkerActionHistory: (request: WorkerActionHistoryRequest) => WorkerActionHistoryResponse;
   listWorkerDecisions: (request: WorkerDecisionsRequest) => WorkerDecisionsResponse;
@@ -224,7 +224,7 @@ export interface OwnerReadQueryDeps {
   onActivity?: () => void;
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
-  getChokeSnapshot: () => ChokeBoundarySnapshot;
+  getChokeSnapshot?: () => ChokeBoundarySnapshot;
   getStreamSequence: () => number;
   getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkers: () => WorkerStatusSnapshot;
