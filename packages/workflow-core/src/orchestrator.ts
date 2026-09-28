@@ -159,7 +159,9 @@ import {
   reclaimStalledFixSessionImpl,
   getMergeNodeImpl,
 } from './orchestrator/merge.js';
-import type { MergeHost } from './orchestrator/merge.js';
+import type { FixFailureInput, MergeHost } from './orchestrator/merge.js';
+
+export type { FixFailureInput } from './orchestrator/merge.js';
 import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js';
 import type { TaskRepository } from './task-repository.js';
 import {
@@ -2624,6 +2626,7 @@ export class Orchestrator {
     opts: {
       savedError: string;
       fixError?: string;
+      fixFailure?: FixFailureInput;
       expectedLineage?: TaskLineageExpectation;
     },
   ): void {
