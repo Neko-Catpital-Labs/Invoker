@@ -899,6 +899,7 @@ jobs:
             files: >-
               e2e/planning-chat-restore-conversational-mode-repro.spec.ts
               e2e/codex-spend-gate-blocks-task.spec.ts
+              e2e/fix-failure-banner.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
