@@ -297,6 +297,10 @@ ensure_node() {
       return 0
     fi
   fi
+  if [[ "$SKIP_SYSTEM_PACKAGES" == "1" ]] && node_major_matches; then
+    log "Using existing Node $(node --version) from PATH."
+    return 0
+  fi
   require_command curl
   require_command tar
   local tarball url tmp_dir cleanup_cmd
