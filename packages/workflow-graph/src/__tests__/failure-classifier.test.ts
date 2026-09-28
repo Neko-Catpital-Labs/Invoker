@@ -278,5 +278,24 @@ describe('FailureClassifier.agentUsageResetAtMs', () => {
   it('returns undefined for an out-of-range minute', () => {
     expect(FailureClassifier.agentUsageResetAtMs('resets 3:99am (UTC)', failedAt)).toBeUndefined();
   });
+
+  it('reads a dated reset from the Claude weekly-limit message', () => {
+    expect(FailureClassifier.agentUsageResetAtMs("You've hit your weekly limit · resets Oct 1, 1am (UTC)", failedAt))
+      .toBe(Date.parse('2026-10-01T01:00:00.000Z'));
+  });
+
+  it('rolls a dated reset earlier in the calendar than the failure into the next year', () => {
+    const lateDecember = Date.parse('2026-12-30T10:00:00.000Z');
+    expect(FailureClassifier.agentUsageResetAtMs('resets Jan 2, 3:15pm (UTC)', lateDecember))
+      .toBe(Date.parse('2027-01-02T15:15:00.000Z'));
+  });
+
+  it('returns undefined for an unknown month name', () => {
+    expect(FailureClassifier.agentUsageResetAtMs('resets Foo 1, 1am (UTC)', failedAt)).toBeUndefined();
+  });
+
+  it('returns undefined for an out-of-range day', () => {
+    expect(FailureClassifier.agentUsageResetAtMs('resets Feb 30, 1am (UTC)', failedAt)).toBeUndefined();
+  });
 });
 
