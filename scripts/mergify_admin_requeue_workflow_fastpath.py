@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 try:
     from .mergify_admin_requeue_headless_shell import DEFAULT_TIMEOUT_SECONDS
@@ -176,7 +177,20 @@ def _task_never_launched(task: dict) -> bool:
     return execution.get("phase") == "launching" and not execution.get("launchCompletedAt")
 
 
-def classify_repair_outcome(workflow_id: str, status: str) -> str:
+SAFE_PUSH_HEAD_UNCHANGED_EXIT_CODE = 21
+
+
+class RepairOutcomeDetail(NamedTuple):
+    outcome_class: str
+    reason: str | None = None
+
+
+def _is_safe_push_task(task: dict) -> bool:
+    task_id = str(task.get("id") or "")
+    return task_id.rsplit("/", 1)[-1] == "safe-push"
+
+
+def classify_repair_outcome_detail(workflow_id: str, status: str) -> RepairOutcomeDetail:
     """Classify a terminal repair workflow for Mergify code-cap accounting.
 
     `infra`, `superseded`, and capacity-only deferrals must not spend the
@@ -185,6 +199,12 @@ def classify_repair_outcome(workflow_id: str, status: str) -> str:
     Unknown/code failures still count so thrash cannot loop forever.
     Inspect tasks before treating `completed` as success — a merge-gate
     workflow can complete while safe-push failed with stale-head (PR #10278).
+
+    A safe-push exit of 21 means the task checkout never moved (outcome
+    `code`, reason `head-unchanged`). Any other non-zero safe-push exit that
+    is not infra or stale-head is `code` with reason `push-failed`. Failed
+    safe-push tasks must carry a numeric `execution.exitCode`; missing that
+    field is a hard error so classification never falls back to phrase match.
     """
     tasks = list_workflow_tasks(workflow_id) or []
     admitted = False
@@ -205,31 +225,49 @@ def classify_repair_outcome(workflow_id: str, status: str) -> str:
             elif event_type == "task.executor.deferred" and payload.get("reason") in _CAPACITY_DEFERRED_REASONS:
                 capacity_deferred = True
     if capacity_deferred and not admitted:
-        return "capacity-deferred"
+        return RepairOutcomeDetail("capacity-deferred")
     for task in tasks:
         execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
         failure_class = execution.get("failureClass")
         if isinstance(failure_class, str) and (failure_class in _SSH_INFRA_FAILURE_CLASSES or failure_class == "agent-usage-limit"):
-            return "infra"
+            return RepairOutcomeDetail("infra")
         error = str(execution.get("error") or execution.get("pendingFixError") or "")
         if "stale-head" in error:
-            return "superseded"
+            return RepairOutcomeDetail("superseded")
         if "fatal: not a git repository" in error and "/.git/worktrees/" in error:
-            return "infra"
+            return RepairOutcomeDetail("infra")
         if _OAUTH_INFRA_SIGNATURE in error:
-            return "infra"
+            return RepairOutcomeDetail("infra")
         if "No space left on device" in error:
-            return "infra"
+            return RepairOutcomeDetail("infra")
         if "/Users/" in error and ("PermissionError" in error or "Permission denied" in error):
-            return "infra"
+            return RepairOutcomeDetail("infra")
     failed_tasks = [task for task in tasks if task.get("status") == "failed"]
     if failed_tasks and all(_task_never_launched(task) for task in failed_tasks):
-        return "infra"
+        return RepairOutcomeDetail("infra")
+    for task in failed_tasks:
+        if not _is_safe_push_task(task):
+            continue
+        execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
+        if "exitCode" not in execution:
+            raise RuntimeError(
+                f"safe-push task {task.get('id')!r} on workflow {workflow_id!r} "
+                "has no execution.exitCode; refuse to classify from error text"
+            )
+        exit_code = execution.get("exitCode")
+        if exit_code == SAFE_PUSH_HEAD_UNCHANGED_EXIT_CODE:
+            return RepairOutcomeDetail("code", "head-unchanged")
+        if isinstance(exit_code, int) and exit_code != 0:
+            return RepairOutcomeDetail("code", "push-failed")
     if status == "completed":
-        return "success"
+        return RepairOutcomeDetail("success")
     if status in _TERMINAL_WORKFLOW_STATUSES:
-        return "code"
-    return "unknown"
+        return RepairOutcomeDetail("code")
+    return RepairOutcomeDetail("unknown")
+
+
+def classify_repair_outcome(workflow_id: str, status: str) -> str:
+    return classify_repair_outcome_detail(workflow_id, status).outcome_class
 
 
 def _parse_last_json_object(stdout: str) -> dict | None:
@@ -325,15 +363,18 @@ def settle_workflow_fastpath_rows(ledger, now: int) -> int:
             continue
         status = workflow_status(str(workflow_id))
         if status in _TERMINAL_WORKFLOW_STATUSES:
-            outcome = classify_repair_outcome(str(workflow_id), status)
+            detail = classify_repair_outcome_detail(str(workflow_id), status)
+            meta = {
+                "workflowId": str(workflow_id),
+                "workflowStatus": status,
+                "outcomeClass": detail.outcome_class,
+                "settledBy": "fastpath-observer",
+            }
+            if detail.reason is not None:
+                meta["reason"] = detail.reason
             ledger.record(
                 f"{kind}-settled", pr, head, key, now,
-                meta={
-                    "workflowId": str(workflow_id),
-                    "workflowStatus": status,
-                    "outcomeClass": outcome,
-                    "settledBy": "fastpath-observer",
-                },
+                meta=meta,
             )
             settled += 1
     return settled
@@ -469,15 +510,22 @@ def settle_repairer_plan_rows(ledger, now: int) -> int:
         status = match.get("status")
         if status in _TERMINAL_WORKFLOW_STATUSES:
             workflow_id = str(match.get("id") or "")
-            outcome = classify_repair_outcome(workflow_id, str(status)) if workflow_id else "unknown"
+            detail = (
+                classify_repair_outcome_detail(workflow_id, str(status))
+                if workflow_id
+                else RepairOutcomeDetail("unknown")
+            )
+            meta = {
+                "workflowId": match.get("id"),
+                "workflowStatus": status,
+                "outcomeClass": detail.outcome_class,
+                "settledBy": "repairer-plan-observer",
+            }
+            if detail.reason is not None:
+                meta["reason"] = detail.reason
             ledger.record(
                 f"{kind}-settled", pr, head, key, now,
-                meta={
-                    "workflowId": match.get("id"),
-                    "workflowStatus": status,
-                    "outcomeClass": outcome,
-                    "settledBy": "repairer-plan-observer",
-                },
+                meta=meta,
             )
             settled += 1
     return settled
