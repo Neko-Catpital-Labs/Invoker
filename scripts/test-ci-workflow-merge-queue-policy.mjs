@@ -255,6 +255,19 @@ assert(
   dockerSteps.includes('Install Electron GUI system libraries'),
   'docker must provision libgtk-3 before running the suite: test-docker-comprehensive.sh boots Electron headless on the runner host, and self-hosted runners in this pool are not guaranteed to already have libgtk-3/libatk-1.0 installed',
 );
+assertStepBefore(
+  jobs.docker,
+  'Install system libraries for Node',
+  'Use Node.js ${{ env.NODE_VERSION }}',
+  'docker',
+);
+assertUsesSharedInstaller('docker', 'Install system libraries for Node', {
+  CI_INSTALL_PACKAGES: 'libatomic1',
+  CI_INSTALL_PROBE_SONAME: 'libatomic.so.1',
+  CI_INSTALL_NO_APT_ERROR: 'docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}; run as root or provide passwordless sudo for apt-get.',
+  CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
+});
 assertUsesSharedInstaller('docker', 'Install Electron GUI system libraries', {
   CI_INSTALL_PACKAGES: 'libgtk-3-0t64',
   CI_INSTALL_PROBE_SONAME: 'libgtk-3.so.0',
