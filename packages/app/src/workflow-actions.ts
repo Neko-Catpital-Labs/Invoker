@@ -1272,18 +1272,29 @@ export async function autoFixOnFailure(
   });
 
   const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
-  if (isAgentStillOverUsageLimit(task.execution.lastFixFailure, agentSelection.selectedAgent, Date.now())) {
-    console.log(`[auto-fix] "${taskId}" skipping: ${agentSelection.selectedAgent} is over its usage limit until ${new Date(task.execution.lastFixFailure!.resetsAt!).toISOString()}`);
-    persistence.logEvent?.(taskId, 'debug.auto-fix', {
-      phase: 'auto-fix-skip-agent-over-usage-limit',
-      agent: agentSelection.selectedAgent,
-      resetsAt: new Date(task.execution.lastFixFailure!.resetsAt!).toISOString(),
-    });
-    return;
-  }
   let persistedSavedError: string | undefined;
   let lineage: TaskLineageSnapshot | undefined;
+  let routeAgent = agentSelection.selectedAgent;
+  let conflictSettings: ReturnType<typeof resolveConflictResolutionSettings> | undefined;
   try {
+    if (recoveryRoute.kind === 'resolveConflict') {
+      conflictSettings = resolveConflictResolutionSettings(loadConfig(), {
+        pathDefaultAgent: agentSelection.selectedAgent,
+      });
+      routeAgent = conflictSettings.agent ?? routeAgent;
+    }
+    if (
+      recoveryRoute.kind !== 'recreateWorkflowFromFreshBase'
+      && isAgentStillOverUsageLimit(task.execution.lastFixFailure, routeAgent, Date.now())
+    ) {
+      console.log(`[auto-fix] "${taskId}" skipping: ${routeAgent} is over its usage limit until ${new Date(task.execution.lastFixFailure!.resetsAt!).toISOString()}`);
+      persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'auto-fix-skip-agent-over-usage-limit',
+        agent: routeAgent,
+        resetsAt: new Date(task.execution.lastFixFailure!.resetsAt!).toISOString(),
+      });
+      return;
+    }
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-agent-selected',
       configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
@@ -1297,12 +1308,12 @@ export async function autoFixOnFailure(
     );
     const route = recoveryRoute.kind;
     console.log(
-      `[auto-fix-route] task="${taskId}" route=${route} agent=${agentSelection.selectedAgent} source=${agentSelection.selectedAgentSource}`,
+      `[auto-fix-route] task="${taskId}" route=${route} agent=${routeAgent} source=${agentSelection.selectedAgentSource}`,
     );
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-route-selected',
       route,
-      agent: agentSelection.selectedAgent,
+      agent: routeAgent,
       selectedAgentSource: agentSelection.selectedAgentSource,
       configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
       fallbackChain: agentSelection.fallbackChain,
@@ -1356,9 +1367,6 @@ export async function autoFixOnFailure(
       savedErrorLength: persistedSavedError.length,
     });
     if (recoveryRoute.kind === 'resolveConflict') {
-      const conflictSettings = resolveConflictResolutionSettings(loadConfig(), {
-        pathDefaultAgent: agentSelection.selectedAgent,
-      });
       await taskExecutor.resolveConflict(
         taskId,
         persistedSavedError,
@@ -1454,7 +1462,7 @@ export async function autoFixOnFailure(
       orchestrator.revertFixSession(taskId, {
         savedError: persistedSavedError,
         fixError: detailedMsg,
-        fixFailure: fixFailureInput(err, agentSelection.selectedAgent, detailedMsg),
+        fixFailure: fixFailureInput(err, routeAgent, detailedMsg),
       });
     }
   }

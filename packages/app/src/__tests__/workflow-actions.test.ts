@@ -602,7 +602,16 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { error: mergeError },
+        execution: {
+          error: mergeError,
+          lastFixFailure: {
+            agent: 'codex',
+            failureClass: 'agent-usage-limit',
+            message: 'limit',
+            resetsAt: new Date(Date.now() + 60 * 60 * 1000),
+            at: new Date(),
+          },
+        },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginFixSession: vi.fn(() => ({ savedError: mergeError })),
@@ -842,6 +851,119 @@ describe('autoFixOnFailure', () => {
       'gpt-5-mini',
     );
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+  });
+
+  it('checks the saved usage limit against the conflict resolution agent', async () => {
+    loadConfigMock.mockReturnValue({
+      conflictResolutionAgent: 'omp',
+    });
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: {
+          error: mergeError,
+          workspacePath: '/tmp/task-a',
+          lastFixFailure: {
+            agent: 'omp',
+            failureClass: 'agent-usage-limit',
+            message: 'limit',
+            resetsAt: new Date(Date.now() + 60 * 60 * 1000),
+            at: new Date(),
+          },
+        },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
+      retryTask: vi.fn(() => []),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+      getAutoFixAgent: () => 'codex',
+    });
+
+    expect(orchestrator.beginFixSession).not.toHaveBeenCalled();
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(persistence.logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-skip-agent-over-usage-limit',
+        agent: 'omp',
+      }),
+    );
+  });
+
+  it('records conflict resolution failures against the conflict resolution agent', async () => {
+    loadConfigMock.mockReturnValue({
+      conflictResolutionAgent: 'omp',
+    });
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const quotaError = Object.assign(
+      new Error("You've hit your weekly limit"),
+      { failureClass: 'agent-usage-limit' },
+    );
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
+      retryTask: vi.fn(() => []),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockRejectedValue(quotaError),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+      getAutoFixAgent: () => 'codex',
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'omp', undefined);
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', expect.objectContaining({
+      fixFailure: expect.objectContaining({ agent: 'omp', failureClass: 'agent-usage-limit' }),
+    }));
   });
 
   it('uses resolveConflict for prefixed post-fix merge conflict errors', async () => {
