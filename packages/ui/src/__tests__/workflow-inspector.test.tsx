@@ -1230,3 +1230,127 @@ describe('WorkflowInspector Codex spend gate failure', () => {
     expect(screen.queryByTestId('inspector-codex-spend-gate-label')).toBeNull();
   });
 });
+
+describe('WorkflowInspector fix failure banner', () => {
+  const taskError = 'AssertionError: p95=865.2ms budget=200ms';
+  const harnesses = [
+    { name: 'claude', supportedModels: [] },
+    { name: 'codex', supportedModels: [] },
+    { name: 'gemini', supportedModels: [] },
+  ];
+
+  function renderWithRecord(lastFixFailure: TaskState['execution']['lastFixFailure'], onFix = vi.fn()) {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: taskError, exitCode: 1, lastFixFailure } })}
+        executionHarnesses={harnesses}
+        collapsed={false}
+        advancedExpanded={false}
+        onFix={onFix}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+    return onFix;
+  }
+
+  it('shows a usage-limit fix failure with the agent and reset time, apart from the task error', () => {
+    renderWithRecord({
+      agent: 'claude',
+      failureClass: 'agent-usage-limit',
+      message: "SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\nYou've hit your weekly limit · resets Oct 1, 1am (UTC)",
+      resetsAt: '2026-10-01T01:00:00.000Z',
+      at: '2026-09-27T13:23:00.000Z',
+    });
+
+    expect(screen.getByTestId('fix-failure-banner')).toHaveTextContent("Auto-fix couldn't run");
+    expect(screen.getByTestId('fix-failure-headline')).toHaveTextContent(/^claude hit its usage limit · resets /);
+    expect(screen.getByText(taskError)).toBeInTheDocument();
+    expect(screen.queryByText(/Fix with Agent failed/)).toBeNull();
+    expect(screen.getByTestId('fix-failure-banner')).not.toHaveTextContent('SSH remote script failed');
+  });
+
+  it('shows the spend-gate wording for a spend-gate fix failure', () => {
+    renderWithRecord({ agent: 'codex', failureClass: 'agent-spend-gate', message: 'spend gate', at: '2026-09-27T13:23:00.000Z' });
+
+    expect(screen.getByTestId('fix-failure-headline')).toHaveTextContent('codex is switched off by the daily spend gate');
+  });
+
+  it('shows a generic headline and the fix output for other fix failures', () => {
+    renderWithRecord({ agent: 'codex', message: 'agent crashed: exit 137', at: '2026-09-27T13:23:00.000Z' });
+
+    expect(screen.getByTestId('fix-failure-headline')).toHaveTextContent('codex fix failed');
+    expect(screen.getByText('agent crashed: exit 137')).toBeInTheDocument();
+  });
+
+  it('shows no banner when the task has no fix failure record', () => {
+    renderWithRecord(undefined);
+
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+    expect(screen.getByText(taskError)).toBeInTheDocument();
+  });
+
+  it('offers retry with every other registered agent and calls onFix with the chosen one', () => {
+    const onFix = renderWithRecord({ agent: 'claude', failureClass: 'agent-usage-limit', message: 'limit', at: '2026-09-27T13:23:00.000Z' });
+
+    expect(screen.queryByTestId('fix-failure-retry-claude')).toBeNull();
+    expect(screen.getByTestId('fix-failure-retry-gemini')).toHaveTextContent('Retry fix with gemini');
+    fireEvent.click(screen.getByTestId('fix-failure-retry-codex'));
+
+    expect(onFix).toHaveBeenCalledWith('task-1', 'codex');
+  });
+
+  it('hides the banner on Dismiss', () => {
+    renderWithRecord({ agent: 'codex', message: 'boom', at: '2026-09-27T13:23:00.000Z' });
+
+    fireEvent.click(screen.getByTestId('fix-failure-dismiss'));
+
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+  });
+
+  it('keeps the same fix failure dismissed after the banner unmounts', () => {
+    const lastFixFailure = { agent: 'codex', message: 'boom', at: '2026-09-27T13:23:00.000Z' };
+    const { rerender } = render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: taskError, exitCode: 1, lastFixFailure } })}
+        executionHarnesses={harnesses}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('fix-failure-dismiss'));
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+
+    rerender(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: taskError, exitCode: 1 } })}
+        executionHarnesses={harnesses}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+
+    rerender(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: taskError, exitCode: 1, lastFixFailure } })}
+        executionHarnesses={harnesses}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+  });
+});
