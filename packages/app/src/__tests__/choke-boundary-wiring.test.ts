@@ -239,15 +239,20 @@ describe('choke boundary wiring', () => {
   });
 
   it('does not let metric registry failures fail the operation', () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     const metrics = new ChokeBoundaryMetrics({ registry: new ThrowingMetricRegistry() });
 
     expect(() => metrics.recordRequest('ipc', 'success', { channel: 'x' })).not.toThrow();
     expect(() => metrics.recordQueueAccepted('mutation', 'intent:1')).not.toThrow();
     expect(() => metrics.recordEventLoopLag('launch.topup', 3)).not.toThrow();
     expect(() => metrics.recordSqliteTransaction({ outcome: 'committed', durationMs: 1 })).not.toThrow();
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric counter failed', expect.any(Error));
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric histogram failed', expect.any(Error));
+    errorLog.mockRestore();
   });
 
   it('does not let metric error callbacks fail the operation', () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     const onMetricError = vi.fn(() => {
       throw new Error('callback failed');
     });
@@ -262,5 +267,12 @@ describe('choke boundary wiring', () => {
     expect(onMetricError).toHaveBeenCalledWith('counter', expect.any(Error));
     expect(onMetricError).toHaveBeenCalledWith('gauge', expect.any(Error));
     expect(onMetricError).toHaveBeenCalledWith('histogram', expect.any(Error));
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric counter failed', expect.any(Error));
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric gauge failed', expect.any(Error));
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric histogram failed', expect.any(Error));
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric error callback failed for counter', expect.any(Error), expect.objectContaining({ message: 'callback failed' }));
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric error callback failed for gauge', expect.any(Error), expect.objectContaining({ message: 'callback failed' }));
+    expect(errorLog).toHaveBeenCalledWith('choke boundary metric error callback failed for histogram', expect.any(Error), expect.objectContaining({ message: 'callback failed' }));
+    errorLog.mockRestore();
   });
 });
