@@ -5,6 +5,7 @@ import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
 import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
 import { WorkerDecisionsSection } from './WorkerDecisionsSection.js';
+import { FixFailureBanner } from './FixFailureBanner.js';
 import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
@@ -185,6 +186,7 @@ interface WorkflowInspectorProps {
   onReject?: (task: TaskState) => void;
   onRestartTask?: (taskId: string) => void;
   onRecreateTask?: (taskId: string) => void;
+  onFix?: (taskId: string, agentName: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   onSetMergeMode?: (workflowId: string, mergeMode: MergeMode) => Promise<void>;
   onToggleCollapsed: () => void;
@@ -310,6 +312,7 @@ export function WorkflowInspector({
   onReject,
   onRestartTask,
   onRecreateTask,
+  onFix,
   onSetMergeBranch,
   onSetMergeMode,
   onToggleCollapsed,
@@ -324,6 +327,7 @@ export function WorkflowInspector({
   const [taskLogError, setTaskLogError] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(true);
   const [logLevelFilter, setLogLevelFilter] = useState<TaskLogLevel>('info');
+  const [dismissedFixFailureKeys, setDismissedFixFailureKeys] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     setIsEditingPrompt(false);
@@ -532,6 +536,23 @@ export function WorkflowInspector({
       </div>
 
       <div className="flex-1 overflow-auto p-3 space-y-3 text-sm">
+        {task?.execution.lastFixFailure && (
+          <FixFailureBanner
+            taskId={task.id}
+            record={task.execution.lastFixFailure}
+            agents={(executionHarnesses ?? []).map((harness) => harness.name)}
+            dismissedRecordKeys={dismissedFixFailureKeys}
+            onDismissRecordKey={(recordKey) => {
+              setDismissedFixFailureKeys((current) => {
+                if (current.has(recordKey)) return current;
+                const next = new Set(current);
+                next.add(recordKey);
+                return next;
+              });
+            }}
+            onRetry={onFix ? (agentName) => onFix(task.id, agentName) : undefined}
+          />
+        )}
         <section className={`rounded border p-3 ${statusBorder} bg-secondary/70`}>
           <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">{statusHeading}</h3>
           <div data-testid="workflow-inspector-status-label" className={`mt-1 inline-flex items-center gap-2 text-xs ${statusText}`}>
