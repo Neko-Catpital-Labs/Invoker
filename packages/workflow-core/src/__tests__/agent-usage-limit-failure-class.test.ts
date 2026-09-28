@@ -44,8 +44,9 @@ describe('agent-usage-limit failureClass persistence', () => {
 
     const task = persistence.getTaskEntry(taskId)?.task;
     expect(task?.status).toBe('failed');
-    expect(task?.execution.error).toContain('[Fix with Agent failed]');
-    expect(task?.execution.failureClass).toBe('agent-usage-limit');
+    expect(task?.execution.error).toBe(savedError);
+    expect(task?.execution.lastFixFailure?.failureClass).toBe('agent-usage-limit');
+    expect(task?.execution.lastFixFailure?.message).toBe(`codex fix exited with code 1: ${USAGE_LIMIT_ERROR}`);
   });
 
   it('does not classify command task errors as agent-usage-limit', () => {
