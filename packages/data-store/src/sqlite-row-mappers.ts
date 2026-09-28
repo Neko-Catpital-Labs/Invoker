@@ -39,6 +39,14 @@ function requireStringField(value: Record<string, unknown>, field: 'agent' | 'me
   return fieldValue;
 }
 
+function parseDateField(value: string, field: 'at' | 'resetsAt'): Date {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Invalid last_fix_failure_json: ${field} must be a valid date`);
+  }
+  return date;
+}
+
 function parseFixFailureRecord(json: string | null | undefined): FixFailureRecord | undefined {
   if (!json) return undefined;
   const raw = JSON.parse(json);
@@ -51,12 +59,15 @@ function parseFixFailureRecord(json: string | null | undefined): FixFailureRecor
   const failureClass = typeof raw.failureClass === 'string'
     ? raw.failureClass as FixFailureRecord['failureClass']
     : undefined;
+  const resetsAt = typeof raw.resetsAt === 'string'
+    ? parseDateField(raw.resetsAt, 'resetsAt')
+    : undefined;
   return {
     agent,
     ...(failureClass ? { failureClass } : {}),
     message,
-    ...(typeof raw.resetsAt === 'string' ? { resetsAt: new Date(raw.resetsAt) } : {}),
-    at: new Date(at),
+    ...(resetsAt ? { resetsAt } : {}),
+    at: parseDateField(at, 'at'),
   };
 }
 

@@ -122,4 +122,23 @@ describe('execution.lastFixFailure persistence', () => {
 
     expect(() => adapter.loadTasks('wf-1')).toThrow('Invalid last_fix_failure_json: message must be a string');
   });
+
+  it('rejects persisted records with an invalid at date while loading', () => {
+    adapter.saveTask('wf-1', makeTask('t1', { lastFixFailure: fullRecord }));
+    replaceStoredRecord(JSON.stringify({ agent: 'codex', message: 'fix failed', at: 'not-a-date' }));
+
+    expect(() => adapter.loadTasks('wf-1')).toThrow('Invalid last_fix_failure_json: at must be a valid date');
+  });
+
+  it('rejects persisted records with an invalid resetsAt date while loading', () => {
+    adapter.saveTask('wf-1', makeTask('t1', { lastFixFailure: fullRecord }));
+    replaceStoredRecord(JSON.stringify({
+      agent: 'codex',
+      message: 'fix failed',
+      at: '2026-09-27T13:30:00.000Z',
+      resetsAt: 'not-a-date',
+    }));
+
+    expect(() => adapter.loadTasks('wf-1')).toThrow('Invalid last_fix_failure_json: resetsAt must be a valid date');
+  });
 });
