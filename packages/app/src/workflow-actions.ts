@@ -13,8 +13,12 @@ import type {
   ExternalGatePolicyUpdate,
   InvalidationAction,
   TaskState,
+  FailureClass,
+  FixFailureInput,
+  FixFailureRecord,
 } from '@invoker/workflow-core';
 import {
+  FailureClassifier,
   OrchestratorError,
   OrchestratorErrorCode,
   applyInvalidation,
@@ -848,6 +852,7 @@ export async function resolveConflictAction(
   assertLineageCurrent(entryLineage, orchestrator, signal);
   const { savedError } = orchestrator.beginFixSession(taskId);
   const lineage = captureTaskLineage(taskId, orchestrator);
+  let fixAgent = agentName ?? 'unknown';
   try {
     assertLineageCurrent(lineage, orchestrator, signal);
     const config = loadConfig();
@@ -855,6 +860,7 @@ export async function resolveConflictAction(
       explicitAgent: agentName,
       pathDefaultAgent: options?.pathDefaultAgent ?? resolveDefaultExecutionAgent(config),
     });
+    fixAgent = settings.agent ?? fixAgent;
     await taskExecutor.resolveConflict(taskId, savedError, settings.agent, settings.model);
     assertLineageCurrent(lineage, orchestrator, signal);
     return await finalizeAppliedFix(taskId, savedError, deps, signal, lineage);
@@ -864,7 +870,7 @@ export async function resolveConflictAction(
     assertLineageCurrent(lineage, orchestrator, signal);
     persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, signal);
-    orchestrator.revertFixSession(taskId, { savedError, fixError: msg });
+    orchestrator.revertFixSession(taskId, { savedError, fixError: msg, fixFailure: fixFailureInput(err, fixAgent, msg) });
     throw err;
   }
 }
@@ -917,7 +923,7 @@ export async function fixWithAgentAction(
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
     // No session has begun; on a task with no fix-session evidence this is a
     // no-op, on a failed task it rewrites the error to the workspace message.
-    orchestrator.revertFixSession(taskId, { savedError, fixError: msg });
+    orchestrator.revertFixSession(taskId, { savedError, fixError: msg, fixFailure: { agent: effectiveAgentName, message: msg } });
     throw new Error(msg);
   }
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
@@ -945,6 +951,7 @@ export async function fixWithAgentAction(
   assertLineageCurrent(entryLineage, orchestrator, options.signal);
   const { savedError: persistedSavedError } = orchestrator.beginFixSession(taskId);
   const lineage = captureTaskLineage(taskId, orchestrator);
+  let fixAgent = effectiveAgentName;
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
@@ -952,6 +959,7 @@ export async function fixWithAgentAction(
         explicitAgent: options.agentName,
         pathDefaultAgent: resolveTaskRunnerDefaultExecutionAgent(taskExecutor),
       });
+      fixAgent = conflictSettings.agent ?? fixAgent;
       await taskExecutor.resolveConflict(
         taskId,
         persistedSavedError,
@@ -982,7 +990,7 @@ export async function fixWithAgentAction(
     assertLineageCurrent(lineage, orchestrator, options.signal);
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
-    orchestrator.revertFixSession(taskId, { savedError: persistedSavedError, fixError: msg });
+    orchestrator.revertFixSession(taskId, { savedError: persistedSavedError, fixError: msg, fixFailure: fixFailureInput(err, fixAgent, msg) });
     throw err;
   }
 }
@@ -1210,6 +1218,19 @@ export function shouldSkipAgentAutoFixForTask(task: { config?: { command?: strin
   return Boolean(task.config?.command);
 }
 
+function fixFailureInput(err: unknown, agent: string, message: string): FixFailureInput {
+  const failureClass = typeof err === 'object' && err !== null && 'failureClass' in err && typeof err.failureClass === 'string'
+    ? err.failureClass as FailureClass
+    : undefined;
+  return { agent, message, ...(failureClass ? { failureClass } : {}) };
+}
+
+export function isAgentStillOverUsageLimit(record: FixFailureRecord | undefined, agent: string, nowMs: number): boolean {
+  if (record === undefined || record.agent !== agent) return false;
+  if (!FailureClassifier.isUsageLimit(record.failureClass)) return false;
+  return record.resetsAt !== undefined && new Date(record.resetsAt).getTime() > nowMs;
+}
+
 export async function autoFixOnFailure(
   taskId: string,
   deps: {
@@ -1251,6 +1272,15 @@ export async function autoFixOnFailure(
   });
 
   const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
+  if (isAgentStillOverUsageLimit(task.execution.lastFixFailure, agentSelection.selectedAgent, Date.now())) {
+    console.log(`[auto-fix] "${taskId}" skipping: ${agentSelection.selectedAgent} is over its usage limit until ${new Date(task.execution.lastFixFailure!.resetsAt!).toISOString()}`);
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-skip-agent-over-usage-limit',
+      agent: agentSelection.selectedAgent,
+      resetsAt: new Date(task.execution.lastFixFailure!.resetsAt!).toISOString(),
+    });
+    return;
+  }
   let persistedSavedError: string | undefined;
   let lineage: TaskLineageSnapshot | undefined;
   try {
@@ -1421,7 +1451,11 @@ export async function autoFixOnFailure(
     const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
     if (persistedSavedError !== undefined) {
       if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
-      orchestrator.revertFixSession(taskId, { savedError: persistedSavedError, fixError: detailedMsg });
+      orchestrator.revertFixSession(taskId, {
+        savedError: persistedSavedError,
+        fixError: detailedMsg,
+        fixFailure: fixFailureInput(err, agentSelection.selectedAgent, detailedMsg),
+      });
     }
   }
 }
