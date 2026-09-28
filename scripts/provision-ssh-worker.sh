@@ -431,7 +431,7 @@ host_ready() {
     && host_has_required_commands \
     && node_major_matches \
     && [[ "$(pnpm --version 2>/dev/null || true)" == "$INVOKER_PNPM_VERSION" ]] \
-    && host_has_required_agents
+    && { [[ "$SKIP_AGENT_TOOLS" == "1" ]] || host_has_required_agents; }
 }
 
 write_host_stamp() {
