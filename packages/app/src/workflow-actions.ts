@@ -1366,7 +1366,7 @@ export async function autoFixOnFailure(
       phase: 'auto-fix-begin-conflict-resolution',
       savedErrorLength: persistedSavedError.length,
     });
-    if (recoveryRoute.kind === 'resolveConflict') {
+    if (conflictSettings !== undefined) {
       await taskExecutor.resolveConflict(
         taskId,
         persistedSavedError,
