@@ -29,6 +29,13 @@ class NothingToPushError(SafePushError):
     """Remote moved past --expected-head, but local HEAD has no work beyond it either."""
 
 
+class HeadUnchangedError(SafePushError):
+    """Local HEAD is still the captured start SHA; the repair never landed on this checkout."""
+
+
+HEAD_UNCHANGED_EXIT_CODE = 21
+
+
 def run_git(args: Sequence[str], *, cwd: Path | str | None = None) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -218,6 +225,11 @@ def safe_push(
         lease = f"refs/heads/{branch_name}:{expected}"
 
     pushed = local_head(cwd=cwd)
+    if expected is not None and pushed == expected:
+        raise HeadUnchangedError(
+            f"head-unchanged: local HEAD is still {pushed}; expected a repair commit beyond {expected}",
+            exit_code=HEAD_UNCHANGED_EXIT_CODE,
+        )
     run_git([
         "push",
         f"--force-with-lease={lease}",
