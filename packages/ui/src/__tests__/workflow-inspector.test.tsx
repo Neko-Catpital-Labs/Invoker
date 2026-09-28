@@ -1308,4 +1308,49 @@ describe('WorkflowInspector fix failure banner', () => {
 
     expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
   });
+
+  it('keeps the same fix failure dismissed after the banner unmounts', () => {
+    const lastFixFailure = { agent: 'codex', message: 'boom', at: '2026-09-27T13:23:00.000Z' };
+    const { rerender } = render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: taskError, exitCode: 1, lastFixFailure } })}
+        executionHarnesses={harnesses}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('fix-failure-dismiss'));
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+
+    rerender(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: taskError, exitCode: 1 } })}
+        executionHarnesses={harnesses}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+
+    rerender(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed', execution: { error: taskError, exitCode: 1, lastFixFailure } })}
+        executionHarnesses={harnesses}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('fix-failure-banner')).toBeNull();
+  });
 });

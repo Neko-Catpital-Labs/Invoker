@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import type { ReactElement } from 'react';
 import type { FixFailureRecord } from '../types.js';
 
 interface FixFailureBannerProps {
   taskId: string;
   record: FixFailureRecord;
   agents: readonly string[];
+  dismissedRecordKeys: ReadonlySet<string>;
+  onDismissRecordKey: (recordKey: string) => void;
   onRetry?: (agentName: string) => void;
 }
 
@@ -28,10 +30,16 @@ function fixFailureHeadline(record: FixFailureRecord): string {
   return `${record.agent} fix failed`;
 }
 
-export function FixFailureBanner({ taskId, record, agents, onRetry }: FixFailureBannerProps): JSX.Element | null {
+export function FixFailureBanner({
+  taskId,
+  record,
+  agents,
+  dismissedRecordKeys,
+  onDismissRecordKey,
+  onRetry,
+}: FixFailureBannerProps): ReactElement | null {
   const recordKey = `${taskId}:${String(record.at)}`;
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
-  if (dismissedKey === recordKey) return null;
+  if (dismissedRecordKeys.has(recordKey)) return null;
 
   const retryAgents = agents.filter((agent) => agent !== record.agent);
   const showsMessage = record.failureClass !== 'agent-usage-limit' && record.failureClass !== 'agent-spend-gate';
@@ -65,7 +73,7 @@ export function FixFailureBanner({ taskId, record, agents, onRetry }: FixFailure
           type="button"
           data-testid="fix-failure-dismiss"
           className="rounded px-2 py-1 text-xs text-amber-200/80 hover:text-amber-100"
-          onClick={() => setDismissedKey(recordKey)}
+          onClick={() => onDismissRecordKey(recordKey)}
         >
           Dismiss
         </button>

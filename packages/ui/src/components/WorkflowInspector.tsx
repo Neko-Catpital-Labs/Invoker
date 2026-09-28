@@ -327,6 +327,7 @@ export function WorkflowInspector({
   const [taskLogError, setTaskLogError] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(true);
   const [logLevelFilter, setLogLevelFilter] = useState<TaskLogLevel>('info');
+  const [dismissedFixFailureKeys, setDismissedFixFailureKeys] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     setIsEditingPrompt(false);
@@ -540,6 +541,15 @@ export function WorkflowInspector({
             taskId={task.id}
             record={task.execution.lastFixFailure}
             agents={(executionHarnesses ?? []).map((harness) => harness.name)}
+            dismissedRecordKeys={dismissedFixFailureKeys}
+            onDismissRecordKey={(recordKey) => {
+              setDismissedFixFailureKeys((current) => {
+                if (current.has(recordKey)) return current;
+                const next = new Set(current);
+                next.add(recordKey);
+                return next;
+              });
+            }}
             onRetry={onFix ? (agentName) => onFix(task.id, agentName) : undefined}
           />
         )}
