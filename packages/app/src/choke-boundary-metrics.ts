@@ -34,6 +34,7 @@ class NonFailingMetricRegistry extends MetricRegistry {
     try {
       return this.delegate.incrementCounter(...args);
     } catch (err) {
+      console.error('choke boundary metric counter failed', err);
       this.reportMetricError('counter', err);
       return 0;
     }
@@ -43,6 +44,7 @@ class NonFailingMetricRegistry extends MetricRegistry {
     try {
       return this.delegate.setGauge(...args);
     } catch (err) {
+      console.error('choke boundary metric gauge failed', err);
       this.reportMetricError('gauge', err);
       return 0;
     }
@@ -52,6 +54,7 @@ class NonFailingMetricRegistry extends MetricRegistry {
     try {
       this.delegate.observeHistogram(...args);
     } catch (err) {
+      console.error('choke boundary metric histogram failed', err);
       this.reportMetricError('histogram', err);
     }
   }
@@ -71,8 +74,8 @@ class NonFailingMetricRegistry extends MetricRegistry {
   private reportMetricError(operation: MetricOperation, error: unknown): void {
     try {
       this.onMetricError?.(operation, error);
-    } catch {
-      // Metric diagnostics must not change application outcomes.
+    } catch (reportingFailure) {
+      console.error(`choke boundary metric error callback failed for ${operation}`, error, reportingFailure);
     }
   }
 }
