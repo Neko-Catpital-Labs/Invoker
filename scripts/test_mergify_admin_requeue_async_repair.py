@@ -148,6 +148,53 @@ class AsyncRepairPlanTests(unittest.TestCase):
         # PR titles with quotes/colons must not corrupt the YAML document.
         self.assertIn('Fix \\"quoted\\" title: with colons', plan.yaml_text)
 
+    def test_repair_check_plan_keeps_commits_in_task_checkout(self):
+        plan = async_repair.build_repair_check_plan(
+            pr(),
+            "PR Body",
+            repo="owner/repo",
+            details_url="https://example.invalid/job",
+            log_path="/tmp/pr-body.log",
+            queue_only=False,
+            queue_pr_number=0,
+            latest=None,
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("Stay in this Invoker task checkout", plan.yaml_text)
+        self.assertIn("Do not run `git clone`, `git worktree add`", plan.yaml_text)
+        self.assertIn("do not push", plan.yaml_text.lower())
+        self.assertNotIn("Work directly on its branch", plan.yaml_text)
+        self.assertNotIn(f"git checkout {pr().head_ref_name}", plan.yaml_text)
+        self.assertIn(f"git fetch origin {pr().head_ref_name}", plan.yaml_text)
+        blocked_by = ("git worktree add", "Stay in this Invoker task checkout", "Never create a second worktree")
+        for needle in blocked_by:
+            self.assertIn(needle, plan.yaml_text)
+
+        scope = async_repair.build_repair_scope_split_plan(
+            pr(),
+            repo="Neko-Catpital-Labs/Invoker",
+            review_units=("proof", "tooling-policy"),
+            review_unit="proof",
+            errors=("Diff atomicity violation: test-assertion-weakened",),
+            details_url="https://example.invalid/job",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("Do not run `git clone`, `git worktree add`", scope.yaml_text)
+        self.assertNotIn("Work directly on its branch", scope.yaml_text)
+
+        rebase = async_repair.build_rebase_onto_master_plan(
+            pr(),
+            "behind master",
+            repo="owner/repo",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("Do not run `git clone`, `git worktree add`", rebase.yaml_text)
+        self.assertIn("git rebase origin/", rebase.yaml_text)
+        self.assertNotIn("Work directly on its branch", rebase.yaml_text)
+
     def test_repair_check_plan_runs_normalize_with_bytecode_disabled(self):
         plan = async_repair.build_repair_check_plan(
             pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
