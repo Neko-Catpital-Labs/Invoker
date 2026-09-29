@@ -32,9 +32,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
@@ -60,15 +60,28 @@ def add_usage(line: str, seen: dict[str, tuple[int, int, int, int]]) -> None:
         seen[mid] = fields
 
 
+def parse_instant(value: str) -> datetime | None:
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 def scan_file(path: Path) -> tuple[tuple[int, int, int, int], str | None]:
     seen: dict[str, tuple[int, int, int, int]] = {}
     first_ts: str | None = None
     with path.open(errors="replace") as fh:
         for line in fh:
             if first_ts is None:
-                m = re.search(r'"timestamp":"([^"]+)"', line)
-                if m:
-                    first_ts = m.group(1)
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    obj = None
+                if isinstance(obj, dict) and isinstance(obj.get("timestamp"), str) and obj["timestamp"]:
+                    first_ts = obj["timestamp"]
             add_usage(line, seen)
     totals = [0, 0, 0, 0]
     for fields in seen.values():
@@ -77,8 +90,13 @@ def scan_file(path: Path) -> tuple[tuple[int, int, int, int], str | None]:
     return (totals[0], totals[1], totals[2], totals[3]), first_ts
 
 
-def load_recovery(path: Path) -> dict[str, dict]:
+def workflow_of(row: dict) -> str:
+    return str(row.get("workflow_id") or row.get("workflowId") or "")
+
+
+def load_recovery(path: Path) -> tuple[dict[str, dict], set[str]]:
     by_session: dict[str, dict] = {}
+    ambiguous: set[str] = set()
     with path.open() as fh:
         for line in fh:
             line = line.strip()
@@ -88,8 +106,16 @@ def load_recovery(path: Path) -> dict[str, dict]:
             sid = row.get("agent_session_id") or row.get("agentSessionId")
             if not sid:
                 continue
-            by_session[str(sid)] = row
-    return by_session
+            key = str(sid)
+            if key in ambiguous:
+                continue
+            previous = by_session.get(key)
+            if previous is not None and workflow_of(previous) != workflow_of(row):
+                del by_session[key]
+                ambiguous.add(key)
+                continue
+            by_session[key] = row
+    return by_session, ambiguous
 
 
 def load_decision_workflows(path: Path) -> dict[str, tuple[int | None, str | None, str | None]]:
@@ -136,7 +162,7 @@ def main() -> int:
     parser.add_argument("--since", default="")
     args = parser.parse_args()
 
-    recovery = load_recovery(Path(args.recovery_dump))
+    recovery, ambiguous_sessions = load_recovery(Path(args.recovery_dump))
     decision = load_decision_workflows(Path(args.decision_log)) if args.decision_log else {}
     roots = [Path(p) for p in args.projects_root] or [
         Path.home() / ".invoker" / "claude-worker" / "projects",
@@ -166,7 +192,15 @@ def main() -> int:
 
     for sid, path in files.items():
         totals, first_ts = scan_file(path)
-        if args.since and first_ts and first_ts[:19] < args.since[:19]:
+        if args.since:
+            cutoff = parse_instant(args.since)
+            started = parse_instant(first_ts) if first_ts else None
+            if cutoff is not None and (started is None or started < cutoff):
+                continue
+        if sid in ambiguous_sessions:
+            unmatched_sessions += 1
+            for i, v in enumerate(totals):
+                unmatched_tokens[i] += v
             continue
         row = recovery.get(sid)
         if not row:
