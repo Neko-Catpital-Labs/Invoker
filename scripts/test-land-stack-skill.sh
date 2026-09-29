@@ -60,6 +60,8 @@ must_contain "\`admin-bypass\` to **every** PR in the stack" \
   "land-stack must label the full verified stack, not only the bottom"
 must_contain "Do not tell the user that labeling the stack merges it as one Mergify batch." \
   "land-stack must forbid claiming one Mergify batch from labeling alone"
+must_contain "Babysit-until-merged + bot thread" \
+  "land-stack must require the agent to resolve addressed bot threads under babysit"
 
 must_contain "re-run the exact \`gh pr view\`/queue query in that same turn" \
   "land-stack must require a fresh status query before reporting PR state"
