@@ -2703,7 +2703,7 @@ ${text}`;
           channel,
           threadTs,
           errorText: errText,
-          agentHint: this.resolveHarnessPreset(this.loadPlanningContext(threadTs)?.presetKey).tool,
+          agentHint: this.resolveHarnessPreset(this.loadPlanningContext(threadTs)?.presetKey ?? this.defaultHarnessPreset).tool,
         });
       } finally {
         await cleanupHeartbeats();
