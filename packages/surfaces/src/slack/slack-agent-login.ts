@@ -24,6 +24,14 @@ export const AGENT_LOGIN_NOT_ADMIN_MESSAGE =
 export const AGENT_LOGIN_REAUTH_HINT =
   'Reply `reauth` in this thread when you want to sign it back in.';
 
+const OWNER_LOCAL_AGENT_LOGIN_HOSTS = new Set(['owner', 'do1', 'localhost', '127.0.0.1']);
+
+export function shouldPassAgentLoginHost(host: string): boolean {
+  const trimmed = host.trim();
+  if (!trimmed) return false;
+  return !OWNER_LOCAL_AGENT_LOGIN_HOSTS.has(trimmed.toLowerCase());
+}
+
 function isAgentLoginAgent(value: string): value is AgentLoginAgent {
   return value === 'claude' || value === 'codex';
 }
@@ -126,6 +134,12 @@ export interface AgentLoginThreadDeps {
   runHeadlessCommand(args: string[]): Promise<unknown>;
   post(text: string, threadTs: string, channel: string, blocks?: unknown[]): Promise<void>;
   log?(level: 'info' | 'warn' | 'error', message: string): void;
+  onInstalled?(input: {
+    channel: string;
+    threadTs: string;
+    target: AgentLoginTarget;
+    view: AgentLoginCommandView;
+  }): Promise<void>;
 }
 
 export interface AgentLoginThreadReply {
@@ -304,8 +318,12 @@ export class AgentLoginThreadController {
 
   private async start(reply: AgentLoginThreadReply, target: AgentLoginTarget): Promise<void> {
     this.sessions.delete(reply.threadTs);
+    const args = ['agent-login', 'start', target.agent, '--output', 'json'];
+    if (target.agent === 'codex' && shouldPassAgentLoginHost(target.host)) {
+      args.push('--host', target.host);
+    }
     const raw = await this.run(
-      ['agent-login', 'start', target.agent, '--output', 'json'],
+      args,
       reply,
       `I could not start the ${label(target)} login on ${target.host}`,
     );
@@ -330,6 +348,49 @@ export class AgentLoginThreadController {
       reply.threadTs,
       reply.channel,
       formatAgentLoginStartBlocks(view, target),
+    );
+    if (view.status === 'awaiting_user') {
+      void this.pollUntilTerminal(reply, target, view.sessionId);
+    }
+  }
+
+  private async pollUntilTerminal(
+    reply: AgentLoginThreadReply,
+    target: AgentLoginTarget,
+    sessionId: string,
+  ): Promise<void> {
+    const deadline = Date.now() + 14 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      const raw = await this.run(
+        ['agent-login', 'status', sessionId, '--output', 'json'],
+        reply,
+        `I could not check the ${label(target)} login on ${target.host}`,
+      );
+      if (raw === COMMAND_FAILED) return;
+      const view = normalizeAgentLoginResult(raw);
+      if (!view) {
+        await this.reportUnreadable(reply, target, 'status', raw);
+        return;
+      }
+      if (view.status === 'failed' || view.status === 'installed') {
+        this.sessions.delete(reply.threadTs);
+        await this.deps.post(formatAgentLoginOutcome(view, target), reply.threadTs, reply.channel);
+        if (view.status === 'installed') {
+          await this.deps.onInstalled?.({
+            channel: reply.channel,
+            threadTs: reply.threadTs,
+            target,
+            view,
+          });
+        }
+        return;
+      }
+    }
+    await this.deps.post(
+      `Timed out waiting for the ${label(target)} login on ${target.host} to finish. ${AGENT_LOGIN_REAUTH_HINT}`,
+      reply.threadTs,
+      reply.channel,
     );
   }
 
@@ -362,6 +423,14 @@ export class AgentLoginThreadController {
       });
     }
     await this.deps.post(formatAgentLoginOutcome(view, target), reply.threadTs, reply.channel);
+    if (view.status === 'installed') {
+      await this.deps.onInstalled?.({
+        channel: reply.channel,
+        threadTs: reply.threadTs,
+        target,
+        view,
+      });
+    }
   }
 
   private async reportUnreadable(
