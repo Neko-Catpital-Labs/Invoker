@@ -93,8 +93,14 @@ after retarget. It is not a single-batch merge of the stack.
 ## Do not
 
 - Do not `gh pr merge` or hand-add `admin-bypass` to skip the guard.
-- Do not resolve review threads to unblock a merge unless the user has decided
-  to defer those findings; record the deferral on the PR.
+- Do not resolve review threads to unblock a merge by default. Decision tree:
+  - **Babysit-until-merged + bot thread** (CodeRabbit or similar): after the
+    current head addresses the thread (or the thread is outdated), resolve it
+    yourself via the GitHub review-thread API. Do not bounce that to the user.
+  - **Human review thread:** resolve only when the user has decided to defer
+    those findings; record the deferral on the PR. This rule alone never
+    authorizes resolving a human thread.
+  - **No babysit / not addressing the thread:** leave the thread open.
 - Do not act on a PR whose head SHA is not in your local clone.
 - Do not tell the user that labeling the stack merges it as one Mergify batch.
 
