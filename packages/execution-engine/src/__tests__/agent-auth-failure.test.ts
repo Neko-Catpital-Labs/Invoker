@@ -22,6 +22,14 @@ describe('classifyAgentAuthFailure', () => {
     ).toEqual({ kind: 'login-failed', agent: 'codex' });
   });
 
+  it('matches token_invalidated on a boundary and ignores a longer token', () => {
+    expect(classifyAgentAuthFailure('{"error":"token_invalidated"}', 'codex')).toEqual({
+      kind: 'login-failed',
+      agent: 'codex',
+    });
+    expect(classifyAgentAuthFailure('token_invalidated_backup', 'codex')).toBeUndefined();
+  });
+
   it('ignores non-auth failures and unknown agents', () => {
     expect(classifyAgentAuthFailure('ENOENT: no such file', 'claude')).toBeUndefined();
     expect(

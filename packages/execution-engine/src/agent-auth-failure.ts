@@ -1,7 +1,7 @@
 import { FailureClassifier } from '@invoker/workflow-core';
 
 import {
-  LOGIN_FAILURE_SIGNATURES,
+  outputMatchesLoginFailure,
   type AgentLoginAgent,
 } from './workers/agent-login-watch-worker.js';
 
@@ -14,11 +14,6 @@ export interface AgentAuthFailure {
 
 function isAgentLoginAgent(value: string | undefined): value is AgentLoginAgent {
   return value === 'claude' || value === 'codex';
-}
-
-function textLooksLikeLoginFailure(text: string): boolean {
-  const lower = text.toLowerCase();
-  return LOGIN_FAILURE_SIGNATURES.some((signature) => lower.includes(signature));
 }
 
 export function classifyAgentAuthFailure(
@@ -34,7 +29,7 @@ export function classifyAgentAuthFailure(
   }
   if (
     FailureClassifier.classifyError(text) === 'ssh-oauth-session-expired'
-    || textLooksLikeLoginFailure(text)
+    || outputMatchesLoginFailure(text)
   ) {
     return { kind: 'login-failed', agent };
   }
