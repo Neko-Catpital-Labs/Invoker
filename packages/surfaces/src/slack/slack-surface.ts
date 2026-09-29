@@ -48,8 +48,10 @@ import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from 
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
 import {
+  AGENT_LOGIN_COPY_CODE_ACTION_ID,
   AgentLoginThreadController,
   buildAgentLoginAlertMetadata,
+  buildAgentLoginCopyCodeModal,
   readAgentLoginMetadata,
 } from './slack-agent-login.js';
 import type { AgentLoginTarget, SlackMessageMetadata } from './slack-agent-login.js';
@@ -508,8 +510,15 @@ export class SlackSurface implements Surface {
       isAdmin: (userId) => this.isLocalCommandAuthorized(userId),
       resolveTarget: (channel, threadTs) => this.resolveAgentLoginThreadTarget(channel, threadTs),
       runHeadlessCommand: (args) => this.runAgentLoginHeadlessCommand(args),
-      post: async (text, threadTs, channel) => {
-        await this.postMessage({ text: sanitizeSlackOutbound(text), blocks: [] }, channel, threadTs);
+      post: async (text, threadTs, channel, blocks) => {
+        await this.postMessage(
+          {
+            text: sanitizeSlackOutbound(text),
+            blocks: (blocks ?? []) as never[],
+          },
+          channel,
+          threadTs,
+        );
       },
       log: coreLog,
     });
@@ -860,6 +869,24 @@ export class SlackSurface implements Surface {
       await ack();
       if (action.type !== 'button' || !action.value) return;
       await this.planDrafts.cancelPlanDraft(action.value, this.draftActionContext(body), this.replaceOriginal(respond));
+    });
+
+    this.app.action(AGENT_LOGIN_COPY_CODE_ACTION_ID, async ({ action, body, ack, client }) => {
+      await ack();
+      if (action.type !== 'button' || !action.value) return;
+      const triggerId = (body as { trigger_id?: string }).trigger_id;
+      if (!triggerId) {
+        this.log('slack', 'warn', '[AGENT_LOGIN] Copy code missing trigger_id');
+        return;
+      }
+      try {
+        await client.views.open({
+          trigger_id: triggerId,
+          view: buildAgentLoginCopyCodeModal(action.value) as never,
+        });
+      } catch (err) {
+        this.log('slack', 'error', `[AGENT_LOGIN] Copy code modal failed: ${err}`);
+      }
     });
 
     this.app.action('lobby_confirm', async ({ action, body, ack, respond }) => {
