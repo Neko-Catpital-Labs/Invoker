@@ -173,6 +173,7 @@ def backfill_transcript_paths(
     config_dir: str | None,
     dry_run: bool,
 ) -> int:
+    projects_root = projects_root.expanduser().resolve()
     if not projects_root.is_dir():
         return 0
     count = 0
@@ -188,7 +189,7 @@ def backfill_transcript_paths(
             session_id = name[: -len(".jsonl")]
             if not normalize_session_id(session_id):
                 continue
-            transcript_path = str(Path(dirpath) / name)
+            transcript_path = str((Path(dirpath) / name).resolve())
             upsert(
                 conn,
                 workflow_id=workflow_id,
@@ -231,7 +232,8 @@ def main() -> int:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        ensure_table(conn)
+        if not args.dry_run:
+            ensure_table(conn)
         live = backfill_live_tasks(conn, dry_run=args.dry_run, config_dir=config_dir)
         path_count = 0
         for root in projects_roots:
