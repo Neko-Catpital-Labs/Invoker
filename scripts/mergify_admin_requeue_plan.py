@@ -659,6 +659,8 @@ def mergify_failed_check_actions(
             ledger, pr.number, pr.head_ref_oid, "repair-check", name,
             repair_check_plan_name(pr.number, name, pr.head_ref_oid), now, max_repair_attempts,
         )
+        if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, name) >= 1:
+            continue
         if decision["action"] == "needs-human":
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, detail), detail),)
         if decision["action"] == "backoff":
@@ -666,8 +668,6 @@ def mergify_failed_check_actions(
         if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
             continue
         if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
-            continue
-        if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, name) >= 1:
             continue
         if claim_repair_filing is not None and claim_repair_filing(
             repair_filing_kind_for_check(name), str(pr.number), mergify_check_state_sha(pr, latest),
@@ -1200,6 +1200,8 @@ def plan_direct_repairs(
                     ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
                     repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid), now, max_repair_attempts,
                 )
+                if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, blocker.key) >= 1:
+                    continue
                 if decision["action"] == "needs-human":
                     return cap_action(pr, blocker, blocker.detail)
                 if decision["action"] == "backoff":
@@ -1207,8 +1209,6 @@ def plan_direct_repairs(
                 if not decision["crashed_on_infra"] and repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
                     continue
                 if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
-                    continue
-                if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, blocker.key) >= 1:
                     continue
                 # Same kind formula as mergify_failed_check_actions -- a claim
                 # made via that path (the Mergify-queue-driven view of this
