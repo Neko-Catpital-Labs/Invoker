@@ -30,8 +30,9 @@ About to fan out subagents instead? Read `skill://route-delegation/SKILL.md` fir
 
 ## Local vs remote owner
 
-- Default MCP target is **local** `invoker-cli mcp`.
-- If the current turn names a host, IP, or SSH alias for Invoker, follow `skill://plan-to-invoker/references/local-vs-remote-mcp.md` (probe SSH first; rewrite harness MCP only on success; never clobber local on failure).
+- Ask where it runs before the first human-triggered submit, unless this turn already names the owner. Follow `skill://plan-to-invoker/references/local-vs-remote-mcp.md`: one question, local plus each `remoteTargets` entry, then probe and rewrite only after a remote answer.
+- The local choice, and a self-triggered `auto_submit` with no named host, keep MCP on local `invoker-cli mcp`.
+- If the current turn names a host, IP, or SSH alias for Invoker, follow that same reference (probe SSH first; rewrite harness MCP only on success; never clobber local on failure).
 - “Local” / “this machine” restores local MCP.
 
 ## Flow
