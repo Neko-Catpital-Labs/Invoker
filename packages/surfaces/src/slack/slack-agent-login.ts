@@ -118,11 +118,13 @@ export function redactTokenLike(text: string): string {
   return result;
 }
 
+export const AGENT_LOGIN_COPY_CODE_ACTION_ID = 'agent_login_copy_code';
+
 export interface AgentLoginThreadDeps {
   isAdmin(userId: string | undefined): boolean;
   resolveTarget(channel: string, threadTs: string): Promise<AgentLoginTarget | null>;
   runHeadlessCommand(args: string[]): Promise<unknown>;
-  post(text: string, threadTs: string, channel: string): Promise<void>;
+  post(text: string, threadTs: string, channel: string, blocks?: unknown[]): Promise<void>;
   log?(level: 'info' | 'warn' | 'error', message: string): void;
 }
 
@@ -140,6 +142,18 @@ interface AgentLoginThreadSession {
 }
 
 const CODE_TOKEN = /^[\w.:#@/+=-]{4,256}$/;
+const SLACK_SECTION_TEXT_LIMIT = 3000;
+const SLACK_LOGIN_FIELD_LIMIT = 500;
+
+function boundText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}…`;
+}
+
+function fitSlackSection(text: string): string {
+  if (text.length <= SLACK_SECTION_TEXT_LIMIT) return text;
+  return `${text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1)}…`;
+}
 
 const COMMAND_FAILED = Symbol('agent-login-command-failed');
 
@@ -157,8 +171,9 @@ function label(target: AgentLoginTarget): string {
 }
 
 export function formatAgentLoginStart(view: AgentLoginCommandView, target: AgentLoginTarget): string {
+  const url = view.url === undefined ? undefined : boundText(view.url, SLACK_LOGIN_FIELD_LIMIT);
   const lines = [`Starting the ${label(target)} login for ${target.host}.`];
-  if (view.url) lines.push(`Open this link: ${view.url}`);
+  if (url) lines.push(`Open this link: ${url}`);
   if (view.userCode) lines.push(`Enter this code there: \`${view.userCode}\``);
   if (view.status === 'awaiting_code') {
     lines.push('Then reply in this thread with the code it gives you back.');
@@ -167,8 +182,66 @@ export function formatAgentLoginStart(view: AgentLoginCommandView, target: Agent
   } else {
     lines.push('I will post the result in this thread when it finishes.');
   }
-  if (view.message) lines.push(redactTokenLike(view.message));
+  if (view.message) lines.push(redactTokenLike(boundText(view.message, SLACK_LOGIN_FIELD_LIMIT)));
   return lines.join('\n');
+}
+
+export function formatAgentLoginStartBlocks(
+  view: AgentLoginCommandView,
+  _target: AgentLoginTarget,
+): unknown[] | undefined {
+  if (!view.userCode) return undefined;
+  return [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: fitSlackSection(formatAgentLoginStart(view, _target)) },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          action_id: AGENT_LOGIN_COPY_CODE_ACTION_ID,
+          text: { type: 'plain_text', text: 'Copy code' },
+          value: view.userCode.slice(0, 2000),
+        },
+      ],
+    },
+  ];
+}
+
+export function buildAgentLoginCopyCodeModal(userCode: string): {
+  type: 'modal';
+  title: { type: 'plain_text'; text: string };
+  close: { type: 'plain_text'; text: string };
+  blocks: unknown[];
+} {
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'Copy code' },
+    close: { type: 'plain_text', text: 'Done' },
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'The field below is focused. Press ⌘A / Ctrl+A, then ⌘C / Ctrl+C (or long-press → Copy on mobile).',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'agent_login_code',
+        optional: true,
+        label: { type: 'plain_text', text: 'Device code' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'agent_login_code_value',
+          initial_value: userCode.slice(0, 2000),
+          focus_on_load: true,
+        },
+      },
+    ],
+  };
 }
 
 export function formatAgentLoginOutcome(view: AgentLoginCommandView, target: AgentLoginTarget): string {
@@ -251,7 +324,13 @@ export class AgentLoginThreadController {
         awaitingCode: view.status === 'awaiting_code',
       });
     }
-    await this.deps.post(formatAgentLoginStart(view, target), reply.threadTs, reply.channel);
+    const startText = formatAgentLoginStart(view, target);
+    await this.deps.post(
+      startText,
+      reply.threadTs,
+      reply.channel,
+      formatAgentLoginStartBlocks(view, target),
+    );
   }
 
   private async submitCode(
