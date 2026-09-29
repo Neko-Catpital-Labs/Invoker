@@ -21,6 +21,14 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
       maxPlanningChatInputCommitMs: 29,
     })),
     resetUiPerfStats: vi.fn(),
+    getChokeSnapshot: vi.fn(() => ({
+      queues: {
+        mutation: { name: 'choke-mutation', queued: 0, processing: 0, complete: 0, failed: 0, added: 0, deduped: 0, unaccounted: 0 },
+        launch: { name: 'choke-launch', queued: 0, processing: 0, complete: 0, failed: 0, added: 0, deduped: 0, unaccounted: 0 },
+        heartbeat: { name: 'choke-heartbeat', queued: 0, processing: 0, complete: 0, failed: 0, added: 0, deduped: 0, unaccounted: 0 },
+      },
+      prometheusText: '# TYPE choke_boundary_requests_total counter\n',
+    })),
     getQueueStatus: vi.fn(() => ({ runningCount: 2 })),
     listWorkerActionHistory: vi.fn((request) => ({ workerKind: request.workerKind, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
     listWorkerDecisions: vi.fn((request) => ({ decision: request.decision, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
@@ -68,6 +76,13 @@ describe('answerOwnerReadQuery', () => {
   it('routes the snapshot kinds to their handlers', () => {
     const h = makeHandlers();
     expect(answerOwnerReadQuery({ kind: 'queue' }, h)).toEqual({ runningCount: 2 });
+    expect(answerOwnerReadQuery({ kind: 'choke' }, h)).toMatchObject({
+      ownerMode: 'gui',
+      queues: {
+        mutation: { name: 'choke-mutation' },
+      },
+      prometheusText: '# TYPE choke_boundary_requests_total counter\n',
+    });
     expect(answerOwnerReadQuery({ kind: 'worker-status' }, h)).toEqual({ workerStatus: { generatedAt: 'now', workers: [] } });
     expect(answerOwnerReadQuery({ kind: 'workers' }, h)).toEqual({ generatedAt: 'workers-now', workers: [] });
     expect(answerOwnerReadQuery({ kind: 'worker-action-history', workerKind: 'autofix', limit: 2, offset: 4 }, h)).toEqual({
@@ -214,6 +229,20 @@ describe('buildOwnerReadQueryHandlers', () => {
       limit: 1,
       offset: 2,
       hasMore: false,
+    });
+  });
+
+  it('uses the shared choke metrics registry when the owner deps omit a snapshot getter', () => {
+    const h = build();
+
+    expect(answerOwnerReadQuery({ kind: 'choke' }, h)).toMatchObject({
+      ownerMode: 'gui',
+      queues: {
+        mutation: { name: 'choke-mutation' },
+        launch: { name: 'choke-launch' },
+        heartbeat: { name: 'choke-heartbeat' },
+      },
+      prometheusText: expect.any(String),
     });
   });
 

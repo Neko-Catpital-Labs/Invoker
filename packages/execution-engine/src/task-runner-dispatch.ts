@@ -309,6 +309,7 @@ export async function dispatchExecutor(
     // Fail-fast: workspacePath must be provided by all executors
     if (!handle.workspacePath) {
       host.releasePoolSelectionLease(host.pendingPoolSelections.get(task.id));
+      host.pendingPoolSelections.delete(task.id);
       throw new Error(
         `Executor "${executor.type}" did not provide workspacePath for task "${task.id}". ` +
         `All executors must set workspacePath; refusing to fall back to host repo.`,

@@ -24,6 +24,14 @@ export const AGENT_LOGIN_NOT_ADMIN_MESSAGE =
 export const AGENT_LOGIN_REAUTH_HINT =
   'Reply `reauth` in this thread when you want to sign it back in.';
 
+const OWNER_LOCAL_AGENT_LOGIN_HOSTS = new Set(['owner', 'do1', 'localhost', '127.0.0.1']);
+
+export function shouldPassAgentLoginHost(host: string): boolean {
+  const trimmed = host.trim();
+  if (!trimmed) return false;
+  return !OWNER_LOCAL_AGENT_LOGIN_HOSTS.has(trimmed.toLowerCase());
+}
+
 function isAgentLoginAgent(value: string): value is AgentLoginAgent {
   return value === 'claude' || value === 'codex';
 }
@@ -118,12 +126,20 @@ export function redactTokenLike(text: string): string {
   return result;
 }
 
+export const AGENT_LOGIN_COPY_CODE_ACTION_ID = 'agent_login_copy_code';
+
 export interface AgentLoginThreadDeps {
   isAdmin(userId: string | undefined): boolean;
   resolveTarget(channel: string, threadTs: string): Promise<AgentLoginTarget | null>;
   runHeadlessCommand(args: string[]): Promise<unknown>;
-  post(text: string, threadTs: string, channel: string): Promise<void>;
+  post(text: string, threadTs: string, channel: string, blocks?: unknown[]): Promise<void>;
   log?(level: 'info' | 'warn' | 'error', message: string): void;
+  onInstalled?(input: {
+    channel: string;
+    threadTs: string;
+    target: AgentLoginTarget;
+    view: AgentLoginCommandView;
+  }): Promise<void>;
 }
 
 export interface AgentLoginThreadReply {
@@ -140,6 +156,18 @@ interface AgentLoginThreadSession {
 }
 
 const CODE_TOKEN = /^[\w.:#@/+=-]{4,256}$/;
+const SLACK_SECTION_TEXT_LIMIT = 3000;
+const SLACK_LOGIN_FIELD_LIMIT = 500;
+
+function boundText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}…`;
+}
+
+function fitSlackSection(text: string): string {
+  if (text.length <= SLACK_SECTION_TEXT_LIMIT) return text;
+  return `${text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1)}…`;
+}
 
 const COMMAND_FAILED = Symbol('agent-login-command-failed');
 
@@ -157,8 +185,9 @@ function label(target: AgentLoginTarget): string {
 }
 
 export function formatAgentLoginStart(view: AgentLoginCommandView, target: AgentLoginTarget): string {
+  const url = view.url === undefined ? undefined : boundText(view.url, SLACK_LOGIN_FIELD_LIMIT);
   const lines = [`Starting the ${label(target)} login for ${target.host}.`];
-  if (view.url) lines.push(`Open this link: ${view.url}`);
+  if (url) lines.push(`Open this link: ${url}`);
   if (view.userCode) lines.push(`Enter this code there: \`${view.userCode}\``);
   if (view.status === 'awaiting_code') {
     lines.push('Then reply in this thread with the code it gives you back.');
@@ -167,8 +196,66 @@ export function formatAgentLoginStart(view: AgentLoginCommandView, target: Agent
   } else {
     lines.push('I will post the result in this thread when it finishes.');
   }
-  if (view.message) lines.push(redactTokenLike(view.message));
+  if (view.message) lines.push(redactTokenLike(boundText(view.message, SLACK_LOGIN_FIELD_LIMIT)));
   return lines.join('\n');
+}
+
+export function formatAgentLoginStartBlocks(
+  view: AgentLoginCommandView,
+  _target: AgentLoginTarget,
+): unknown[] | undefined {
+  if (!view.userCode) return undefined;
+  return [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: fitSlackSection(formatAgentLoginStart(view, _target)) },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          action_id: AGENT_LOGIN_COPY_CODE_ACTION_ID,
+          text: { type: 'plain_text', text: 'Copy code' },
+          value: view.userCode.slice(0, 2000),
+        },
+      ],
+    },
+  ];
+}
+
+export function buildAgentLoginCopyCodeModal(userCode: string): {
+  type: 'modal';
+  title: { type: 'plain_text'; text: string };
+  close: { type: 'plain_text'; text: string };
+  blocks: unknown[];
+} {
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'Copy code' },
+    close: { type: 'plain_text', text: 'Done' },
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'The field below is focused. Press ⌘A / Ctrl+A, then ⌘C / Ctrl+C (or long-press → Copy on mobile).',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'agent_login_code',
+        optional: true,
+        label: { type: 'plain_text', text: 'Device code' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'agent_login_code_value',
+          initial_value: userCode.slice(0, 2000),
+          focus_on_load: true,
+        },
+      },
+    ],
+  };
 }
 
 export function formatAgentLoginOutcome(view: AgentLoginCommandView, target: AgentLoginTarget): string {
@@ -231,8 +318,12 @@ export class AgentLoginThreadController {
 
   private async start(reply: AgentLoginThreadReply, target: AgentLoginTarget): Promise<void> {
     this.sessions.delete(reply.threadTs);
+    const args = ['agent-login', 'start', target.agent, '--output', 'json'];
+    if (target.agent === 'codex' && shouldPassAgentLoginHost(target.host)) {
+      args.push('--host', target.host);
+    }
     const raw = await this.run(
-      ['agent-login', 'start', target.agent, '--output', 'json'],
+      args,
       reply,
       `I could not start the ${label(target)} login on ${target.host}`,
     );
@@ -251,7 +342,56 @@ export class AgentLoginThreadController {
         awaitingCode: view.status === 'awaiting_code',
       });
     }
-    await this.deps.post(formatAgentLoginStart(view, target), reply.threadTs, reply.channel);
+    const startText = formatAgentLoginStart(view, target);
+    await this.deps.post(
+      startText,
+      reply.threadTs,
+      reply.channel,
+      formatAgentLoginStartBlocks(view, target),
+    );
+    if (view.status === 'awaiting_user') {
+      void this.pollUntilTerminal(reply, target, view.sessionId);
+    }
+  }
+
+  private async pollUntilTerminal(
+    reply: AgentLoginThreadReply,
+    target: AgentLoginTarget,
+    sessionId: string,
+  ): Promise<void> {
+    const deadline = Date.now() + 14 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      const raw = await this.run(
+        ['agent-login', 'status', sessionId, '--output', 'json'],
+        reply,
+        `I could not check the ${label(target)} login on ${target.host}`,
+      );
+      if (raw === COMMAND_FAILED) return;
+      const view = normalizeAgentLoginResult(raw);
+      if (!view) {
+        await this.reportUnreadable(reply, target, 'status', raw);
+        return;
+      }
+      if (view.status === 'failed' || view.status === 'installed') {
+        this.sessions.delete(reply.threadTs);
+        await this.deps.post(formatAgentLoginOutcome(view, target), reply.threadTs, reply.channel);
+        if (view.status === 'installed') {
+          await this.deps.onInstalled?.({
+            channel: reply.channel,
+            threadTs: reply.threadTs,
+            target,
+            view,
+          });
+        }
+        return;
+      }
+    }
+    await this.deps.post(
+      `Timed out waiting for the ${label(target)} login on ${target.host} to finish. ${AGENT_LOGIN_REAUTH_HINT}`,
+      reply.threadTs,
+      reply.channel,
+    );
   }
 
   private async submitCode(
@@ -283,6 +423,14 @@ export class AgentLoginThreadController {
       });
     }
     await this.deps.post(formatAgentLoginOutcome(view, target), reply.threadTs, reply.channel);
+    if (view.status === 'installed') {
+      await this.deps.onInstalled?.({
+        channel: reply.channel,
+        threadTs: reply.threadTs,
+        target,
+        view,
+      });
+    }
   }
 
   private async reportUnreadable(

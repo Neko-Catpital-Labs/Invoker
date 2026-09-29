@@ -17,6 +17,7 @@ import {
   type Logger,
 } from '@invoker/contracts';
 import { resolveLaunchDispatchLeaseMsOverride } from './launch-dispatch-defaults.js';
+import { getChokeBoundaryMetrics, type ChokeBoundaryMetrics } from './choke-boundary-metrics.js';
 
 
 export type LaunchDispatcherPersistence = Pick<
@@ -111,6 +112,7 @@ export interface LaunchDispatcherOptions {
    */
   leaseMs?: number;
   maxLaunchAgeMs?: number;
+  chokeMetrics?: ChokeBoundaryMetrics;
 }
 
 /**
@@ -206,6 +208,7 @@ export class LaunchDispatcher {
   private readonly topUpReadyLaunchesEnabled?: () => boolean;
   private readonly leaseMs?: number;
   private readonly maxLaunchAgeMs: number;
+  private readonly chokeMetrics?: ChokeBoundaryMetrics;
 
   constructor(options: LaunchDispatcherOptions) {
     this.persistence = options.persistence;
@@ -217,6 +220,7 @@ export class LaunchDispatcher {
     this.topUpReadyLaunchesEnabled = options.topUpReadyLaunchesEnabled;
     this.leaseMs = options.leaseMs ?? resolveLaunchDispatchLeaseMsOverride();
     this.maxLaunchAgeMs = options.maxLaunchAgeMs ?? resolveLaunchDispatchLeaseMsOverride() ?? LAUNCH_STUCK_ABANDON_MS;
+    this.chokeMetrics = options.chokeMetrics ?? getChokeBoundaryMetrics();
     // Bound a single poll's work so the dispatcher cannot starve other
     // owner-loop ticks; the leftover rows are picked up on the next tick.
     this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
@@ -341,6 +345,7 @@ export class LaunchDispatcher {
   }
 
   private topUpReadyLaunches(): void {
+    const startedAtMs = performance.now();
     try {
       let started = this.orchestrator?.startExecution?.({ limit: this.maxLeasesPerPoll }) ?? [];
       // Ready pending roots can lose their outbox row after cancel/recreate while
@@ -393,6 +398,8 @@ export class LaunchDispatcher {
         error: err instanceof Error ? err.message : String(err),
         module: 'launch-dispatcher',
       });
+    } finally {
+      this.chokeMetrics?.recordEventLoopLag('launch.topup', performance.now() - startedAtMs);
     }
   }
 
@@ -702,6 +709,12 @@ export class LaunchDispatcher {
    */
   acceptDispatch(dispatchId: number): boolean {
     const ok = this.persistence.markLaunchDispatchAccepted(dispatchId);
+    if (ok) {
+      this.chokeMetrics?.recordQueueAccepted('launch', `dispatch:${dispatchId}`, { dispatchId });
+    } else {
+      this.chokeMetrics?.recordQueueRejected('launch', `dispatch:${dispatchId}`, { dispatchId });
+      this.chokeMetrics?.recordRequest('launch', 'rejected');
+    }
     this.logger?.info?.('[launch-dispatcher] accepted', {
       ownerId: this.ownerId,
       dispatchId,

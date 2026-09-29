@@ -30,7 +30,7 @@ import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
 import { loadSlackOwnerEnv, runComplaintScoutDraftCommand } from './complaint-scout-bridge.js';
 import { startLocalSmokeInject } from './local-smoke-inject.js';
-const VERSION = '0.1.17';
+const VERSION = '0.1.19';
 let runDaemon = true;
 
 if (process.argv.includes('--version') || process.argv.includes('-V')) {
@@ -159,6 +159,7 @@ async function main(): Promise<void> {
     repoAliases: runtimeConfig.repoAliases,
     channelRepoBindings: runtimeConfig.channelRepoBindings,
     adminUserIds,
+    runHeadlessCommand: async (args) => client.execWithResult(args),
     runWorkflowOp,
     gatherWorkflowContext,
     onRestartInvoker: async () => {

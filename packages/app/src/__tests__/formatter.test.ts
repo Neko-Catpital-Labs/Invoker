@@ -424,6 +424,31 @@ describe('serializeTask', () => {
     expect(execution.failureClass).toBe('agent-usage-limit');
   });
 
+  it('includes the fix failure record with ISO dates so headless consumers can see it', () => {
+    const task = makeTask({
+      status: 'failed',
+      execution: {
+        error: 'AssertionError: p95=865.2ms budget=200ms',
+        lastFixFailure: {
+          agent: 'claude',
+          failureClass: 'agent-usage-limit',
+          message: "You've hit your weekly limit · resets Oct 1, 1am (UTC)",
+          resetsAt: new Date('2026-10-01T01:00:00.000Z'),
+          at: new Date('2026-09-27T13:23:00.000Z'),
+        },
+      } as TaskState['execution'],
+    });
+    const execution = serializeTask(task).execution as Record<string, unknown>;
+    expect(execution.error).toBe('AssertionError: p95=865.2ms budget=200ms');
+    expect(execution.lastFixFailure).toEqual({
+      agent: 'claude',
+      failureClass: 'agent-usage-limit',
+      message: "You've hit your weekly limit · resets Oct 1, 1am (UTC)",
+      resetsAt: '2026-10-01T01:00:00.000Z',
+      at: '2026-09-27T13:23:00.000Z',
+    });
+  });
+
   it('converts Date fields to ISO strings', () => {
     const task = makeTask({
       createdAt: new Date('2025-06-01T10:00:00Z'),

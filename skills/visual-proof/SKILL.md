@@ -20,6 +20,21 @@ To choose which surface/spec to prove before capture, use `skills/verify/SKILL.m
 (`node skills/verify/control-invoker.mjs prove <feature>` or `visual-proof …`). This skill
 still owns before/after capture and the Manually inspected gate.
 
+## Match the proof source to the claim
+
+Visual Proof media must be a pixel capture from the actual rendered flow the
+Review Claim names — for example the running Electron/`packages/ui` app or a
+Slack/`packages/surfaces` message as shown in Slack. Mocked, redrawn, generated, Storybook,
+accessibility-tree-only, or other proxy UI does not count unless the user
+explicitly asked for a mockup.
+
+Before capture, declare the Expected surface and Expected predicates (what must
+be visible and what must not). Capture only after that list exists.
+
+When the Review Claim names multiple major cases (OR claims), Expected
+predicates must enumerate each case. Visual Proof is incomplete until every
+named case has its own distinct media, or an explicit waiver for that case.
+
 ## Never reuse an unrelated or stale asset as proof
 
 Every image/video/gif in a `## Visual Proof` section must come from a capture run **against the

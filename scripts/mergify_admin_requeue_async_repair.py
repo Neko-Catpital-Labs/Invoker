@@ -65,6 +65,22 @@ def _indent_block(text: str, spaces: int) -> str:
     return "\n".join(prefix + line if line else prefix.rstrip() for line in lines)
 
 
+def _stay_in_task_checkout_instructions(head_ref: str, *, fetch_extra: str | None = None) -> str:
+    # Safe-push only reads this task checkout; never steer agents into a side worktree.
+    fetch_refs = head_ref if not fetch_extra else f"{head_ref} {fetch_extra}"
+    return (
+        "Stay in this Invoker task checkout for every edit and commit. "
+        "Do not run `git clone`, `git worktree add`, or commit from any other "
+        "directory — safe-push only publishes commits made here.\n"
+        "Fetch the PR tip in place (do not leave this directory):\n"
+        f"  git fetch origin {fetch_refs}\n"
+        f"If HEAD is not already origin/{head_ref}, update in place with "
+        f"`git reset --hard origin/{head_ref}` or "
+        f"`git checkout --detach origin/{head_ref}`. "
+        "Never create a second worktree when the branch is checked out elsewhere.\n"
+    )
+
+
 def _repo_url(repo: str) -> str:
     return f"https://github.com/{repo}.git"
 
@@ -147,6 +163,11 @@ def _foreign_safe_push_command(*, head_ref: str, start_head: str, skip_guard: st
         f"if [ \"$current_head\" != {_shlex(start_head)} ]; then\n"
         f"  echo \"refusing to push: {head_ref} moved from {start_head} to $current_head\" >&2\n"
         "  exit 1\n"
+        "fi\n"
+        "local_head=\"$(git rev-parse HEAD)\"\n"
+        f"if [ \"$local_head\" = {_shlex(start_head)} ]; then\n"
+        f"  echo \"head-unchanged: local HEAD is still $local_head; expected a repair commit beyond {start_head}\" >&2\n"
+        "  exit 21\n"
         "fi\n"
         f"git push --force-with-lease=refs/heads/{_shlex(head_ref)}:{_shlex(start_head)} origin HEAD:{_shlex(head_ref)}\n"
     )
@@ -313,8 +334,7 @@ def build_repair_check_plan(
         f"Repair the existing pull request #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
         f"PR URL: {pr.url}\n"
         f"Head branch: {pr.head_ref_name} (at {start_head}), base branch: {pr.base_ref_name}\n\n"
-        "Work directly on its branch:\n"
-        f"  git fetch origin {pr.head_ref_name} && git checkout {pr.head_ref_name}\n\n"
+        f"{_stay_in_task_checkout_instructions(pr.head_ref_name)}\n"
         f"Failed check: {check_name}\n"
         f"Details URL: {details_url}\n"
         f"Job log (tail):\n{_job_log_excerpt(log_path)}\n"
@@ -364,6 +384,77 @@ def build_repair_check_plan(
     return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
 
 
+def repair_scope_split_plan_name(pr_number: int, start_head: str) -> str:
+    return f"admin-bypass-repair-scope-split-pr-{pr_number}-{start_head[:7]}"
+
+
+def build_repair_scope_split_plan(
+    pr: PrSnapshot,
+    *,
+    repo: str,
+    review_units: Sequence[str],
+    review_unit: str,
+    errors: Sequence[str],
+    details_url: str,
+    start_head: str,
+    state_file: Path,
+) -> AsyncRepairPlan:
+    name = repair_scope_split_plan_name(pr.number, start_head)
+    units = tuple(review_units)
+    declared = review_unit if review_unit in units else units[0]
+    others = [unit for unit in units if unit != declared]
+    error_lines = "\n".join(f"- {error}" for error in errors) or "- (none)"
+    prompt = (
+        "This pull request fails PR Body because its diff spans more than one review unit: "
+        f"{', '.join(units)}.\n\n"
+        f"Partition the existing diff of pull request #{pr.number} ({json.dumps(pr.title)}) on {repo} "
+        "into one stacked PR per review unit. Use scripts/create-pr.mjs for each new PR. "
+        "Do not try to make this mixed diff pass PR Body in place.\n\n"
+        f"PR URL: {pr.url}\n"
+        f"The original pull request stays on branch {pr.head_ref_name} (at {start_head}), "
+        f"base {pr.base_ref_name}, and keeps only the files for review unit {declared}. "
+        "Commit that reduction locally. Do not push.\n\n"
+        f"{_stay_in_task_checkout_instructions(pr.head_ref_name)}\n"
+        f"Publish each other review unit ({', '.join(others)}) as its own stacked PR based on the previous slice. "
+        "Each new PR body declares that one review unit, passes "
+        "`node scripts/validate-pr-body-local.mjs`, and is labeled admin-bypass.\n\n"
+        "A test-assertion change stays on the slice that contains that test file.\n\n"
+        f"Failed check: PR Body\n"
+        f"Details URL: {details_url}\n"
+        f"Validator errors:\n{error_lines}\n\n"
+        "If the pull request is closed or merged, or the diff is already one review unit, "
+        "make no commit and exit 0.\n"
+    )
+    yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
+    yaml_text += _repair_task_yaml(
+        description=f"Split PR #{pr.number} into one PR per review unit",
+        prompt=prompt,
+    )
+    normalize_command = (
+        "set -euo pipefail\n"
+        "python3 -B scripts/mergify_admin_requeue_repair_normalize.py \\\n"
+        f"  --repo {_shlex(repo)} --pr {pr.number} --check 'PR Body' \\\n"
+        f"  --start-head {_shlex(start_head)} --base {_shlex(pr.base_ref_name)} --trunk master \\\n"
+        "  --scope-split\n"
+    )
+    yaml_text += (
+        "  - id: normalize\n"
+        f"    description: {_yaml_str(f'Record repair-invalid when PR #{pr.number} is still more than one review unit')}\n"
+        "    dependencies: [repair]\n"
+        "    command: |\n"
+        f"{_indent_block(normalize_command, 6)}\n"
+    )
+    yaml_text += _safe_push_task_yaml(
+        task_id="safe-push",
+        description=f"Safely push PR #{pr.number} only if its head did not move and the split left one review unit",
+        dependencies="normalize",
+        head_ref=pr.head_ref_name,
+        start_head=start_head,
+        skip_if_prereq=True,
+    )
+    return AsyncRepairPlan(plan_name=name, yaml_text=yaml_text)
+
+
 def build_aggregated_repair_check_plan(
     pr: PrSnapshot,
     checks: Sequence[RepairCheckSpec],
@@ -389,6 +480,7 @@ def build_aggregated_repair_check_plan(
             "This PR's CI check is failing. Diagnose why it is failing, then fix it. Add or "
             "update a repro if the failure is reproducible.\n\n"
             "Work from the checkout and committed history left by the preceding repair task. "
+            "Stay in this Invoker task checkout; do not run `git clone` or `git worktree add`. "
             "If a code change fixes this check, commit it locally and do not push. If local proof "
             "shows the check is already green on the current history, make no commit and exit 0.\n\n"
             f"Repair PR #{pr.number} ({json.dumps(pr.title)}) on {repo}.\n"
@@ -441,13 +533,13 @@ def _rebase_onto_master_prompt(pr: PrSnapshot, reason: str, start_head: str, *, 
     onto_ref = onto or pr.base_ref_name or "master"
     return (
         f"Rebase this pull request onto `{onto_ref}`.\n\n"
-        f"Checkout the PR head branch, rebase it onto origin/{onto_ref} while preserving the PR's intended "
+        f"In this Invoker task checkout, rebase onto origin/{onto_ref} while preserving the PR's intended "
         "changes, resolve any conflicts if they appear, then commit locally. Do not push.\n\n"
         "If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
         f"Head SHA: {start_head}\nRebase onto: {onto_ref}\nReason: {reason}\n"
-        f"Work directly on its branch:\n"
-        f"  git fetch origin {pr.head_ref_name} {onto_ref} && git checkout {pr.head_ref_name}\n"
+        f"{_stay_in_task_checkout_instructions(pr.head_ref_name, fetch_extra=onto_ref)}"
+        f"Then rebase in place:\n"
         f"  git rebase origin/{onto_ref}\n"
     )
 

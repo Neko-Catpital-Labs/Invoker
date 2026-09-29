@@ -85,7 +85,9 @@ function makeWorker(opts: {
     ownerHostName: 'owner',
     remoteTargets: REMOTE_TARGETS,
     now: () => new Date('2026-09-23T00:00:00.000Z').getTime(),
-    onTick: () => { tickIndex += 1; },
+    onTick: (ctx) => {
+      if (ctx.workKey === 'owner:claude') tickIndex += 1;
+    },
     runProbe: async (request) => {
       seen.push(request);
       const script = opts.scripts[Math.min(tickIndex, opts.scripts.length - 1)] ?? {};
@@ -118,6 +120,7 @@ describe('classifyLoginProbe', () => {
   it('returns login_failed for the /login prompt and token_invalidated', () => {
     expect(classifyLoginProbe({ exitCode: 1, output: 'Invalid API key. Please run /login' })).toBe('login_failed');
     expect(classifyLoginProbe({ exitCode: 1, output: '{"error":"token_invalidated"}' })).toBe('login_failed');
+    expect(classifyLoginProbe({ exitCode: 1, output: 'token_invalidated_backup' })).toBe('unchecked');
   });
 
   it('never returns login_failed for a timeout, even when the output matches a signature', () => {

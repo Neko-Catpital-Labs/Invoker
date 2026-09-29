@@ -180,6 +180,7 @@ describe('agent-login-session boundary parsers', () => {
   it('parses the codex device-auth URL and one-time code out of coloured output', () => {
     const raw = '\x1b[1mVisit:\x1b[0m https://example.test/device\nEnter code: \x1b[33mABCD-1234\x1b[0m\n';
     expect(parseCodexDeviceAuthOutput(raw)).toEqual({ url: 'https://example.test/device', code: 'ABCD-1234' });
+    expect(parseCodexDeviceAuthOutput('\x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n\x1b[94m0YAA-U1XND\x1b[0m')).toEqual({ url: 'https://auth.openai.com/codex/device', code: '0YAA-U1XND' });
   });
 
   it('returns null when the device-auth output has no code yet', () => {
@@ -454,8 +455,8 @@ describe('agent-login-session remote codex flow (real fake-ssh executable on PAT
     const homes = [...codexLog.matchAll(/CODEX_HOME=([^ ]+)/g)].map((match) => match[1]);
     expect(homes).toHaveLength(2);
     expect(homes[0]).toBe(homes[1]);
-    expect(homes[0]).toContain('/tmp/');
     expect(homes[0]).not.toBe(join(remoteHomeDir, '.codex'));
+    expect(homes[0]?.includes('tmp') || homes[0]?.startsWith('/var/folders/')).toBe(true);
   }, 20_000);
 
   it('leaves the named host auth.json untouched when the remote test call fails', async () => {

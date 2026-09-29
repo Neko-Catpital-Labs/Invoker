@@ -14,6 +14,7 @@ import type {
   WorkflowRollup,
   ExternalDependencyChange,
   DetachedExternalDependency,
+  FixFailureRecord,
 } from '@invoker/workflow-core';
 import { assertResolvedTaskConfig, normalizeRunnerKind } from '@invoker/workflow-core';
 import type { WorkerActionRecord, Workflow } from './adapter.js';
@@ -25,6 +26,50 @@ import type {
   WorkflowMutationIntentStatus,
   WorkflowMutationLease,
 } from './sqlite-adapter.js';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireStringField(value: Record<string, unknown>, field: 'agent' | 'message' | 'at'): string {
+  const fieldValue = value[field];
+  if (typeof fieldValue !== 'string') {
+    throw new Error(`Invalid last_fix_failure_json: ${field} must be a string`);
+  }
+  return fieldValue;
+}
+
+function parseDateField(value: string, field: 'at' | 'resetsAt'): Date {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Invalid last_fix_failure_json: ${field} must be a valid date`);
+  }
+  return date;
+}
+
+function parseFixFailureRecord(json: string | null | undefined): FixFailureRecord | undefined {
+  if (!json) return undefined;
+  const raw = JSON.parse(json);
+  if (!isRecord(raw)) {
+    throw new Error('Invalid last_fix_failure_json: value must be an object');
+  }
+  const agent = requireStringField(raw, 'agent');
+  const message = requireStringField(raw, 'message');
+  const at = requireStringField(raw, 'at');
+  const failureClass = typeof raw.failureClass === 'string'
+    ? raw.failureClass as FixFailureRecord['failureClass']
+    : undefined;
+  const resetsAt = typeof raw.resetsAt === 'string'
+    ? parseDateField(raw.resetsAt, 'resetsAt')
+    : undefined;
+  return {
+    agent,
+    ...(failureClass ? { failureClass } : {}),
+    message,
+    ...(resetsAt ? { resetsAt } : {}),
+    at: parseDateField(at, 'at'),
+  };
+}
 
 export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
   return {
@@ -143,6 +188,7 @@ export function mapRowToTask(row: any): TaskState {
       selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
       experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
       pendingFixError: row.pending_fix_error ?? undefined,
+      lastFixFailure: parseFixFailureRecord(row.last_fix_failure_json),
       failureClass: row.failure_class ?? undefined,
       fixSessionEntryStatus: row.fix_session_entry_status ?? undefined,
       reviewUrl: row.review_url ?? undefined,

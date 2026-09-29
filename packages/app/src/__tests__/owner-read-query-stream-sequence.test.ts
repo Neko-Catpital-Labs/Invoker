@@ -38,6 +38,14 @@ describe('owner-read-query: standalone getStreamSequence stub stays inert', () =
       ownerModeLabel: 'standalone',
       getUiPerfStats: () => ({}),
       resetUiPerfStats: () => {},
+      getChokeSnapshot: () => ({
+        queues: {
+          mutation: { name: 'choke-mutation', queued: 0, processing: 0, complete: 0, failed: 0, added: 0, deduped: 0, unaccounted: 0 },
+          launch: { name: 'choke-launch', queued: 0, processing: 0, complete: 0, failed: 0, added: 0, deduped: 0, unaccounted: 0 },
+          heartbeat: { name: 'choke-heartbeat', queued: 0, processing: 0, complete: 0, failed: 0, added: 0, deduped: 0, unaccounted: 0 },
+        },
+        prometheusText: '',
+      }),
       getStreamSequence: () => 0,
       getWorkerStatus: () => ({ generatedAt: 'now', workers: [] }),
       getWorkers: () => ({ generatedAt: 'now', workers: [] }),

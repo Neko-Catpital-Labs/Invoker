@@ -94,6 +94,26 @@ class AsyncRepairPlanTests(unittest.TestCase):
                 for task, expected_id in zip(doc["tasks"][1:], expected_task_ids[1:]):
                     self.assertEqual(task["dependencies"], [expected_task_ids[expected_task_ids.index(expected_id) - 1]])
 
+    def test_scope_split_plan_names_each_review_unit_and_skips_in_place_repair(self):
+        plan = async_repair.build_repair_scope_split_plan(
+            pr(),
+            repo="Neko-Catpital-Labs/Invoker",
+            review_units=("proof", "tooling-policy"),
+            review_unit="proof",
+            errors=("Diff atomicity violation: test-assertion-weakened",),
+            details_url="https://example.invalid/job",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        doc = yaml.safe_load(plan.yaml_text)
+        self.assertEqual([task["id"] for task in doc["tasks"]], ["repair", "normalize", "safe-push"])
+        self.assertIn("--scope-split", doc["tasks"][1]["command"])
+        self.assertIn("proof, tooling-policy", plan.yaml_text)
+        self.assertIn("scripts/create-pr.mjs", plan.yaml_text)
+        self.assertIn("test-assertion-weakened", plan.yaml_text)
+        self.assertNotIn("Diagnose why it is failing", plan.yaml_text)
+        self.assertTrue(plan.plan_name.startswith("admin-bypass-repair-scope-split-pr-2647-"))
+
     def test_repair_check_plan_includes_three_tasks_in_dependency_order(self):
         plan = async_repair.build_repair_check_plan(
             pr(),
@@ -127,6 +147,53 @@ class AsyncRepairPlanTests(unittest.TestCase):
         )
         # PR titles with quotes/colons must not corrupt the YAML document.
         self.assertIn('Fix \\"quoted\\" title: with colons', plan.yaml_text)
+
+    def test_repair_check_plan_keeps_commits_in_task_checkout(self):
+        plan = async_repair.build_repair_check_plan(
+            pr(),
+            "PR Body",
+            repo="owner/repo",
+            details_url="https://example.invalid/job",
+            log_path="/tmp/pr-body.log",
+            queue_only=False,
+            queue_pr_number=0,
+            latest=None,
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("Stay in this Invoker task checkout", plan.yaml_text)
+        self.assertIn("Do not run `git clone`, `git worktree add`", plan.yaml_text)
+        self.assertIn("do not push", plan.yaml_text.lower())
+        self.assertNotIn("Work directly on its branch", plan.yaml_text)
+        self.assertNotIn(f"git checkout {pr().head_ref_name}", plan.yaml_text)
+        self.assertIn(f"git fetch origin {pr().head_ref_name}", plan.yaml_text)
+        blocked_by = ("git worktree add", "Stay in this Invoker task checkout", "Never create a second worktree")
+        for needle in blocked_by:
+            self.assertIn(needle, plan.yaml_text)
+
+        scope = async_repair.build_repair_scope_split_plan(
+            pr(),
+            repo="Neko-Catpital-Labs/Invoker",
+            review_units=("proof", "tooling-policy"),
+            review_unit="proof",
+            errors=("Diff atomicity violation: test-assertion-weakened",),
+            details_url="https://example.invalid/job",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("Do not run `git clone`, `git worktree add`", scope.yaml_text)
+        self.assertNotIn("Work directly on its branch", scope.yaml_text)
+
+        rebase = async_repair.build_rebase_onto_master_plan(
+            pr(),
+            "behind master",
+            repo="owner/repo",
+            start_head=HEAD,
+            state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("Do not run `git clone`, `git worktree add`", rebase.yaml_text)
+        self.assertIn("git rebase origin/", rebase.yaml_text)
+        self.assertNotIn("Work directly on its branch", rebase.yaml_text)
 
     def test_repair_check_plan_runs_normalize_with_bytecode_disabled(self):
         plan = async_repair.build_repair_check_plan(
@@ -378,6 +445,50 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertNotIn("pr_worker_safe_push.py", plan.yaml_text)
         self.assertIn("git push --force-with-lease=refs/heads/'stack/2647':", plan.yaml_text)
         self.assertIn(HEAD, plan.yaml_text)
+
+    def test_foreign_safe_push_exits_21_when_local_head_equals_start_sha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote = root / "remote.git"
+            repo = root / "repo"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            subprocess.run(["git", "clone", str(remote), str(repo)], check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "worker@example.invalid"],
+                cwd=repo, check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Worker Test"],
+                cwd=repo, check=True, capture_output=True,
+            )
+            subprocess.run(["git", "checkout", "-B", "main"], cwd=repo, check=True, capture_output=True)
+            (repo / "file.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+            start = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "push", "origin", "HEAD:refs/heads/main"],
+                cwd=repo, check=True, capture_output=True,
+            )
+            command = async_repair._foreign_safe_push_command(
+                head_ref="main", start_head=start, skip_guard="",
+            )
+            result = subprocess.run(
+                ["bash", "-c", command],
+                cwd=repo,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 21, result.stderr)
+            self.assertIn("head-unchanged", result.stderr)
+            remote_head = subprocess.run(
+                ["git", "ls-remote", "origin", "refs/heads/main"],
+                cwd=repo, check=True, capture_output=True, text=True,
+            ).stdout.split()[0]
+            self.assertEqual(remote_head, start)
 
     def test_foreign_rebase_and_bot_thread_plans_omit_invoker_safe_push(self):
         rebase_plan = async_repair.build_rebase_onto_master_plan(

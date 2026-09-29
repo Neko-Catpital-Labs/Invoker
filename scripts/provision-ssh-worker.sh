@@ -297,6 +297,10 @@ ensure_node() {
       return 0
     fi
   fi
+  if [[ "$SKIP_SYSTEM_PACKAGES" == "1" ]] && node_major_matches; then
+    log "Using existing Node $(node --version) from PATH."
+    return 0
+  fi
   require_command curl
   require_command tar
   local tarball url tmp_dir cleanup_cmd
@@ -431,7 +435,7 @@ host_ready() {
     && host_has_required_commands \
     && node_major_matches \
     && [[ "$(pnpm --version 2>/dev/null || true)" == "$INVOKER_PNPM_VERSION" ]] \
-    && host_has_required_agents
+    && { [[ "$SKIP_AGENT_TOOLS" == "1" ]] || host_has_required_agents; }
 }
 
 write_host_stamp() {

@@ -52,6 +52,17 @@ must_appear_before "before any write" \
   "node scripts/land-stack.mjs <bottom-pr> ... --execute" \
   "land-stack must require the guard before its landing command"
 
+must_contain "batch_size: 1" \
+  "land-stack must document admin-bypass batch_size one"
+must_contain "one PR per queue cycle" \
+  "land-stack must say a labeled stack still lands one PR per cycle"
+must_contain "\`admin-bypass\` to **every** PR in the stack" \
+  "land-stack must label the full verified stack, not only the bottom"
+must_contain "Do not tell the user that labeling the stack merges it as one Mergify batch." \
+  "land-stack must forbid claiming one Mergify batch from labeling alone"
+must_contain "Babysit-until-merged + bot thread" \
+  "land-stack must require the agent to resolve addressed bot threads under babysit"
+
 must_contain "re-run the exact \`gh pr view\`/queue query in that same turn" \
   "land-stack must require a fresh status query before reporting PR state"
 must_contain "\"Merging\" is not \"merged\"" \

@@ -25,12 +25,22 @@ const AGENT_LABEL: Record<AgentLoginAgent, string> = {
   codex: 'Codex',
 };
 
-const LOGIN_FAILURE_SIGNATURES: ReadonlyArray<string> = [
+export const LOGIN_FAILURE_SIGNATURES: ReadonlyArray<string> = [
   'failed to authenticate: oauth session expired and could not be refreshed',
   'your access token could not be refreshed because your refresh token was revoked',
   'please run /login',
   'token_invalidated',
 ];
+
+const EXACT_TOKEN_SIGNATURES = new Set(['token_invalidated']);
+
+export function outputMatchesLoginFailure(text: string): boolean {
+  const lower = text.toLowerCase();
+  return LOGIN_FAILURE_SIGNATURES.some((signature) => {
+    if (!EXACT_TOKEN_SIGNATURES.has(signature)) return lower.includes(signature);
+    return new RegExp(`\\b${signature}\\b`).test(lower);
+  });
+}
 
 export type AgentLoginProbeVerdict = 'ok' | 'login_failed' | 'unchecked';
 
@@ -44,8 +54,7 @@ export interface AgentLoginProbeOutcome {
 export function classifyLoginProbe(outcome: AgentLoginProbeOutcome): AgentLoginProbeVerdict {
   if (outcome.timedOut === true) return 'unchecked';
   if ((outcome.transportError ?? '').trim() !== '') return 'unchecked';
-  const output = (outcome.output ?? '').toLowerCase();
-  if (LOGIN_FAILURE_SIGNATURES.some((signature) => output.includes(signature))) return 'login_failed';
+  if (outputMatchesLoginFailure(outcome.output ?? '')) return 'login_failed';
   return outcome.exitCode === 0 ? 'ok' : 'unchecked';
 }
 

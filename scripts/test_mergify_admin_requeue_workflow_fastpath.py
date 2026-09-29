@@ -512,6 +512,79 @@ class ClassifyRepairOutcome(unittest.TestCase):
         with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
             self.assertEqual(f.classify_repair_outcome("wf-1", "failed"), "code")
 
+    def test_safe_push_exit_21_is_code_with_head_unchanged_reason(self):
+        tasks = [
+            {
+                "id": "wf-1/repair",
+                "status": "completed",
+                "execution": {"exitCode": 0, "phase": "executing", "launchCompletedAt": "t"},
+            },
+            {
+                "id": "wf-1/safe-push",
+                "status": "failed",
+                "execution": {"exitCode": 21, "phase": "executing", "launchCompletedAt": "t"},
+            },
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            detail = f.classify_repair_outcome_detail("wf-1", "failed")
+            self.assertEqual(f.classify_repair_outcome("wf-1", "failed"), "code")
+        self.assertEqual(detail.outcome_class, "code")
+        self.assertEqual(detail.reason, "head-unchanged")
+
+    def test_safe_push_other_nonzero_exit_is_code_with_push_failed_reason(self):
+        tasks = [
+            {
+                "id": "wf-1/repair",
+                "status": "completed",
+                "execution": {"exitCode": 0, "phase": "executing", "launchCompletedAt": "t"},
+            },
+            {
+                "id": "wf-1/safe-push",
+                "status": "failed",
+                "execution": {
+                    "exitCode": 1,
+                    "phase": "executing",
+                    "launchCompletedAt": "t",
+                    "error": "git push failed with exit code 1",
+                },
+            },
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            detail = f.classify_repair_outcome_detail("wf-1", "failed")
+        self.assertEqual(detail.outcome_class, "code")
+        self.assertEqual(detail.reason, "push-failed")
+
+    def test_completed_push_of_new_sha_stays_success(self):
+        tasks = [
+            {
+                "id": "wf-1/repair",
+                "status": "completed",
+                "execution": {"exitCode": 0, "phase": "executing", "launchCompletedAt": "t"},
+            },
+            {
+                "id": "wf-1/safe-push",
+                "status": "completed",
+                "execution": {"exitCode": 0, "phase": "executing", "launchCompletedAt": "t"},
+            },
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            detail = f.classify_repair_outcome_detail("wf-1", "completed")
+        self.assertEqual(detail.outcome_class, "success")
+        self.assertIsNone(detail.reason)
+
+    def test_failed_safe_push_without_exit_code_raises(self):
+        tasks = [
+            {
+                "id": "wf-1/safe-push",
+                "status": "failed",
+                "execution": {"phase": "executing", "launchCompletedAt": "t", "error": "something"},
+            },
+        ]
+        with mock.patch.object(f, "list_workflow_tasks", return_value=tasks):
+            with self.assertRaises(RuntimeError) as raised:
+                f.classify_repair_outcome_detail("wf-1", "failed")
+        self.assertIn("exitCode", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

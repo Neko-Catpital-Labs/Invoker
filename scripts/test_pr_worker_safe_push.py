@@ -164,6 +164,24 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_unchanged_local_head_refuses_push_with_exit_21(self) -> None:
+        ledger = self.root / "ledger.tsv"
+        remote_before = self.remote_head()
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 21, result.stderr)
+        self.assertIn("head-unchanged", result.stderr)
+        self.assertEqual(self.remote_head(), remote_before)
+        self.assertFalse(ledger.exists())
+
     def test_push_lease_failure_records_no_attempt(self) -> None:
         self.clone_other()
         pushed = self.commit(self.repo, "repair")

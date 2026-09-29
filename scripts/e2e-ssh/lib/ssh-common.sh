@@ -152,7 +152,7 @@ invoker_e2e_ssh_provision_command() {
 }
 
 invoker_e2e_ssh_config_provision_command() {
-  printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+  printf 'INVOKER_SKIP_SHELL_HOOKS=1 INVOKER_SKIP_SYSTEM_PACKAGES=1 INVOKER_SKIP_AGENT_TOOLS=1 INVOKER_AGENT_TOOLS= %s\n' "$(invoker_e2e_ssh_provision_command)"
 }
 
 # --------------------------------------------------------------------------- #
