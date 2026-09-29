@@ -347,6 +347,27 @@ describe('agent-login copy code affordance', () => {
     expect(actions.elements[0].text.text).toBe('Copy code');
   });
 
+  it('keeps the start section inside Slack’s 3000-character limit when the login URL is huge', () => {
+    const longUrl = `https://auth.example.test/${'a'.repeat(4000)}`;
+    const blocks = formatAgentLoginStartBlocks(
+      {
+        sessionId: SESSION,
+        provider: 'codex',
+        status: 'awaiting_code',
+        userCode: 'ABCD-EFGH',
+        url: longUrl,
+        message: longUrl,
+      },
+      TARGET,
+    );
+    const section = (blocks ?? []).find((block) => (block as { type?: string }).type === 'section') as {
+      text: { text: string };
+    };
+    expect(section.text.text.length).toBeLessThanOrEqual(3000);
+    expect(section.text.text).toContain('ABCD-EFGH');
+    expect(section.text.text).not.toContain(longUrl);
+  });
+
   it('omits Copy blocks when there is no device code', () => {
     const blocks = formatAgentLoginStartBlocks(
       {

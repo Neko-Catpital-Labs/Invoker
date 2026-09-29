@@ -142,6 +142,18 @@ interface AgentLoginThreadSession {
 }
 
 const CODE_TOKEN = /^[\w.:#@/+=-]{4,256}$/;
+const SLACK_SECTION_TEXT_LIMIT = 3000;
+const SLACK_LOGIN_FIELD_LIMIT = 500;
+
+function boundText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}…`;
+}
+
+function fitSlackSection(text: string): string {
+  if (text.length <= SLACK_SECTION_TEXT_LIMIT) return text;
+  return `${text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1)}…`;
+}
 
 const COMMAND_FAILED = Symbol('agent-login-command-failed');
 
@@ -159,8 +171,9 @@ function label(target: AgentLoginTarget): string {
 }
 
 export function formatAgentLoginStart(view: AgentLoginCommandView, target: AgentLoginTarget): string {
+  const url = view.url === undefined ? undefined : boundText(view.url, SLACK_LOGIN_FIELD_LIMIT);
   const lines = [`Starting the ${label(target)} login for ${target.host}.`];
-  if (view.url) lines.push(`Open this link: ${view.url}`);
+  if (url) lines.push(`Open this link: ${url}`);
   if (view.userCode) lines.push(`Enter this code there: \`${view.userCode}\``);
   if (view.status === 'awaiting_code') {
     lines.push('Then reply in this thread with the code it gives you back.');
@@ -169,7 +182,7 @@ export function formatAgentLoginStart(view: AgentLoginCommandView, target: Agent
   } else {
     lines.push('I will post the result in this thread when it finishes.');
   }
-  if (view.message) lines.push(redactTokenLike(view.message));
+  if (view.message) lines.push(redactTokenLike(boundText(view.message, SLACK_LOGIN_FIELD_LIMIT)));
   return lines.join('\n');
 }
 
@@ -181,7 +194,7 @@ export function formatAgentLoginStartBlocks(
   return [
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: formatAgentLoginStart(view, _target) },
+      text: { type: 'mrkdwn', text: fitSlackSection(formatAgentLoginStart(view, _target)) },
     },
     {
       type: 'actions',
