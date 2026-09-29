@@ -261,17 +261,6 @@ export async function runAdminBypassE2eBabysitTick(
     if (!(Date.now() - Date.parse(row.createdAt) > staleTtlMs)) continue;
 
     const subjectId = `${row.kind}:${row.subject}:${row.stateSha}`;
-    const externalKey = `repair-filing-delete:${subjectId}`;
-    if (!throttle.isThrottled(externalKey)) {
-      actions.push({
-        type: 'repair-filing-delete',
-        kind: row.kind,
-        subject: row.subject,
-        stateSha: row.stateSha,
-        createdAt: row.createdAt,
-      });
-      throttle.mark(externalKey);
-    }
     try {
       await options.repairFilings.deleteRepairFiling(row.kind, row.subject, row.stateSha);
       options.logger.info(`[${ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND}] deleted stale repair filing`, {
@@ -453,7 +442,7 @@ export function registerAdminBypassE2eBabysitWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: ADMIN_BYPASS_E2E_BABYSIT_WORKER_KIND,
-    note: 'Restarts desired-enabled watched workers and expires stale repair-filing claims, then files investigations.',
+    note: 'Restarts desired-enabled watched workers and expires stale repair-filing claims. Files investigations for needs-human findings and worker restarts only.',
     source: 'built-in',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime => {
       const config = deps.adminBypassE2eBabysit ?? {};

@@ -145,7 +145,7 @@ describe('runAdminBypassE2eBabysitTick', () => {
     expect(planSubmitter.submittedPlans[0]).toContain(DEFAULT_WATCHED_WORKER_KINDS[0]);
   });
 
-  it('deletes only a repair filing older than the stale TTL, then files one investigation', async () => {
+  it('deletes only a repair filing older than the stale TTL, without filing an investigation', async () => {
     const now = Date.now();
     const oldRow: RepairFilingRow = {
       kind: 'admin-requeue:rebase-conflict',
@@ -172,10 +172,7 @@ describe('runAdminBypassE2eBabysitTick', () => {
     });
 
     expect(repairFilings.deleteCalls).toEqual([[oldRow.kind, oldRow.subject, oldRow.stateSha]]);
-    expect(planSubmitter.submittedPlans).toHaveLength(1);
-    expect(planSubmitter.submittedPlans[0]).toContain('scratch: true');
-    expect(planSubmitter.submittedPlans[0]).toContain(oldRow.kind);
-    expect(planSubmitter.submittedPlans[0]).toContain(oldRow.subject);
+    expect(planSubmitter.submittedPlans).toEqual([]);
   });
 
   it('never deletes a stale needs-human or investigated-marker row, and still files the investigation', async () => {
