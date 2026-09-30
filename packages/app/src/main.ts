@@ -125,6 +125,9 @@ import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
   loadDefaultExecutionAgent,
+  DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES,
+  DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+  DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
   resolveAutoFixExecutionModel,
   resolveAutoFixPoolId,
   resolveAgentLoginWatchWorkerConfig,
@@ -519,6 +522,15 @@ function buildRegisteredOwnerWorkerDeps(
         name: target.name,
         connection: target.connection,
       })),
+    },
+    thrashDetector: {
+      enabled: invokerConfig.thrashDetector?.enabled,
+      intervalMs: (invokerConfig.thrashDetector?.intervalMinutes
+        ?? DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES) * 60_000,
+      thresholdCount: invokerConfig.thrashDetector?.thresholdCount
+        ?? DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+      windowHours: invokerConfig.thrashDetector?.windowHours
+        ?? DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
     },
     agentLoginWatch: {
       ...resolveAgentLoginWatchWorkerConfig(invokerConfig),

@@ -38,6 +38,9 @@ import {
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
+  DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES,
+  DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+  DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
   resolveAgentLoginWatchWorkerConfig,
   resolvePrMaintenanceWorkerConfig,
   resolveSpendCircuitBreakerWorkerConfig,
@@ -521,6 +524,20 @@ export function resolveHeadlessCatstackDeployConfig(
   };
 }
 
+export function resolveHeadlessThrashDetectorConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['thrashDetector']> {
+  return {
+    enabled: invokerConfig.thrashDetector?.enabled,
+    intervalMs: (invokerConfig.thrashDetector?.intervalMinutes
+      ?? DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES) * 60_000,
+    thresholdCount: invokerConfig.thrashDetector?.thresholdCount
+      ?? DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT,
+    windowHours: invokerConfig.thrashDetector?.windowHours
+      ?? DEFAULT_THRASH_DETECTOR_WINDOW_HOURS,
+  };
+}
+
 export function resolveHeadlessAgentLoginWatchConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
 ): NonNullable<WorkerRuntimeDependencies['agentLoginWatch']> {
@@ -720,6 +737,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      thrashDetector: resolveHeadlessThrashDetectorConfig(deps.invokerConfig),
       agentLoginWatch: resolveHeadlessAgentLoginWatchConfig(deps.invokerConfig),
       messageBus: deps.messageBus,
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),

@@ -235,6 +235,22 @@ export interface CatstackDeployConfig {
 /** Default poll cadence when catstackDeploy.intervalMinutes is unset. */
 export const DEFAULT_CATSTACK_DEPLOY_INTERVAL_MINUTES = 15;
 
+/**
+ * Built-in thrash-detector worker settings. `enabled` seeds worker desired
+ * state in callers that choose to honor it; persisted state remains
+ * authoritative after that.
+ */
+export interface ThrashDetectorConfig {
+  enabled?: boolean;
+  intervalMinutes?: number;
+  thresholdCount?: number;
+  windowHours?: number;
+}
+
+export const DEFAULT_THRASH_DETECTOR_INTERVAL_MINUTES = 30;
+export const DEFAULT_THRASH_DETECTOR_THRESHOLD_COUNT = 3;
+export const DEFAULT_THRASH_DETECTOR_WINDOW_HOURS = 24;
+
 export interface AgentLoginWatchConfig {
   intervalMinutes?: number;
 }
@@ -645,6 +661,7 @@ export interface InvokerConfig {
    * Remotes always come from top-level `remoteTargets`.
    */
   catstackDeploy?: CatstackDeployConfig;
+  thrashDetector?: ThrashDetectorConfig;
   agentLoginWatch?: AgentLoginWatchConfig;
   selfDeploy?: SelfDeployConfig;
   adminBypassE2eBabysit?: AdminBypassE2eBabysitConfig;
