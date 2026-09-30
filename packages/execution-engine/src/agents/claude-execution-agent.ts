@@ -18,6 +18,8 @@ const CLAUDE_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
   { id: 'haiku', label: 'Claude Haiku' },
 ];
 
+const WAIT_NEEDS_WAKEUP_MARKER = 'wait-needs-wakeup/';
+
 function normalizeClaudeModel(executionModel: string): string {
   return executionModel.trim().toLowerCase().replace(/^anthropic[/:]/, '');
 }
@@ -29,18 +31,92 @@ export function resolveClaudeWorkerConfigDir(): string {
   return join(homedir(), '.invoker', 'claude-worker');
 }
 
+type ClaudeHookCommand = {
+  type?: string;
+  command?: string;
+  timeout?: number;
+  [key: string]: unknown;
+};
+
+type ClaudeHookEntry = {
+  matcher?: string;
+  hooks?: ClaudeHookCommand[];
+  [key: string]: unknown;
+};
+
+type ClaudeSettings = {
+  enabledPlugins?: Record<string, unknown>;
+  hooks?: Record<string, ClaudeHookEntry[]>;
+  [key: string]: unknown;
+};
+
+function entryHasWaitNeedsWakeup(entry: ClaudeHookEntry): boolean {
+  const hooks = entry.hooks;
+  if (!Array.isArray(hooks)) return false;
+  return hooks.some(
+    (hook) => typeof hook?.command === 'string' && hook.command.includes(WAIT_NEEDS_WAKEUP_MARKER),
+  );
+}
+
+/**
+ * Copy wait-needs-wakeup hook entries from interactive Claude settings into
+ * worker settings. Every other interactive hook stays out. Worker
+ * enabledPlugins and non-matching hooks are preserved.
+ */
+export function mergeWaitNeedsWakeupSettings(
+  interactive: ClaudeSettings,
+  worker: ClaudeSettings,
+): ClaudeSettings {
+  const interactiveHooks = interactive.hooks;
+  if (!interactiveHooks || typeof interactiveHooks !== 'object') {
+    return structuredClone(worker);
+  }
+
+  const result: ClaudeSettings = structuredClone(worker);
+  const workerHooks: Record<string, ClaudeHookEntry[]> = { ...(result.hooks ?? {}) };
+
+  for (const [event, entries] of Object.entries(interactiveHooks)) {
+    if (!Array.isArray(entries)) continue;
+    const selected = entries.filter(entryHasWaitNeedsWakeup);
+    if (selected.length === 0) continue;
+    const existing = Array.isArray(workerHooks[event]) ? workerHooks[event] : [];
+    workerHooks[event] = [
+      ...existing.filter((entry) => !entryHasWaitNeedsWakeup(entry)),
+      ...structuredClone(selected),
+    ];
+  }
+
+  result.hooks = workerHooks;
+  return result;
+}
+
+function readJsonObject(path: string): ClaudeSettings | null {
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    return raw as ClaudeSettings;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Ensure worker config exists with credentials only and empty plugins.
+ * Copies wait-needs-wakeup hook entries from interactive ~/.claude/settings.json.
  * Does not rewrite interactive ~/.claude or ~/.claude.json.
  */
-export function ensureClaudeWorkerConfigDir(configDir: string): void {
+export function ensureClaudeWorkerConfigDir(
+  configDir: string,
+  options: { interactiveHome?: string } = {},
+): void {
   try {
     mkdirSync(configDir, { recursive: true });
   } catch {
     return;
   }
+  const interactiveHome = options.interactiveHome ?? homedir();
   const workerJson = join(configDir, '.claude.json');
-  const interactiveJson = join(homedir(), '.claude.json');
+  const interactiveJson = join(interactiveHome, '.claude.json');
   if (!existsSync(workerJson) && existsSync(interactiveJson)) {
     try {
       const raw = JSON.parse(readFileSync(interactiveJson, 'utf8')) as Record<string, unknown>;
@@ -55,9 +131,23 @@ export function ensureClaudeWorkerConfigDir(configDir: string): void {
     }
   }
   const settingsPath = join(configDir, 'settings.json');
-  if (!existsSync(settingsPath)) {
-    writeFileSync(settingsPath, `${JSON.stringify({ enabledPlugins: {} }, null, 2)}\n`);
+  let workerSettings: ClaudeSettings = { enabledPlugins: {} };
+  if (existsSync(settingsPath)) {
+    workerSettings = readJsonObject(settingsPath) ?? { enabledPlugins: {} };
   }
+
+  const interactiveSettingsPath = join(interactiveHome, '.claude', 'settings.json');
+  if (existsSync(interactiveSettingsPath)) {
+    const interactiveSettings = readJsonObject(interactiveSettingsPath);
+    if (interactiveSettings) {
+      workerSettings = mergeWaitNeedsWakeupSettings(interactiveSettings, workerSettings);
+    }
+  }
+
+  if (!('enabledPlugins' in workerSettings)) {
+    workerSettings.enabledPlugins = {};
+  }
+  writeFileSync(settingsPath, `${JSON.stringify(workerSettings, null, 2)}\n`);
 }
 
 function maxTurnsArgs(maxTurns: number | undefined): string[] {

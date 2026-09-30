@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ClaudeExecutionAgent, resolveClaudeWorkerConfigDir } from '../agents/claude-execution-agent.js';
+import {
+  ClaudeExecutionAgent,
+  ensureClaudeWorkerConfigDir,
+  mergeWaitNeedsWakeupSettings,
+  resolveClaudeWorkerConfigDir,
+} from '../agents/claude-execution-agent.js';
 
 describe('ClaudeExecutionAgent', () => {
   const originalEnv = process.env;
@@ -249,6 +254,122 @@ describe('ClaudeExecutionAgent', () => {
         expect(reqs.env.CLAUDE_CONFIG_DIR).toBe(configDir);
       } finally {
         rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+
+    it('copies only wait-needs-wakeup hooks from interactive settings', () => {
+      const interactive = {
+        enabledPlugins: { noise: true },
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/wait-needs-wakeup/claude_pretooluse.py' }],
+            },
+            {
+              matcher: 'Agent',
+              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/cat-mode-default/claude_pretooluse_agent.py' }],
+            },
+          ],
+          Stop: [
+            {
+              matcher: '*',
+              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/wait-needs-wakeup/claude_stop_check.py' }],
+            },
+            {
+              matcher: '*',
+              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/diu-stop/claude_stop_check.py' }],
+            },
+          ],
+        },
+      };
+      const worker = { enabledPlugins: {} };
+      const merged = mergeWaitNeedsWakeupSettings(interactive, worker);
+      expect(merged.enabledPlugins).toEqual({});
+      expect(merged.hooks?.PreToolUse).toHaveLength(1);
+      expect(merged.hooks?.PreToolUse?.[0]?.matcher).toBe('Bash');
+      expect(merged.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command).toContain('wait-needs-wakeup/');
+      expect(merged.hooks?.Stop).toHaveLength(1);
+      expect(merged.hooks?.Stop?.[0]?.hooks?.[0]?.command).toContain('wait-needs-wakeup/');
+      expect(JSON.stringify(merged)).not.toContain('cat-mode-default');
+      expect(JSON.stringify(merged)).not.toContain('diu-stop');
+    });
+
+    it('does not duplicate wait-needs-wakeup on a second merge', () => {
+      const interactive = {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [{ type: 'command', command: 'python3 wait-needs-wakeup/claude_pretooluse.py' }],
+            },
+          ],
+        },
+      };
+      const once = mergeWaitNeedsWakeupSettings(interactive, { enabledPlugins: {} });
+      const twice = mergeWaitNeedsWakeupSettings(interactive, once);
+      expect(twice.hooks?.PreToolUse).toHaveLength(1);
+    });
+
+    it('leaves worker hooks unchanged when interactive settings are missing', () => {
+      const root = mkdtempSync(join(tmpdir(), 'claude-worker-miss-'));
+      const interactiveHome = join(root, 'home');
+      const configDir = join(root, 'worker');
+      mkdirSync(join(interactiveHome, '.claude'), { recursive: true });
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'settings.json'), `${JSON.stringify({
+        enabledPlugins: {},
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [{ type: 'command', command: 'python3 already-there.py' }],
+            },
+          ],
+        },
+      }, null, 2)}\n`);
+      try {
+        ensureClaudeWorkerConfigDir(configDir, { interactiveHome });
+        const worker = JSON.parse(readFileSync(join(configDir, 'settings.json'), 'utf8'));
+        expect(worker.hooks.PreToolUse).toHaveLength(1);
+        expect(worker.hooks.PreToolUse[0].hooks[0].command).toBe('python3 already-there.py');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('does not rewrite interactive ~/.claude/settings.json bytes', () => {
+      const root = mkdtempSync(join(tmpdir(), 'claude-worker-copy-'));
+      const interactiveHome = join(root, 'home');
+      const configDir = join(root, 'worker');
+      const interactiveSettingsPath = join(interactiveHome, '.claude', 'settings.json');
+      mkdirSync(join(interactiveHome, '.claude'), { recursive: true });
+      const interactiveBytes = `${JSON.stringify({
+        enabledPlugins: { keep: true },
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/wait-needs-wakeup/claude_pretooluse.py' }],
+            },
+            {
+              matcher: 'Agent',
+              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/other/hook.py' }],
+            },
+          ],
+        },
+      }, null, 2)}\n`;
+      writeFileSync(interactiveSettingsPath, interactiveBytes);
+      try {
+        ensureClaudeWorkerConfigDir(configDir, { interactiveHome });
+        expect(readFileSync(interactiveSettingsPath, 'utf8')).toBe(interactiveBytes);
+        const worker = JSON.parse(readFileSync(join(configDir, 'settings.json'), 'utf8'));
+        expect(worker.enabledPlugins).toEqual({});
+        expect(worker.hooks.PreToolUse).toHaveLength(1);
+        expect(worker.hooks.PreToolUse[0].hooks[0].command).toContain('wait-needs-wakeup/');
+        expect(JSON.stringify(worker)).not.toContain('other/hook');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
       }
     });
   });
