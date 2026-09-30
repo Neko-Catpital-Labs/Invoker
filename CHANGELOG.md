@@ -8,6 +8,12 @@ All notable changes to Invoker will be documented in this file.
   because an upstream task failed, and retrying that upstream task resurrects
   the skipped task for execution.
 
+## 0.2.0
+
+- Daily prereleases `0.1.1` through `0.1.20` never received a `v*` tag, so
+  the stable channel was still `v0.1.0`. This minor bump publishes current
+  master as the official distribution. `latest` installs follow this cut.
+
 ## 0.1.0
 
 - 0.0.14 through 0.0.19 were version-bumped but never merged into `master`'s
