@@ -130,7 +130,7 @@ def print_repair_acknowledged(action: Action, as_json: bool) -> None:
 
 
 def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClient, logger: AdminBypassLogger) -> dict[int, bool]:
-    # Safety invariant: stale-base checks stay limited to each ready stack's current bottom PR and use GitHub compare so scans never shell out to local git.
+    # Safety invariant: stale-base checks stay limited to each stack's current bottom PR via GitHub compare so a normal scan never touches the filesystem or shells out to real git.
     stale_base_by_pr: dict[int, bool] = {}
     for stack in stacks:
         bottom = current_bottom_pr(stack, trunk)
@@ -174,7 +174,7 @@ def run_cycle(
     release_repair_filing: ReleaseRepairFiling | None = None,
     rules: tuple[str, frozenset[str], frozenset[str]] | None = None,
 ) -> bool:
-    # Safety invariant: multi-repo callers pass pre-resolved foreign-repo rules while single-repo callers keep loading Invoker's local .mergify.yml.
+    # Safety invariant: foreign-repo cron calls must pass pre-resolved rules while single-repo calls keep loading Invoker's local .mergify.yml.
     if rules is not None:
         trunk, _labels, required_checks = rules
     else:
@@ -229,7 +229,7 @@ def run_cycle(
     repair_dispatch_last_error: str | None = None
     open_pr_numbers = set(pr_by_number)
     stale_base_by_pr = compute_stale_base_by_pr(stacks, trunk, args.repo, gh, logger)
-    # Safety invariant: dry runs must not claim repair filings because a fail-closed claim would hide an action that will never dispatch.
+    # Safety invariant: dry runs must not claim repair filings because the real ledger write could fail closed and hide an action from the printed plan.
     dry_run_claim_repair_filing = None if args.dry_run else claim_repair_filing
     dry_run_release_repair_filing = None if args.dry_run else release_repair_filing
     for stack in stacks:
@@ -289,7 +289,7 @@ def run_cycle(
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
                             if outcome.status == "queue_only_noop":
-                                # Safety invariant: queue-only noops must be recorded or an empty-log check can settle invisibly and leave the PR outside the queue.
+                                # Safety invariant: a queue-only noop with an empty job log must be recorded so plan_bottom_progress can restore the admin-bypass label.
                                 ledger.record("queue-only-noop", pr.number, pr.head_ref_oid, check_name, now)
                                 logger.trace(
                                     "admin-bypass-queue-only-noop",
@@ -298,7 +298,7 @@ def run_cycle(
                                     check_name=check_name,
                                 )
                             elif outcome.status == "noop" and check_name == "PR Body":
-                                # Safety invariant: PR Body noops must be recorded or already-valid, merged, or closed PRs repeat local checkout validation every tick.
+                                # Safety invariant: PR Body noop repairs must be recorded so already-valid or mid-repair closed PRs do not repeat local checkout validation every tick.
                                 ledger.record("repair-noop", pr.number, pr.head_ref_oid, check_name, now)
                                 logger.trace(
                                     "admin-bypass-repair-noop",
@@ -321,7 +321,7 @@ def run_cycle(
                         key=action.key,
                         error=str(exc),
                     )
-                    # Safety invariant: failed repair dispatches release both possible repair-check claim shapes because Action does not identify the planner source; bot-review threads have no claim to release.
+                    # Safety invariant: dispatch failures must release non-bot repair_check claims for both plain head_ref_oid and mergify_check_state_sha shapes because Action does not identify its planner source.
                     if release_repair_filing is not None and not action.key.startswith("bot_review_thread:"):
                         kind = repair_filing_kind_for_check(action.key)
                         release_repair_filing(kind, str(action.pr_number), pr.head_ref_oid)
@@ -502,7 +502,7 @@ def fold_status_entries(
     rows: Sequence[object],
     pr_filter: Sequence[int] = (),
 ) -> tuple[list[dict[str, object]], list[str]]:
-    # Safety invariant: rows that cannot key by PR number are reported as unreadable so a partial digest cannot look complete.
+    # Safety invariant: rows that cannot be keyed by PR number must be reported as unreadable so a partial digest cannot look complete.
     wanted = {int(number) for number in pr_filter}
     latest: dict[tuple[str, int, str, str], dict[str, object]] = {}
     unreadable: list[str] = []
@@ -555,7 +555,7 @@ def group_status_entries(entries: Sequence[dict[str, object]]) -> list[tuple[str
 
 
 def count_unparsable_ledger_lines(state_file: Path, parsed_rows: int) -> int:
-    # Safety invariant: ledger lines dropped during Ledger.__init__ stay visible in the status digest as unreadable rows.
+    # Safety invariant: undecodable ledger lines must remain visible in status output rather than making a silently shortened ledger look complete.
     if not state_file.exists():
         return 0
     try:
@@ -589,7 +589,7 @@ def render_status(
     return "\n".join(lines) + "\n"
 
 
-# Safety invariant: --status returns from ledger-only code before any GhClient, subprocess, or Ledger.record() path is reachable.
+# Safety invariant: --status loads the ledger file and returns before any GhClient, subprocess, or Ledger.record() call path is reachable.
 def run_status(args: argparse.Namespace) -> int:
     state_file = Path(args.state_file).expanduser()
     ledger = Ledger(state_file)
@@ -666,7 +666,7 @@ def run_loop(
 
 
 def resolve_rules_for_repo(repo: str, gh: GhClient) -> tuple[str, frozenset[str], frozenset[str]]:
-    # Safety invariant: Invoker uses its local .mergify.yml while foreign repos resolve their rule/default branch through GitHub because no local checkout exists.
+    # Safety invariant: Invoker reads the local .mergify.yml while every foreign target repo resolves its rule and default branch from GitHub.
     if repo == DEFAULT_INVOKER_REPO:
         try:
             return load_mergify_rules(REPO_ROOT / ".mergify.yml")
@@ -708,7 +708,7 @@ def run_cron_target_repos(
     release_repair_filing: ReleaseRepairFiling | None = None,
     gh: GhClient | None = None,
 ) -> int:
-    # Safety invariant: each cron target gets its own resolved rules and args.repo, and one repo's failure is skipped without aborting the tick.
+    # Safety invariant: multi-repo cron scans must isolate each repo's rules and args while logging one repo's failure without aborting the tick.
     gh = gh or GhClient()
     had_failure = False
     ordered_repos = rotate_target_repos(target_repos, Path(args.state_file).expanduser().with_suffix(".repo-rotation"))
