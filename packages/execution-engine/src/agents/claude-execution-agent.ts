@@ -62,7 +62,6 @@ function normalizeMarkers(raw: unknown): string[] {
   return out;
 }
 
-/** Markers from env override, else ~/.invoker/claude-worker-hooks.json. Empty means copy nothing. */
 export function resolveWorkerHookMarkers(
   interactiveHome: string = homedir(),
   environ: NodeJS.ProcessEnv = process.env,
@@ -92,12 +91,6 @@ function entryMatchesMarkers(entry: ClaudeHookEntry, markers: string[]): boolean
   });
 }
 
-/**
- * Copy allowlisted hook entries from interactive Claude settings into worker
- * settings. Markers are path segments such as "poll-hook". Every other
- * interactive hook stays out. Worker enabledPlugins and non-matching hooks
- * are preserved.
- */
 export function mergeAllowedWorkerHooks(
   interactive: ClaudeSettings,
   worker: ClaudeSettings,
@@ -125,7 +118,6 @@ export function mergeAllowedWorkerHooks(
     workerHooks[event] = [...kept, ...structuredClone(selected)];
   }
 
-  // Also strip allowlisted entries from worker events that interactive lacks.
   for (const [event, entries] of Object.entries(workerHooks)) {
     if (!Array.isArray(entries)) continue;
     if (Array.isArray(interactiveHooks[event])) continue;
