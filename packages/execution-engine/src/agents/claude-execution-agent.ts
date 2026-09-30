@@ -18,6 +18,9 @@ const CLAUDE_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
   { id: 'haiku', label: 'Claude Haiku' },
 ];
 
+const WORKER_HOOKS_FILE = join('.invoker', 'claude-worker-hooks.json');
+const WORKER_HOOKS_ENV = 'INVOKER_CLAUDE_WORKER_HOOKS';
+
 function normalizeClaudeModel(executionModel: string): string {
   return executionModel.trim().toLowerCase().replace(/^anthropic[/:]/, '');
 }
@@ -29,18 +32,129 @@ export function resolveClaudeWorkerConfigDir(): string {
   return join(homedir(), '.invoker', 'claude-worker');
 }
 
+type ClaudeHookCommand = {
+  type?: string;
+  command?: string;
+  timeout?: number;
+  [key: string]: unknown;
+};
+
+type ClaudeHookEntry = {
+  matcher?: string;
+  hooks?: ClaudeHookCommand[];
+  [key: string]: unknown;
+};
+
+type ClaudeSettings = {
+  enabledPlugins?: Record<string, unknown>;
+  hooks?: Record<string, ClaudeHookEntry[]>;
+  [key: string]: unknown;
+};
+
+function normalizeMarkers(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const marker = item.trim().replace(/\/+$/, '');
+    if (marker) out.push(marker);
+  }
+  return out;
+}
+
+export function resolveWorkerHookMarkers(
+  interactiveHome: string = homedir(),
+  environ: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const envRaw = environ[WORKER_HOOKS_ENV];
+  if (typeof envRaw === 'string' && envRaw.trim() !== '') {
+    return normalizeMarkers(envRaw.split(','));
+  }
+  const path = join(interactiveHome, WORKER_HOOKS_FILE);
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return normalizeMarkers((parsed as { hooks?: unknown }).hooks);
+  } catch {
+    return [];
+  }
+}
+
+function entryMatchesMarkers(entry: ClaudeHookEntry, markers: string[]): boolean {
+  if (markers.length === 0) return false;
+  const hooks = entry.hooks;
+  if (!Array.isArray(hooks)) return false;
+  return hooks.some((hook) => {
+    if (typeof hook?.command !== 'string') return false;
+    return markers.some((marker) => hook.command!.includes(`${marker}/`));
+  });
+}
+
+export function mergeAllowedWorkerHooks(
+  interactive: ClaudeSettings,
+  worker: ClaudeSettings,
+  markers: string[],
+): ClaudeSettings {
+  const result: ClaudeSettings = structuredClone(worker);
+  if (markers.length === 0) return result;
+
+  const interactiveHooks = interactive.hooks;
+  if (!interactiveHooks || typeof interactiveHooks !== 'object') {
+    return result;
+  }
+
+  const workerHooks: Record<string, ClaudeHookEntry[]> = { ...(result.hooks ?? {}) };
+
+  for (const [event, entries] of Object.entries(interactiveHooks)) {
+    if (!Array.isArray(entries)) continue;
+    const selected = entries.filter((entry) => entryMatchesMarkers(entry, markers));
+    const existing = Array.isArray(workerHooks[event]) ? workerHooks[event] : [];
+    const kept = existing.filter((entry) => !entryMatchesMarkers(entry, markers));
+    if (selected.length === 0) {
+      if (kept.length !== existing.length) workerHooks[event] = kept;
+      continue;
+    }
+    workerHooks[event] = [...kept, ...structuredClone(selected)];
+  }
+
+  for (const [event, entries] of Object.entries(workerHooks)) {
+    if (!Array.isArray(entries)) continue;
+    if (Array.isArray(interactiveHooks[event])) continue;
+    workerHooks[event] = entries.filter((entry) => !entryMatchesMarkers(entry, markers));
+  }
+
+  result.hooks = workerHooks;
+  return result;
+}
+
+function readJsonObject(path: string): ClaudeSettings | null {
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    return raw as ClaudeSettings;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Ensure worker config exists with credentials only and empty plugins.
+ * Copies allowlisted hook entries from interactive ~/.claude/settings.json.
  * Does not rewrite interactive ~/.claude or ~/.claude.json.
  */
-export function ensureClaudeWorkerConfigDir(configDir: string): void {
+export function ensureClaudeWorkerConfigDir(
+  configDir: string,
+  options: { interactiveHome?: string } = {},
+): void {
   try {
     mkdirSync(configDir, { recursive: true });
   } catch {
     return;
   }
+  const interactiveHome = options.interactiveHome ?? homedir();
   const workerJson = join(configDir, '.claude.json');
-  const interactiveJson = join(homedir(), '.claude.json');
+  const interactiveJson = join(interactiveHome, '.claude.json');
   if (!existsSync(workerJson) && existsSync(interactiveJson)) {
     try {
       const raw = JSON.parse(readFileSync(interactiveJson, 'utf8')) as Record<string, unknown>;
@@ -55,9 +169,24 @@ export function ensureClaudeWorkerConfigDir(configDir: string): void {
     }
   }
   const settingsPath = join(configDir, 'settings.json');
-  if (!existsSync(settingsPath)) {
-    writeFileSync(settingsPath, `${JSON.stringify({ enabledPlugins: {} }, null, 2)}\n`);
+  let workerSettings: ClaudeSettings = { enabledPlugins: {} };
+  if (existsSync(settingsPath)) {
+    workerSettings = readJsonObject(settingsPath) ?? { enabledPlugins: {} };
   }
+
+  const markers = resolveWorkerHookMarkers(interactiveHome);
+  const interactiveSettingsPath = join(interactiveHome, '.claude', 'settings.json');
+  if (markers.length > 0 && existsSync(interactiveSettingsPath)) {
+    const interactiveSettings = readJsonObject(interactiveSettingsPath);
+    if (interactiveSettings) {
+      workerSettings = mergeAllowedWorkerHooks(interactiveSettings, workerSettings, markers);
+    }
+  }
+
+  if (!('enabledPlugins' in workerSettings)) {
+    workerSettings.enabledPlugins = {};
+  }
+  writeFileSync(settingsPath, `${JSON.stringify(workerSettings, null, 2)}\n`);
 }
 
 function maxTurnsArgs(maxTurns: number | undefined): string[] {
