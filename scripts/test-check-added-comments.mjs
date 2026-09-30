@@ -132,6 +132,17 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
   const diff = [
     'diff --git a/scripts/thing.py b/scripts/thing.py',
     '+++ b/scripts/thing.py',
+    '@@ -0,0 +1,2 @@',
+    '+# Safety invariant: a checked constraint may stay as one marked line.',
+    '+value = 1',
+    '',
+  ].join('\n');
+  assert.equal(collectAddedCommentViolations(diff).length, 0);
+}
+{
+  const diff = [
+    'diff --git a/scripts/thing.py b/scripts/thing.py',
+    '+++ b/scripts/thing.py',
     '@@ -0,0 +1,3 @@',
     '+def add(a, b):',
     '+    """Add two numbers."""',
@@ -212,6 +223,29 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
     assert.throws(
       () => execFileSync(process.execPath, [scriptPath, '--root', root, '--base', 'HEAD'], { encoding: 'utf8' }),
       /newly-added comment/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'invoker-comment-file-check-'));
+  try {
+    mkdirSync(path.join(root, 'scripts'), { recursive: true });
+    writeFileSync(path.join(root, 'scripts/allowed.py'), '# Safety invariant: the file mode accepts marked constraints.\nvalue = 1\n');
+    execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/allowed.py'], { encoding: 'utf8' });
+
+    writeFileSync(path.join(root, 'scripts/noisy.py'), 'value = 1  # explains the obvious\n');
+    assert.throws(
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/noisy.py'], { encoding: 'utf8' }),
+      /newly-added comment/,
+    );
+
+    writeFileSync(path.join(root, 'scripts/unchecked.txt'), 'value = 1\n');
+    assert.throws(
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/unchecked.txt'], { encoding: 'utf8' }),
+      /not checked by comment policy/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

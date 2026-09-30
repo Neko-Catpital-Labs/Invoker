@@ -29,7 +29,6 @@ const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([
 const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
   'scripts/analyze-json-log.py',
   'scripts/codex-session-audit.py',
-  'scripts/mergify_admin_requeue_async_repair.py',
   'scripts/mergify_admin_requeue_exec.py',
   'scripts/mergify_admin_requeue_headless_shell.py',
   'scripts/mergify_admin_requeue_infra_signal.py',
@@ -142,7 +141,7 @@ function defaultBase(root) {
   return '';
 }
 
-function isCheckedFile(filePath) {
+function isCheckedFile(filePath, { ignoreGrandfathered = false } = {}) {
   const normalized = filePath.split(path.sep).join('/');
   const basename = path.basename(normalized);
   const extension = path.extname(basename);
@@ -156,7 +155,7 @@ function isCheckedFile(filePath) {
   if (basename.includes('.test.') || basename.includes('.spec.') || basename.includes('.stories.') || basename.startsWith('test-') || basename.startsWith('test_')) {
     return false;
   }
-  if (PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED.has(normalized)) {
+  if (!ignoreGrandfathered && PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED.has(normalized)) {
     return false;
   }
 
@@ -164,12 +163,12 @@ function isCheckedFile(filePath) {
   return !parts.some((part) => SKIPPED_PATH_PARTS.has(part));
 }
 
-function isCheckedSkillMarkdownFile(filePath) {
+function isCheckedSkillMarkdownFile(filePath, { ignoreGrandfathered = false } = {}) {
   const normalized = filePath.split(path.sep).join('/');
   if (!normalized.startsWith('skills/') || path.extname(normalized) !== '.md') {
     return false;
   }
-  if (MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED.has(normalized)) {
+  if (!ignoreGrandfathered && MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED.has(normalized)) {
     return false;
   }
 
@@ -529,9 +528,24 @@ function buildFullFileDiffText(relativePath, content) {
   ].join('\n');
 }
 
+function normalizedRelativeFilePath(root, filePath) {
+  const absolutePath = path.resolve(root, filePath);
+  const relativePath = path.relative(root, absolutePath);
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    console.error(`[comments] --file must be inside --root: ${filePath}`);
+    process.exit(2);
+  }
+  return relativePath.split(path.sep).join('/');
+}
+
 function fileSources(root, files) {
   return files.map((filePath) => {
-    const relativePath = path.relative(root, path.resolve(root, filePath)).split(path.sep).join('/');
+    const relativePath = normalizedRelativeFilePath(root, filePath);
+    const isMarkdown = isCheckedSkillMarkdownFile(relativePath, { ignoreGrandfathered: true });
+    if (!isCheckedFile(relativePath, { ignoreGrandfathered: true }) && !isMarkdown) {
+      console.error(`[comments] --file target is not checked by comment policy: ${relativePath}`);
+      process.exit(1);
+    }
     return {
       name: `--file ${relativePath}`,
       text: buildFullFileDiffText(relativePath, loadWorkingTreeFile(root, relativePath)),
