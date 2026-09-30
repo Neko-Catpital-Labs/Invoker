@@ -29,7 +29,6 @@ const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([
 const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
   'scripts/analyze-json-log.py',
   'scripts/codex-session-audit.py',
-  'scripts/mergify_admin_requeue_async_repair.py',
   'scripts/mergify_admin_requeue_exec.py',
   'scripts/mergify_admin_requeue_headless_shell.py',
   'scripts/mergify_admin_requeue_infra_signal.py',
@@ -514,6 +513,16 @@ function markdownFenceMapResolver(loadContent) {
   };
 }
 
+function normalizedRelativeFilePath(root, filePath) {
+  const absolutePath = path.resolve(root, filePath);
+  const relativePath = path.relative(root, absolutePath);
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    console.error(`[comments] --file must be inside --root: ${filePath}`);
+    process.exit(2);
+  }
+  return relativePath.split(path.sep).join('/');
+}
+
 function buildFullFileDiffText(relativePath, content) {
   let lines = content === '' ? [] : content.split('\n');
   if (lines.length > 0 && content.endsWith('\n')) {
@@ -531,7 +540,13 @@ function buildFullFileDiffText(relativePath, content) {
 
 function fileSources(root, files) {
   return files.map((filePath) => {
-    const relativePath = path.relative(root, path.resolve(root, filePath)).split(path.sep).join('/');
+    const relativePath = normalizedRelativeFilePath(root, filePath);
+    const isMarkdown = isCheckedSkillMarkdownFile(relativePath);
+    if (!isCheckedFile(relativePath) && !isMarkdown) {
+      console.error(`[comments] --file target is not checked by comment policy: ${relativePath}`);
+      process.exit(1);
+    }
+
     return {
       name: `--file ${relativePath}`,
       text: buildFullFileDiffText(relativePath, loadWorkingTreeFile(root, relativePath)),
