@@ -130,13 +130,7 @@ def print_repair_acknowledged(action: Action, as_json: bool) -> None:
 
 
 def compute_stale_base_by_pr(stacks: Sequence, trunk: str, repo: str, gh: GhClient, logger: AdminBypassLogger) -> dict[int, bool]:
-    # Only checked for each stack's current bottom PR (base already == trunk,
-    # otherwise there is nothing to rebase onto yet) -- this bounds the cost
-    # to one `gh api compare` call per ready-to-land stack per tick, not one
-    # per candidate PR scanned. Uses GitHub's compare API instead of a local
-    # git checkout so a normal scan never touches the filesystem or shells
-    # out to real git -- the legacy `rebase_onto_base` executor action (no longer
-    # planned for behind-master alone) is the one place that actually clones.
+    # Safety invariant: stale-base checks stay limited to each stack's current bottom PR via GitHub compare so a normal scan never touches the filesystem or shells out to real git.
     stale_base_by_pr: dict[int, bool] = {}
     for stack in stacks:
         bottom = current_bottom_pr(stack, trunk)
@@ -180,12 +174,7 @@ def run_cycle(
     release_repair_filing: ReleaseRepairFiling | None = None,
     rules: tuple[str, frozenset[str], frozenset[str]] | None = None,
 ) -> bool:
-    # `rules` lets a multi-repo caller (run_cron_target_repos) pass in a
-    # rule tuple it already resolved for a foreign repo via
-    # resolve_admin_bypass_rules_for_repo, instead of always loading
-    # Invoker's own local .mergify.yml regardless of args.repo. Every
-    # existing single-repo caller omits it and keeps this exact prior
-    # behavior.
+    # Safety invariant: foreign-repo cron calls must pass pre-resolved rules while single-repo calls keep loading Invoker's local .mergify.yml.
     if rules is not None:
         trunk, _labels, required_checks = rules
     else:
@@ -240,12 +229,7 @@ def run_cycle(
     repair_dispatch_last_error: str | None = None
     open_pr_numbers = set(pr_by_number)
     stale_base_by_pr = compute_stale_base_by_pr(stacks, trunk, args.repo, gh, logger)
-    # A dry run never dispatches a repair (see the `if args.dry_run: continue`
-    # below, right after print_action), so it has nothing to dedup against
-    # other systems for -- claiming here would perform a real ledger write
-    # for a filing that's never going to happen, and a claim that fails
-    # closed (ledger/owner unreachable) would silently drop the action from
-    # the printed plan instead.
+    # Safety invariant: dry runs must not claim repair filings because the real ledger write could fail closed and hide an action from the printed plan.
     dry_run_claim_repair_filing = None if args.dry_run else claim_repair_filing
     dry_run_release_repair_filing = None if args.dry_run else release_repair_filing
     for stack in stacks:
@@ -305,11 +289,7 @@ def run_cycle(
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
                             if outcome.status == "queue_only_noop":
-                                # See plan.py's latest_queue_only_noop_check: without this
-                                # record, a queue-only check with an empty job log settles
-                                # here and then goes nowhere -- plan_bottom_progress can
-                                # never see it, so the admin-bypass label never comes back
-                                # and the PR is stuck outside the queue for good.
+                                # Safety invariant: a queue-only noop with an empty job log must be recorded so plan_bottom_progress can restore the admin-bypass label.
                                 ledger.record("queue-only-noop", pr.number, pr.head_ref_oid, check_name, now)
                                 logger.trace(
                                     "admin-bypass-queue-only-noop",
@@ -318,11 +298,7 @@ def run_cycle(
                                     check_name=check_name,
                                 )
                             elif outcome.status == "noop" and check_name == "PR Body":
-                                # See plan.py's plan_stack_execution: without this record,
-                                # a PR whose body is already valid (or whose PR was merged/
-                                # closed mid-repair) keeps re-running the same local PR-Body
-                                # checkout+validate cycle every tick instead of the bottom
-                                # check staying suppressed.
+                                # Safety invariant: PR Body noop repairs must be recorded so already-valid or mid-repair closed PRs do not repeat local checkout validation every tick.
                                 ledger.record("repair-noop", pr.number, pr.head_ref_oid, check_name, now)
                                 logger.trace(
                                     "admin-bypass-repair-noop",
@@ -345,23 +321,7 @@ def run_cycle(
                         key=action.key,
                         error=str(exc),
                     )
-                    # The planner already claimed this key (if claim_repair_filing was
-                    # wired in) before returning this Action; the actual dispatch
-                    # (fastpath or repairer.repair_check) never completed, so release
-                    # the claim or this key would be permanently blocked from every
-                    # future retry. bot_review_thread repairs are planned by
-                    # plan_bot_thread_repairs, which is not gated by claim_repair_filing,
-                    # so there is nothing to release for that key shape.
-                    #
-                    # A "repair_check" Action can come from either
-                    # mergify_failed_check_actions (claims with
-                    # mergify_check_state_sha, a composite of head_ref_oid and
-                    # the Mergify comment_id -- see that function) or
-                    # plan_direct_repairs' own failed_check path (claims with
-                    # the plain head_ref_oid); the Action itself carries no
-                    # record of which one produced it, so release both
-                    # possible shapes -- releasing a key that was never
-                    # claimed is a safe no-op.
+                    # Safety invariant: dispatch failures must release non-bot repair_check claims for both plain head_ref_oid and mergify_check_state_sha shapes because Action does not identify its planner source.
                     if release_repair_filing is not None and not action.key.startswith("bot_review_thread:"):
                         kind = repair_filing_kind_for_check(action.key)
                         release_repair_filing(kind, str(action.pr_number), pr.head_ref_oid)
@@ -542,9 +502,7 @@ def fold_status_entries(
     rows: Sequence[object],
     pr_filter: Sequence[int] = (),
 ) -> tuple[list[dict[str, object]], list[str]]:
-    # Returns (entries, unreadable): a row this fold cannot key by PR number is
-    # reported as unreadable rather than dropped, so a partial digest can never
-    # be mistaken for a complete one.
+    # Safety invariant: rows that cannot be keyed by PR number must be reported as unreadable so a partial digest cannot look complete.
     wanted = {int(number) for number in pr_filter}
     latest: dict[tuple[str, int, str, str], dict[str, object]] = {}
     unreadable: list[str] = []
@@ -597,9 +555,7 @@ def group_status_entries(entries: Sequence[dict[str, object]]) -> list[tuple[str
 
 
 def count_unparsable_ledger_lines(state_file: Path, parsed_rows: int) -> int:
-    # Ledger.__init__ drops any line it cannot decode into a dict. Counting the
-    # difference here keeps those lines visible in the digest instead of letting
-    # a silently shortened ledger read as a complete one.
+    # Safety invariant: undecodable ledger lines must remain visible in status output rather than making a silently shortened ledger look complete.
     if not state_file.exists():
         return 0
     try:
@@ -633,8 +589,7 @@ def render_status(
     return "\n".join(lines) + "\n"
 
 
-# Read-only by construction: loads the ledger file and returns before any
-# GhClient, subprocess, or Ledger.record() call path is reachable.
+# Safety invariant: --status loads the ledger file and returns before any GhClient, subprocess, or Ledger.record() call path is reachable.
 def run_status(args: argparse.Namespace) -> int:
     state_file = Path(args.state_file).expanduser()
     ledger = Ledger(state_file)
@@ -711,12 +666,7 @@ def run_loop(
 
 
 def resolve_rules_for_repo(repo: str, gh: GhClient) -> tuple[str, frozenset[str], frozenset[str]]:
-    # The Invoker repo itself always reads its own local checkout's
-    # .mergify.yml (matches load_mergify_rules' pre-existing single-repo
-    # behavior exactly, and avoids a needless network round trip for the
-    # repo cron already runs from). Every other target repo has no local
-    # checkout to read, so its rule (if any) and default branch come from
-    # the GitHub API instead.
+    # Safety invariant: Invoker reads the local .mergify.yml while every foreign target repo resolves its rule and default branch from GitHub.
     if repo == DEFAULT_INVOKER_REPO:
         try:
             return load_mergify_rules(REPO_ROOT / ".mergify.yml")
@@ -758,12 +708,7 @@ def run_cron_target_repos(
     release_repair_filing: ReleaseRepairFiling | None = None,
     gh: GhClient | None = None,
 ) -> int:
-    # Cron entry point for scanning more than one repo in a single tick.
-    # Each repo gets its own rule resolution (its own Mergify text/default
-    # branch, per resolve_rules_for_repo) and its own args.repo so every
-    # downstream call (ledger, executor, repairer, fastpath) stays scoped
-    # to that one repo. One repo's rule-resolution or scan failure is
-    # logged and skipped rather than aborting the whole cron tick.
+    # Safety invariant: multi-repo cron scans must isolate each repo's rules and args while logging one repo's failure without aborting the tick.
     gh = gh or GhClient()
     had_failure = False
     ordered_repos = rotate_target_repos(target_repos, Path(args.state_file).expanduser().with_suffix(".repo-rotation"))
