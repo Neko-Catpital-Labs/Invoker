@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
@@ -50,19 +50,16 @@ type ClaudeSettings = {
   [key: string]: unknown;
 };
 
+function hookHasWaitNeedsWakeup(hook: ClaudeHookCommand): boolean {
+  return typeof hook?.command === 'string' && hook.command.includes(WAIT_NEEDS_WAKEUP_MARKER);
+}
+
 function entryHasWaitNeedsWakeup(entry: ClaudeHookEntry): boolean {
   const hooks = entry.hooks;
   if (!Array.isArray(hooks)) return false;
-  return hooks.some(
-    (hook) => typeof hook?.command === 'string' && hook.command.includes(WAIT_NEEDS_WAKEUP_MARKER),
-  );
+  return hooks.some(hookHasWaitNeedsWakeup);
 }
 
-/**
- * Copy wait-needs-wakeup hook entries from interactive Claude settings into
- * worker settings. Every other interactive hook stays out. Worker
- * enabledPlugins and non-matching hooks are preserved.
- */
 export function mergeWaitNeedsWakeupSettings(
   interactive: ClaudeSettings,
   worker: ClaudeSettings,
@@ -77,12 +74,17 @@ export function mergeWaitNeedsWakeupSettings(
 
   for (const [event, entries] of Object.entries(interactiveHooks)) {
     if (!Array.isArray(entries)) continue;
-    const selected = entries.filter(entryHasWaitNeedsWakeup);
+    const selected = entries
+      .filter(entryHasWaitNeedsWakeup)
+      .map((entry) => ({
+        ...structuredClone(entry),
+        hooks: structuredClone((entry.hooks ?? []).filter(hookHasWaitNeedsWakeup)),
+      }));
     if (selected.length === 0) continue;
     const existing = Array.isArray(workerHooks[event]) ? workerHooks[event] : [];
     workerHooks[event] = [
       ...existing.filter((entry) => !entryHasWaitNeedsWakeup(entry)),
-      ...structuredClone(selected),
+      ...selected,
     ];
   }
 
@@ -102,7 +104,6 @@ function readJsonObject(path: string): ClaudeSettings | null {
 
 /**
  * Ensure worker config exists with credentials only and empty plugins.
- * Copies wait-needs-wakeup hook entries from interactive ~/.claude/settings.json.
  * Does not rewrite interactive ~/.claude or ~/.claude.json.
  */
 export function ensureClaudeWorkerConfigDir(
@@ -147,7 +148,9 @@ export function ensureClaudeWorkerConfigDir(
   if (!('enabledPlugins' in workerSettings)) {
     workerSettings.enabledPlugins = {};
   }
-  writeFileSync(settingsPath, `${JSON.stringify(workerSettings, null, 2)}\n`);
+  const tempSettingsPath = join(configDir, `settings.${process.pid}.${randomUUID()}.tmp`);
+  writeFileSync(tempSettingsPath, `${JSON.stringify(workerSettings, null, 2)}\n`);
+  renameSync(tempSettingsPath, settingsPath);
 }
 
 function maxTurnsArgs(maxTurns: number | undefined): string[] {

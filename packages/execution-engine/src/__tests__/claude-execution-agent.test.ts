@@ -295,6 +295,28 @@ describe('ClaudeExecutionAgent', () => {
       expect(JSON.stringify(merged)).not.toContain('diu-stop');
     });
 
+    it('filters non-wait commands out of matching hook entries', () => {
+      const interactive = {
+        hooks: {
+          Stop: [
+            {
+              matcher: '*',
+              hooks: [
+                { type: 'command', command: 'python3 $HOME/.claude/hooks/wait-needs-wakeup/claude_stop_check.py' },
+                { type: 'command', command: 'python3 $HOME/.claude/hooks/other/claude_stop_check.py' },
+              ],
+            },
+          ],
+        },
+      };
+      const merged = mergeWaitNeedsWakeupSettings(interactive, { enabledPlugins: {} });
+      expect(merged.hooks?.Stop).toHaveLength(1);
+      expect(merged.hooks?.Stop?.[0]?.hooks).toEqual([
+        { type: 'command', command: 'python3 $HOME/.claude/hooks/wait-needs-wakeup/claude_stop_check.py' },
+      ]);
+      expect(JSON.stringify(merged)).not.toContain('hooks/other');
+    });
+
     it('does not duplicate wait-needs-wakeup on a second merge', () => {
       const interactive = {
         hooks: {
