@@ -188,11 +188,9 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
     '+result = value  # a whole-file reformat could re-add this line verbatim',
     '',
   ].join('\n');
-  assert.equal(
-    collectAddedCommentViolations(diff).length,
-    0,
-    'a grandfathered legacy-comment Python file must stay exempt even for a genuinely new comment line',
-  );
+  const violations = collectAddedCommentViolations(diff);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
 }
 
 {
@@ -258,6 +256,9 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
       () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/unreadable.py'], { encoding: 'utf8' }),
       /Failed to read --file target scripts\/unreadable\.py/,
     );
+
+    writeFileSync(path.join(root, 'scripts/pr_worker_safe_push.py'), 'value = 1\n');
+    execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/pr_worker_safe_push.py'], { encoding: 'utf8' });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

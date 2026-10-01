@@ -102,15 +102,7 @@ def _is_ancestor(ancestor: str, descendant: str, *, cwd: Path | str | None = Non
     return completed.returncode == 0
 
 
-# The remote branch can move between the caller capturing --expected-head and
-# this script running for a reason unrelated to the local repair itself --
-# e.g. an unrelated rebase-onto-base maintenance pass rewinding the branch
-# onto a newer trunk (see rebase_onto_base in mergify_admin_requeue_repair_body.py,
-# which does the same thing from the other direction). When that's what
-# happened, the diff since `expected` still applies cleanly on top of `live`;
-# replay it there instead of refusing outright. Returns the new local HEAD on
-# success, or None if the diff does not apply cleanly -- a real content
-# conflict, which the caller must still refuse rather than force over.
+# Safety invariant: when the remote moved but expected is an ancestor of the local repair, only replay a clean diff onto live and still refuse real conflicts instead of force-pushing over them.
 def _replay_onto_moved_remote_head(
     expected: str,
     live: str,
@@ -131,9 +123,7 @@ def _replay_onto_moved_remote_head(
     except SafePushError:
         return None
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        # run_git() strips trailing whitespace from command output; restore
-        # the single trailing newline `git apply` requires, or it rejects the
-        # patch as corrupt.
+        # Safety invariant: restore the trailing newline stripped from git diff output because git apply rejects the patch as corrupt without it.
         handle.write(diff + "\n")
         patch_path = Path(handle.name)
     try:
@@ -343,16 +333,7 @@ def _record_ledgers(args: argparse.Namespace) -> None:
         )
 
 
-# A branch can go missing between the caller capturing --expected-head and this
-# script running because the PR it belongs to merged (GitHub deletes the head
-# branch on merge) or was closed out-of-band -- not just because of a genuine
-# race with another writer. In that case there is nothing left to push and no
-# unsafe write to guard against, so settle quietly instead of failing the same
-# way a real stale-head race would (mirrors mergify_admin_requeue_repair_normalize.py's
-# handling of a PR merged/closed mid-repair). --json-pr is optional plumbing for
-# ledger recording, not a precondition for this check: callers that only pass
-# --branch/--expected-head (no ledger flags) still need the merge/close settle
-# path, so fall back to looking the PR up by head branch name via `gh pr view`.
+# Safety invariant: a missing branch settles only when the associated PR is merged or closed, and callers without ledger JSON still use the head branch lookup.
 def _settled_via_pr_merge_or_close(args: argparse.Namespace) -> str | None:
     repo = repo_slug(args.remote, cwd=Path(args.cwd))
     if repo is None:
