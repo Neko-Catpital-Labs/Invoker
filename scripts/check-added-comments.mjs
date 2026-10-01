@@ -26,7 +26,6 @@ const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
   'scripts/analyze-json-log.py',
   'scripts/codex-session-audit.py',
   'scripts/mergify_admin_requeue_repair_body.py',
-  'scripts/pr_duplicate_close_exec.py',
   'scripts/pr_duplicate_close_executor.py',
   'scripts/pr_duplicate_close_git_facts.py',
   'scripts/pr_duplicate_close_model.py',
