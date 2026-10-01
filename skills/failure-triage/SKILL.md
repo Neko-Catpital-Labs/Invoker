@@ -35,6 +35,16 @@ The digest is read-only. It runs `invoker-cli query workflows/tasks` and folds
 `~/.invoker/invoker.log`'s `worker-autofix-*` events. It does not mutate
 state, retry anything, or touch git.
 
+## One subject
+
+When the question is why one workflow or task was retried, skipped, capped, or left unfixed, read that subject's recorded decisions before classifying the fleet:
+
+```sh
+invoker-cli query worker-decisions --task <taskId> --output json
+```
+
+Report each row's attempt, decision, reason, and summary. A workflow-wide page is not that subject's history. Omit `--task` only for a fleet question. This lookup does not retry or change status.
+
 Then verify each class against the evidence below before reporting. A digest
 bucket is a hypothesis; the cited check is the proof.
 
