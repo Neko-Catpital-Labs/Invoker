@@ -25,6 +25,10 @@ class BranchMissingError(SafePushError):
     """The expected branch has no remote ref at all (as opposed to one that moved)."""
 
 
+class RemoteHeadMovedError(SafePushError):
+    """The remote ref exists but no longer matches the captured expected head."""
+
+
 class NothingToPushError(SafePushError):
     """Remote moved past --expected-head, but local HEAD has no work beyond it either."""
 
@@ -217,7 +221,7 @@ def safe_push(
                     expected, live, head_before, branch_name, remote=remote, cwd=cwd,
                 )
             if replayed is None:
-                raise SafePushError(
+                raise RemoteHeadMovedError(
                     f"stale-head: refs/heads/{branch_name} is {live}; expected {expected}",
                     exit_code=20,
                 )
@@ -343,6 +347,10 @@ def _record_ledgers(args: argparse.Namespace) -> None:
         )
 
 
+def _should_settle_stale_orphan_attempt(args: argparse.Namespace) -> bool:
+    return bool(args.record_tsv_ledger) and args.tsv_kind == "orphan-attempt"
+
+
 # A branch can go missing between the caller capturing --expected-head and this
 # script running because the PR it belongs to merged (GitHub deletes the head
 # branch on merge) or was closed out-of-band -- not just because of a genuine
@@ -388,6 +396,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"pr-worker-safe-push: noop: {pr_label} is already {state.lower()}; "
             f"refs/heads/{normalize_branch(args.branch)} no longer exists, nothing to push",
+            file=sys.stderr,
+        )
+        return 0
+    except RemoteHeadMovedError as exc:
+        if not _should_settle_stale_orphan_attempt(args):
+            print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
+            return exc.exit_code or 1
+        _record_ledgers(args)
+        print(
+            f"pr-worker-safe-push: noop: {exc}; orphan repair attempt was superseded, nothing to push",
             file=sys.stderr,
         )
         return 0
