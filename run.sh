@@ -59,6 +59,25 @@ ensure_workspace_bootstrapped() {
   touch "$BOOTSTRAP_STAMP"
 }
 
+thin_ipc_client_handles_no_track_run() {
+  local saw_no_track=0
+  local positional_count=0
+  local command_word=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --no-track) saw_no_track=1 ;;
+      --headless|--wait-for-approval) ;;
+      -*) return 1 ;;
+      *)
+        positional_count=$((positional_count + 1))
+        if [ "$positional_count" = "1" ]; then command_word="$arg"; fi
+        ;;
+    esac
+  done
+  [ "$saw_no_track" = "1" ] && [ "$command_word" = "run" ] && [ "$positional_count" = "2" ]
+}
+
 # Ensure workspace dependencies are linked before building.
 # Headless commands must keep stdout clean because scripts parse labels/JSON.
 ensure_workspace_bootstrapped
@@ -100,6 +119,42 @@ if [ "$1" = "--headless" ]; then
   if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
     echo "Building @invoker/app (headless-client.js missing)..." >&2
     pnpm --filter @invoker/app build >&2
+  fi
+  if thin_ipc_client_handles_no_track_run "$@"; then
+    if [ ! -f "$REPO_ROOT/packages/app/dist/headless-ipc-client.js" ]; then
+      echo "Building @invoker/app (headless-ipc-client.js missing)..." >&2
+      pnpm --filter @invoker/app build >&2
+    fi
+    THIN_IPC_STDOUT="$(mktemp "${TMPDIR:-/tmp}/invoker-thin-ipc-stdout.XXXXXX")"
+    THIN_IPC_STDERR="$(mktemp "${TMPDIR:-/tmp}/invoker-thin-ipc-stderr.XXXXXX")"
+    set +e
+    node ./packages/app/dist/headless-ipc-client.js "$@" >"$THIN_IPC_STDOUT" 2>"$THIN_IPC_STDERR"
+    THIN_IPC_STATUS=$?
+    set -e
+    THIN_IPC_PRINTED_WORKFLOW_ID=0
+    if grep -Eq '^Workflow ID: [^[:space:]]+' "$THIN_IPC_STDOUT"; then
+      THIN_IPC_PRINTED_WORKFLOW_ID=1
+    fi
+    THIN_IPC_NEVER_REACHED_OWNER=0
+    if grep -q 'no reachable owner' "$THIN_IPC_STDERR"; then
+      THIN_IPC_NEVER_REACHED_OWNER=1
+    fi
+    if [ "$THIN_IPC_PRINTED_WORKFLOW_ID" = "0" ] && [ ! -s "$THIN_IPC_STDOUT" ] && [ ! -s "$THIN_IPC_STDERR" ]; then
+      THIN_IPC_NEVER_REACHED_OWNER=1
+    fi
+    cat "$THIN_IPC_STDOUT"
+    cat "$THIN_IPC_STDERR" >&2
+    rm -f "$THIN_IPC_STDOUT" "$THIN_IPC_STDERR"
+    if [ "$THIN_IPC_STATUS" = "0" ] && [ "$THIN_IPC_PRINTED_WORKFLOW_ID" = "1" ]; then
+      exit 0
+    fi
+    if [ "$THIN_IPC_NEVER_REACHED_OWNER" != "1" ]; then
+      if [ "$THIN_IPC_STATUS" = "0" ]; then
+        echo "Error: thin IPC --no-track run exited 0 without printing a workflow id; refusing to report success." >&2
+        exit 1
+      fi
+      exit "$THIN_IPC_STATUS"
+    fi
   fi
   exec node ./packages/app/dist/headless-client.js "$@"
 fi
