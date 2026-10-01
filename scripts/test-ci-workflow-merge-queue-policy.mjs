@@ -19,6 +19,8 @@ const jobs = workflow.jobs ?? {};
 
 const INSTALLER_SCRIPT_PATH = 'scripts/ci/install-node-system-libraries.sh';
 const ciWorkflowSource = readFileSync('.github/workflows/ci.yml', 'utf8');
+const NATIVE_NODE_RUNTIME_PACKAGE = 'libatomic1';
+const NATIVE_NODE_BUILD_PACKAGE = 'build-essential';
 
 function assert(condition, message) {
   if (!condition) {
@@ -71,6 +73,70 @@ function assertStepBefore(job, firstStepName, secondStepName, jobName) {
   assert(firstIndex < secondIndex, `${jobName} must run "${firstStepName}" before "${secondStepName}"`);
 }
 
+function envPackageSet(step) {
+  return new Set(String(step.env?.CI_INSTALL_PACKAGES ?? '').split(/\s+/).filter(Boolean));
+}
+
+function envCommandSet(step) {
+  return new Set(String(step.env?.CI_INSTALL_PROBE_COMMANDS ?? '').split(/\s+/).filter(Boolean));
+}
+
+function canRunOnSelfHostedRunner(job) {
+  const runsOn = job?.['runs-on'];
+  const serializedRunsOn = JSON.stringify(runsOn);
+  return Boolean(
+    serializedRunsOn?.includes('self-hosted')
+      || serializedRunsOn?.includes('Runner_')
+      || serializedRunsOn?.includes('matrix.runner_label'),
+  );
+}
+
+function hasDependencyCruiseMatrixPath(job) {
+  const matrixEntries = job?.strategy?.matrix?.include ?? [];
+  return matrixEntries.some((entry) => entry.name === 'Dependency Cruise' && entry.command === 'pnpm run check:deps');
+}
+
+function assertNativeNodePrerequisiteStep(jobName, job, label = jobName) {
+  const steps = job.steps ?? [];
+  const nodeSetupIndex = steps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+  if (nodeSetupIndex < 0) {
+    return;
+  }
+  const installDependenciesIndex = steps.findIndex(
+    (step) => String(step.run ?? '').trim() === 'pnpm install --frozen-lockfile',
+  );
+  if (installDependenciesIndex < 0 || nodeSetupIndex > installDependenciesIndex) {
+    return;
+  }
+
+  const prerequisiteStep = steps
+    .slice(0, nodeSetupIndex)
+    .find((step) => String(step.run ?? '').trim() === `bash ${INSTALLER_SCRIPT_PATH}`);
+  assert(
+    prerequisiteStep,
+    `${label} must install native Node runtime/build prerequisites before actions/setup-node@v4 so Node 26 reaches pnpm install --frozen-lockfile`,
+  );
+
+  const packages = envPackageSet(prerequisiteStep);
+  assert(
+    packages.has(NATIVE_NODE_RUNTIME_PACKAGE) && packages.has(NATIVE_NODE_BUILD_PACKAGE),
+    `${label} native prerequisite step must install ${NATIVE_NODE_RUNTIME_PACKAGE} and ${NATIVE_NODE_BUILD_PACKAGE} before actions/setup-node@v4`,
+  );
+  assert(
+    prerequisiteStep.env?.CI_INSTALL_PROBE_SONAME === 'libatomic.so.1',
+    `${label} native prerequisite step must probe libatomic.so.1 before actions/setup-node@v4`,
+  );
+  const probeCommands = envCommandSet(prerequisiteStep);
+  assert(
+    probeCommands.has('make') && probeCommands.has('g++'),
+    `${label} native prerequisite step must probe make and g++ for node-pty native builds`,
+  );
+  assert(
+    prerequisiteStep.env?.CI_INSTALL_NO_APT_ERROR && prerequisiteStep.env?.CI_INSTALL_SUDO_UNAVAILABLE_ERROR,
+    `${label} native prerequisite step must keep explicit apt-get and sudo failure messages`,
+  );
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -95,6 +161,7 @@ assert(
   !('runner_label' in dependencyCruiseEntry),
   'Dependency Cruise must not pin to the disk-constrained self-hosted core runner',
 );
+assertNativeNodePrerequisiteStep('quality-required', jobs['quality-required'], 'quality-required / Dependency Cruise');
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
@@ -121,6 +188,12 @@ assert(
   jobs['ui-vitest']['runs-on']?.labels === 'Runner_Vitest',
   'ui-vitest must keep the Runner_Vitest runner label',
 );
+for (const [jobName, job] of Object.entries(jobs)) {
+  if (!canRunOnSelfHostedRunner(job) && !hasDependencyCruiseMatrixPath(job)) {
+    continue;
+  }
+  assertNativeNodePrerequisiteStep(jobName, job);
+}
 const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
 const uiVitestNodeSetupIndex = uiVitestSteps.findIndex((step) => step.uses === 'actions/setup-node@v4');
 assert(uiVitestNodeSetupIndex >= 0, 'ui-vitest must configure Node with actions/setup-node@v4');
@@ -136,10 +209,10 @@ assert(
   'ui-vitest must install system dependencies before setup-node and dependency installation',
 );
 assertUsesSharedInstaller('ui-vitest', 'Install Node runtime and native build dependencies', {
-  CI_INSTALL_PACKAGES: 'libatomic1 make g++ python3 unzip',
+  CI_INSTALL_PACKAGES: 'libatomic1 build-essential python3 unzip',
   CI_INSTALL_PROBE_SONAME: 'libatomic.so.1',
   CI_INSTALL_PROBE_COMMANDS: 'make g++ python3 unzip',
-  CI_INSTALL_NO_APT_ERROR: 'UI Vitest requires libatomic1, make, g++, python3, and unzip, but apt-get is unavailable.',
+  CI_INSTALL_NO_APT_ERROR: 'UI Vitest requires libatomic1, build-essential, python3, and unzip, but apt-get is unavailable.',
   CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'UI Vitest requires {{MISSING}}; run as root or provide passwordless sudo for apt-get.',
   CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
 });
@@ -190,11 +263,11 @@ assert(
   'required-fast-extra must not request sudo package installation on Github_Runner hosts',
 );
 assertUsesSharedInstaller('required-fast-extra', 'Install system libraries for Node', {
-  CI_INSTALL_PACKAGES: 'libatomic1 make g++ python3 unzip',
+  CI_INSTALL_PACKAGES: 'libatomic1 build-essential python3 unzip',
   CI_INSTALL_PROBE_SONAME: 'libatomic.so.1',
   CI_INSTALL_PROBE_COMMANDS: 'make g++ python3 unzip',
-  CI_INSTALL_NO_APT_ERROR: 'libatomic1, make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.',
-  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }} but cannot be installed without sudo.',
+  CI_INSTALL_NO_APT_ERROR: 'libatomic1, build-essential, python3, and unzip are required for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'build-essential, python3, and unzip are required for Node ${{ env.NODE_VERSION }} but cannot be installed without sudo.',
   CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
 });
 const requiredFastExtraInstallDepsStep = jobs['required-fast-extra'].steps.find(
@@ -262,10 +335,11 @@ assertStepBefore(
   'docker',
 );
 assertUsesSharedInstaller('docker', 'Install system libraries for Node', {
-  CI_INSTALL_PACKAGES: 'libatomic1',
+  CI_INSTALL_PACKAGES: 'libatomic1 build-essential python3',
   CI_INSTALL_PROBE_SONAME: 'libatomic.so.1',
-  CI_INSTALL_NO_APT_ERROR: 'docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.',
-  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}; run as root or provide passwordless sudo for apt-get.',
+  CI_INSTALL_PROBE_COMMANDS: 'make g++ python3',
+  CI_INSTALL_NO_APT_ERROR: 'docker / comprehensive requires libatomic1, build-essential, and python3 for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.',
+  CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libatomic1, build-essential, and python3 for Node ${{ env.NODE_VERSION }}; run as root or provide passwordless sudo for apt-get.',
   CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
 });
 assertUsesSharedInstaller('docker', 'Install Electron GUI system libraries', {
