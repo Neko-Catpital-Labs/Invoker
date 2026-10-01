@@ -123,6 +123,7 @@ type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegio
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
+const CONTEXT_MENU_OWNED_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Enter', ' ']);
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 export const SELECTED_WORKFLOW_VANISH_GRACE_MS = 1000;
 const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
@@ -1701,6 +1702,11 @@ export function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (contextMenu || workflowContextMenu) {
+        if (CONTEXT_MENU_OWNED_KEYS.has(event.key)) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+        }
         return;
       }
 

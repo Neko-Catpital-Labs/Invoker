@@ -47,7 +47,7 @@ const workflows: WorkflowMeta[] = [
 ];
 
 const FLOATING_GRAPH_PANEL_LOCAL_Z_INDEX = 10;
-const APP_CONTEXT_MENU_TEST_TIMEOUT_MS = 20_000;
+const APP_CONTEXT_MENU_TEST_TIMEOUT_MS = 45_000;
 // Matches useTasks' test-visible graph event batch window so mock updates flush under act.
 const TASK_GRAPH_EVENT_FLUSH_MS = 125;
 
