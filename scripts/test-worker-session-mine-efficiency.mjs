@@ -54,7 +54,7 @@ function makeReport(host, generatedAt, rows) {
     session_id: row.id,
     tool: 'claude',
     origin: 'interactive',
-    model: 'claude-opus-5',
+    model: 'claude-sonnet-5-5',
     input: 0,
     cache_read: row.total,
     cache_write: 0,
@@ -69,7 +69,7 @@ function makeReport(host, generatedAt, rows) {
     first_timestamp: generatedAt,
     last_timestamp: generatedAt,
   }));
-  totals[`claude|interactive|claude-opus-5|${day}`] = {
+  totals[`claude|interactive|claude-sonnet-5-5|${day}`] = {
     input: 0,
     cache_read: rows.reduce((sum, row) => sum + row.total, 0),
     cache_write: 0,
