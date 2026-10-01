@@ -634,21 +634,21 @@ describe('loadConfig', () => {
       JSON.stringify({
         defaultExecution: {
           executionAgent: 'omp',
-          executionModel: 'anthropic/claude-opus-4',
+          executionModel: 'anthropic/claude-sonnet-5-5',
         },
       }),
     );
     const config = loadConfig();
     expect(config.defaultExecution).toEqual({
       executionAgent: 'omp',
-      executionModel: 'anthropic/claude-opus-4',
+      executionModel: 'anthropic/claude-sonnet-5-5',
     });
   });
 
   it('rejects defaultExecution model without an agent', () => {
     writeUserConfig({
       defaultExecution: {
-        executionModel: 'anthropic/claude-opus-4',
+        executionModel: 'anthropic/claude-sonnet-5-5',
       },
     });
     expect(() => loadConfig()).toThrow('defaultExecution.executionModel requires defaultExecution.executionAgent');
