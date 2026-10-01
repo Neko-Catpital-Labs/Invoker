@@ -16,7 +16,7 @@ export function createSlackBugScanClassifier(client: Anthropic = new Anthropic()
       ? threadText.slice(-MAX_THREAD_TEXT_CHARS)
       : threadText;
     const response = await client.messages.parse({
-      model: 'claude-opus-5',
+      model: 'claude-sonnet-5-5',
       max_tokens: 1024,
       output_config: { effort: 'low', format: zodOutputFormat(ClassificationSchema) },
       messages: [{
