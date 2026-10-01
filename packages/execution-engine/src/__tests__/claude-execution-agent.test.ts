@@ -5,9 +5,7 @@ import { join } from 'node:path';
 import {
   ClaudeExecutionAgent,
   ensureClaudeWorkerConfigDir,
-  mergeAllowedWorkerHooks,
   resolveClaudeWorkerConfigDir,
-  resolveWorkerHookMarkers,
 } from '../agents/claude-execution-agent.js';
 
 describe('ClaudeExecutionAgent', () => {
@@ -258,126 +256,14 @@ describe('ClaudeExecutionAgent', () => {
       }
     });
 
-    it('copies only allowlisted hooks from interactive settings', () => {
-      const interactive = {
-        enabledPlugins: { noise: true },
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: 'Bash',
-              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/poll-hook/claude_pretooluse.py' }],
-            },
-            {
-              matcher: 'Agent',
-              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/other-hook/claude_pretooluse_agent.py' }],
-            },
-          ],
-          Stop: [
-            {
-              matcher: '*',
-              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/poll-hook/claude_stop_check.py' }],
-            },
-            {
-              matcher: '*',
-              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/noise-stop/claude_stop_check.py' }],
-            },
-          ],
-        },
-      };
-      const worker = { enabledPlugins: {} };
-      const merged = mergeAllowedWorkerHooks(interactive, worker, ['poll-hook']);
-      expect(merged.enabledPlugins).toEqual({});
-      expect(merged.hooks?.PreToolUse).toHaveLength(1);
-      expect(merged.hooks?.PreToolUse?.[0]?.matcher).toBe('Bash');
-      expect(merged.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command).toContain('poll-hook/');
-      expect(merged.hooks?.Stop).toHaveLength(1);
-      expect(merged.hooks?.Stop?.[0]?.hooks?.[0]?.command).toContain('poll-hook/');
-      expect(JSON.stringify(merged)).not.toContain('other-hook');
-      expect(JSON.stringify(merged)).not.toContain('noise-stop');
-    });
-
-    it('copies nothing when the allowlist is empty', () => {
-      const interactive = {
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: 'Bash',
-              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/poll-hook/claude_pretooluse.py' }],
-            },
-          ],
-        },
-      };
-      const worker = {
-        enabledPlugins: {},
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: 'Bash',
-              hooks: [{ type: 'command', command: 'python3 already-there.py' }],
-            },
-          ],
-        },
-      };
-      const merged = mergeAllowedWorkerHooks(interactive, worker, []);
-      expect(merged.hooks?.PreToolUse).toHaveLength(1);
-      expect(merged.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command).toBe('python3 already-there.py');
-    });
-
-    it('does not duplicate allowlisted hooks on a second merge', () => {
-      const interactive = {
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: 'Bash',
-              hooks: [{ type: 'command', command: 'python3 poll-hook/claude_pretooluse.py' }],
-            },
-          ],
-        },
-      };
-      const once = mergeAllowedWorkerHooks(interactive, { enabledPlugins: {} }, ['poll-hook']);
-      const twice = mergeAllowedWorkerHooks(interactive, once, ['poll-hook']);
-      expect(twice.hooks?.PreToolUse).toHaveLength(1);
-    });
-
-    it('leaves worker hooks unchanged when the allowlist file is missing', () => {
-      const root = mkdtempSync(join(tmpdir(), 'claude-worker-miss-'));
-      const interactiveHome = join(root, 'home');
-      const configDir = join(root, 'worker');
-      mkdirSync(join(interactiveHome, '.claude'), { recursive: true });
-      mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'settings.json'), `${JSON.stringify({
-        enabledPlugins: {},
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: 'Bash',
-              hooks: [{ type: 'command', command: 'python3 already-there.py' }],
-            },
-          ],
-        },
-      }, null, 2)}\n`);
-      try {
-        expect(resolveWorkerHookMarkers(interactiveHome, {})).toEqual([]);
-        ensureClaudeWorkerConfigDir(configDir, { interactiveHome });
-        const worker = JSON.parse(readFileSync(join(configDir, 'settings.json'), 'utf8'));
-        expect(worker.hooks.PreToolUse).toHaveLength(1);
-        expect(worker.hooks.PreToolUse[0].hooks[0].command).toBe('python3 already-there.py');
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    });
-
-    it('reads markers from the Invoker allowlist file and leaves interactive settings unchanged', () => {
-      const root = mkdtempSync(join(tmpdir(), 'claude-worker-copy-'));
+    it('leaves preexisting worker hooks byte-stable and does not copy from interactive settings', () => {
+      const root = mkdtempSync(join(tmpdir(), 'claude-worker-preserve-'));
       const interactiveHome = join(root, 'home');
       const configDir = join(root, 'worker');
       const interactiveSettingsPath = join(interactiveHome, '.claude', 'settings.json');
+      const workerSettingsPath = join(configDir, 'settings.json');
       mkdirSync(join(interactiveHome, '.claude'), { recursive: true });
-      mkdirSync(join(interactiveHome, '.invoker'), { recursive: true });
-      writeFileSync(
-        join(interactiveHome, '.invoker', 'claude-worker-hooks.json'),
-        `${JSON.stringify({ hooks: ['poll-hook'] }, null, 2)}\n`,
-      );
+      mkdirSync(configDir, { recursive: true });
       const interactiveBytes = `${JSON.stringify({
         enabledPlugins: { keep: true },
         hooks: {
@@ -393,27 +279,52 @@ describe('ClaudeExecutionAgent', () => {
           ],
         },
       }, null, 2)}\n`;
+      const workerBytes = `${JSON.stringify({
+        enabledPlugins: {},
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [{ type: 'command', command: 'python3 already-there.py' }],
+            },
+          ],
+        },
+      }, null, 2)}\n`;
       writeFileSync(interactiveSettingsPath, interactiveBytes);
+      writeFileSync(workerSettingsPath, workerBytes);
       try {
-        expect(resolveWorkerHookMarkers(interactiveHome, {})).toEqual(['poll-hook']);
         ensureClaudeWorkerConfigDir(configDir, { interactiveHome });
+        expect(readFileSync(workerSettingsPath, 'utf8')).toBe(workerBytes);
         expect(readFileSync(interactiveSettingsPath, 'utf8')).toBe(interactiveBytes);
-        const worker = JSON.parse(readFileSync(join(configDir, 'settings.json'), 'utf8'));
-        expect(worker.enabledPlugins).toEqual({});
-        expect(worker.hooks.PreToolUse).toHaveLength(1);
-        expect(worker.hooks.PreToolUse[0].hooks[0].command).toContain('poll-hook/');
-        expect(JSON.stringify(worker)).not.toContain('other/hook');
+        expect(readFileSync(workerSettingsPath, 'utf8')).not.toContain('poll-hook');
+        expect(readFileSync(workerSettingsPath, 'utf8')).not.toContain('other/hook');
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });
 
-    it('does not hardcode a catstack hook name in the agent source', () => {
-      const source = readFileSync(
-        join(__dirname, '..', 'agents', 'claude-execution-agent.ts'),
-        'utf8',
-      );
-      expect(source).not.toContain('wait-needs-wakeup');
+    it('creates empty worker settings when missing and still does not copy interactive hooks', () => {
+      const root = mkdtempSync(join(tmpdir(), 'claude-worker-create-'));
+      const interactiveHome = join(root, 'home');
+      const configDir = join(root, 'worker');
+      mkdirSync(join(interactiveHome, '.claude'), { recursive: true });
+      writeFileSync(join(interactiveHome, '.claude', 'settings.json'), `${JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [{ type: 'command', command: 'python3 $HOME/.claude/hooks/poll-hook/claude_pretooluse.py' }],
+            },
+          ],
+        },
+      }, null, 2)}\n`);
+      try {
+        ensureClaudeWorkerConfigDir(configDir, { interactiveHome });
+        const worker = JSON.parse(readFileSync(join(configDir, 'settings.json'), 'utf8'));
+        expect(worker).toEqual({ enabledPlugins: {} });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     });
   });
 
