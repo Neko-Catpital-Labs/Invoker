@@ -171,10 +171,10 @@ function makeFakeLedger() {
 
 describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingClaim)', () => {
 
-  it('kind is namespaced per CI job, failure identity, and attempt ordinal', () => {
+  it('kind is namespaced per CI job and failure identity', () => {
     assert.equal(
       repairFilingKind(makeFailure({ jobName: 'required-fast / Guardrails' })),
-      'ci-regression:required-fast-guardrails:job:a1',
+      'ci-regression:required-fast-guardrails:job',
     );
     assert.equal(
       repairFilingKind(makeFailure({
@@ -183,8 +183,23 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
         failureId: 'job',
         attempts: 2,
       })),
-      'ci-regression:fleet:job:a3',
+      'ci-regression:fleet:job',
     );
+  });
+
+  it('uses one repair filing key for the same CI incident across retry attempts', () => {
+    const firstAttempt = makeFailure({
+      jobName: 'e2e-proof / shard 0',
+      failureId: 'job',
+      attempts: 0,
+    });
+    const retryAttempt = makeFailure({
+      jobName: 'e2e-proof / shard 0',
+      failureId: 'job',
+      attempts: 1,
+    });
+
+    assert.equal(repairFilingKind(firstAttempt), repairFilingKind(retryAttempt));
   });
 
   it('prevents a duplicate PR: a second claim for the identical (kind, subject, stateSha) is rejected', () => {
@@ -284,7 +299,7 @@ describe('repair_filings ledger gate (claimRepairFiling / releaseRepairFilingCla
     });
     const metadata = buildRepairFilingMetadata(failure);
     assert.deepEqual(metadata.memberJobNames, failure.memberJobNames);
-    assert.equal(repairFilingKind(failure), 'ci-regression:fleet:job:a1');
+    assert.equal(repairFilingKind(failure), 'ci-regression:fleet:job');
   });
 
   it('processFailureFilingSweep end-to-end: a second sweep for the same (kind, subject, stateSha) never calls fileFailure again', () => {
@@ -679,7 +694,7 @@ describe('fleet SHA correlation', () => {
       firstJobDatabaseId: 63100 + index,
       firstJobUrl: `https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/6310/job/${63100 + index}`,
     }));
-    const jobDefinitions = buildCiJobDefinitions();
+    const jobDefinitions = jobDefinitionsFor(jobs);
     const historicalState = stateWithFailures(failures);
     const correlatedState = stateWithFailures(failures.map((failure) => ({ ...failure })));
     const historicalFilings = [];
@@ -687,6 +702,7 @@ describe('fleet SHA correlation', () => {
 
     processFailureFilingSweep(historicalState, {
       isPaused: () => false,
+      capPerSweep: 0,
       fleetEventThreshold: 99,
       jobDefinitions,
       liveQuery: () => false,
@@ -694,6 +710,7 @@ describe('fleet SHA correlation', () => {
     });
     const counts = processFailureFilingSweep(correlatedState, {
       isPaused: () => false,
+      capPerSweep: 0,
       jobDefinitions,
       liveQuery: () => false,
       fileFailure: (failure) => fleetFilings.push(failure),
@@ -1375,6 +1392,9 @@ describe('a filed repair plan passes the real plan doctor', () => {
         });
         assert.equal(result.submitted, false);
         assert.equal(result.reflectEnabled, enableReflect);
+        const planText = readFileSync(result.planPath, 'utf8');
+        assert.match(planText, /Repro waiver:/);
+        assert.doesNotMatch(planText, /fails before this change and passes after/);
       } finally {
         rmSync(outRoot, { recursive: true, force: true });
       }
@@ -1531,7 +1551,7 @@ describe('per-test failure identity under one CI job', () => {
     );
   });
 
-  it('retries the same identity on a later attempt after backoff once prior repair work is terminal', () => {
+  it('does not file a retry while the same CI incident claim remains in the ledger', () => {
     const failure = makeFailure({
       jobName,
       failureId: 'repro-babysit-pr-body-human-split',
@@ -1547,7 +1567,6 @@ describe('per-test failure identity under one CI job', () => {
       ledger.set(key, row);
       return { inserted: true, row };
     };
-    // Prior attempt-1 claim remains in the ledger, but attempt-2 uses a new kind.
     ledger.set(
       `${repairFilingKind({ ...failure, attempts: 0 })} master ${failure.firstBadSha}`,
       { kept: true },
@@ -1566,9 +1585,8 @@ describe('per-test failure identity under one CI job', () => {
       fileFailure: (candidate) => filed.push(repairFilingKind(candidate)),
     });
 
-    assert.equal(filed.length, 1);
-    assert.equal(filed[0], 'ci-regression:required-fast-mergify-admin-requeue:repro-babysit-pr-body-human-split:a2');
-    assert.equal(state.activeFailures[failureStorageKey(failure)].attempts, 2);
+    assert.deepEqual(filed, []);
+    assert.equal(state.activeFailures[failureStorageKey(failure)].attempts, 1);
   });
 
   it('treats review_ready work whose repair PR is no longer open as finished', () => {
