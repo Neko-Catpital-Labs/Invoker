@@ -21,6 +21,7 @@ export const BUILTIN_WORKER_KINDS = [
   'idle-task-cleanup',
   'cross-repo-research',
   'catstack-deploy',
+  'thrash-detector',
   'self-deploy',
   'admin-bypass-e2e-babysit',
   'mergify-queue-research',

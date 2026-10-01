@@ -520,6 +520,12 @@ function buildRegisteredOwnerWorkerDeps(
         connection: target.connection,
       })),
     },
+    thrashDetector: {
+      enabled: invokerConfig.thrashDetector?.enabled ?? false,
+      intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 60) * 60_000,
+      thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+      windowHours: invokerConfig.thrashDetector?.windowHours,
+    },
     agentLoginWatch: {
       ...resolveAgentLoginWatchWorkerConfig(invokerConfig),
       enabled: true,

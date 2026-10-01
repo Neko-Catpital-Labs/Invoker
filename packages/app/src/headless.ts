@@ -521,6 +521,17 @@ export function resolveHeadlessCatstackDeployConfig(
   };
 }
 
+export function resolveHeadlessThrashDetectorConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['thrashDetector']> {
+  return {
+    enabled: invokerConfig.thrashDetector?.enabled ?? false,
+    intervalMs: (invokerConfig.thrashDetector?.intervalMinutes ?? 60) * 60_000,
+    thresholdCount: invokerConfig.thrashDetector?.thresholdCount,
+    windowHours: invokerConfig.thrashDetector?.windowHours,
+  };
+}
+
 export function resolveHeadlessAgentLoginWatchConfig(
   invokerConfig: HeadlessDeps['invokerConfig'],
 ): NonNullable<WorkerRuntimeDependencies['agentLoginWatch']> {
@@ -720,6 +731,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       claudeOauthRefresh: resolveHeadlessClaudeOauthRefreshConfig(deps.invokerConfig),
       catstackDeploy: resolveHeadlessCatstackDeployConfig(deps.invokerConfig),
+      thrashDetector: resolveHeadlessThrashDetectorConfig(deps.invokerConfig),
       agentLoginWatch: resolveHeadlessAgentLoginWatchConfig(deps.invokerConfig),
       messageBus: deps.messageBus,
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),

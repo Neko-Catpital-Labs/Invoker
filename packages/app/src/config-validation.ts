@@ -16,6 +16,7 @@ import {
   type MergifyQueueResearchConfig,
   type MergifyQueueResearchSource,
   type SelfDeployConfig,
+  type ThrashDetectorConfig,
   DEFAULT_CROSS_REPO_RESEARCH_LOOKBACK_DAYS,
   DEFAULT_MERGIFY_QUEUE_RESEARCH_LOOKBACK_DAYS,
 } from './config.js';
@@ -279,6 +280,24 @@ function validateCatstackDeployConfig(config: InvokerConfig): void {
   }
 }
 
+function validateThrashDetectorConfig(config: InvokerConfig): void {
+  const thrashDetector = config.thrashDetector;
+  if (thrashDetector === undefined) return;
+  if (typeof thrashDetector !== 'object' || thrashDetector === null || Array.isArray(thrashDetector)) {
+    throw new Error('thrashDetector must be an object');
+  }
+  const typed = thrashDetector as ThrashDetectorConfig;
+  if (typed.enabled !== undefined && typeof typed.enabled !== 'boolean') {
+    throw new Error('thrashDetector.enabled must be a boolean when set');
+  }
+  for (const field of ['intervalMinutes', 'thresholdCount', 'windowHours'] as const) {
+    const value = typed[field];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)) {
+      throw new Error(`thrashDetector.${field} must be an integer > 0`);
+    }
+  }
+}
+
 function validateAgentLoginWatchConfig(config: InvokerConfig): void {
   const agentLoginWatch = config.agentLoginWatch;
   if (agentLoginWatch === undefined) return;
@@ -444,6 +463,7 @@ export function validateInvokerConfig(config: InvokerConfig, options: ConfigVali
   validateCrossRepoResearchConfig(config);
   validateMergifyQueueResearchConfig(config);
   validateCatstackDeployConfig(config);
+  validateThrashDetectorConfig(config);
   validateAgentLoginWatchConfig(config);
   validateSelfDeployConfig(config);
   validateDbReaperConfig(config);

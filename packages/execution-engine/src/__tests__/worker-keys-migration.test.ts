@@ -34,6 +34,7 @@ const BUILTIN_WORKER_SOURCES = [
   'workers/idle-task-cleanup-worker.ts',
   'workers/cross-repo-research-worker.ts',
   'workers/catstack-deploy-worker.ts',
+  'workers/thrash-detector-worker.ts',
   'workers/self-deploy-worker.ts',
   'workers/admin-bypass-e2e-babysit-worker.ts',
   'workers/mergify-queue-research-worker.ts',
