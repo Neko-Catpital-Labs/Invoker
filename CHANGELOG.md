@@ -8,6 +8,13 @@ All notable changes to Invoker will be documented in this file.
   because an upstream task failed, and retrying that upstream task resurrects
   the skipped task for execution.
 
+## 0.2.1
+
+- Install stores the Claude hook under the Invoker home and registers it in
+  interactive `~/.claude/settings.json`.
+- Invoker prepare no longer copies hooks into the Claude worker config; it
+  leaves an existing worker `settings.json` hooks map alone.
+
 ## 0.2.0
 
 - Daily prereleases `0.1.1` through `0.1.20` never received a `v*` tag, so
