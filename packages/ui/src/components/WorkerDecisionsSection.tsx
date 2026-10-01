@@ -41,6 +41,7 @@ export function WorkerDecisionsSection({
   const [decisions] = useWorkerDecisions({
     ...(workerKind ? { workerKind } : {}),
     ...(workflowId ? { workflowId } : {}),
+    ...(taskId ? { taskId } : {}),
     ...(filter === 'all' ? {} : { decision: filter }),
     limit: 25,
   });
