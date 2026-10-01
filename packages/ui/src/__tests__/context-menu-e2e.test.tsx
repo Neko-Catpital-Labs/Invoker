@@ -495,6 +495,18 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
     await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
   });
 
+  it('task context menu opens More from the keyboard and highlights a revealed action', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    pressMenuKey('ArrowUp');
+    await expectHighlightedMenuItem('More');
+    pressMenuKey('Enter');
+
+    await expectHighlightedMenuItem('Terminate Task');
+    expect(screen.getByRole('menuitem', { name: 'Recreate from Task' })).toBeInTheDocument();
+  });
+
   it('task context menu skips disabled actions during keyboard navigation', async () => {
     const failedPivot = makeUITask({
       id: 'task-disabled-terminal',

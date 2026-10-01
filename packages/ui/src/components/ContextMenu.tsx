@@ -97,6 +97,10 @@ export function ContextMenu({
 
   // Find first enabled item index
   const firstEnabledIndex = focusableIndices[0] ?? -1;
+  const firstEnabledDangerIndex = dangerItems.findIndex((item) => item.enabled);
+  const firstMoreExpandedIndex = firstEnabledDangerIndex >= 0
+    ? safeItems.length + firstEnabledDangerIndex
+    : firstEnabledIndex;
 
   useEffect(() => {
     menuRef.current?.focus({ preventScroll: true });
@@ -204,7 +208,7 @@ export function ContextMenu({
       stopMenuKeyboardEvent(e);
       if (focusedIndex === moreButtonIndex && hasMoreButton) {
         setShowMore(true);
-        setFocusedIndex(safeItems.length);
+        setFocusedIndex(firstMoreExpandedIndex >= 0 ? firstMoreExpandedIndex : safeItems.length);
         return;
       }
       const item = renderedItems[focusedIndex];
@@ -212,7 +216,7 @@ export function ContextMenu({
         handleItemClick(item);
       }
     }
-  }, [autoFocus, focusableIndices, focusedIndex, hasMoreButton, moreButtonIndex, onClose, renderedItems, safeItems.length]);
+  }, [autoFocus, firstMoreExpandedIndex, focusableIndices, focusedIndex, hasMoreButton, moreButtonIndex, onClose, renderedItems, safeItems.length]);
 
   useEffect(() => {
     const handleDocumentKeyDownCapture = (event: KeyboardEvent) => {
@@ -343,7 +347,7 @@ export function ContextMenu({
             className={`w-full text-left px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted ${focusedIndex === moreButtonIndex ? 'bg-muted' : ''}`}
             onClick={() => {
               setShowMore(true);
-              setFocusedIndex(safeItems.length);
+              setFocusedIndex(firstMoreExpandedIndex >= 0 ? firstMoreExpandedIndex : safeItems.length);
             }}
             onMouseEnter={() => setFocusedIndex(moreButtonIndex)}
           >
