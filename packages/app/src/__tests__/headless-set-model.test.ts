@@ -62,11 +62,11 @@ describe('delegated edit-task-model (set model) classification', () => {
     const actions = createGuiMutationTaskActions(makeContext());
     const translated = actions.translateGuiMutationToHeadless({
       channel: 'invoker:edit-task-model',
-      args: ['wf-1/task-1', 'claude-sonnet-5'],
+      args: ['wf-1/task-1', 'claude-sonnet-5-5'],
     } as never);
     expect(translated).toEqual({
       channel: 'headless.exec',
-      request: { args: ['set', 'model', 'wf-1/task-1', 'claude-sonnet-5'], noTrack: true },
+      request: { args: ['set', 'model', 'wf-1/task-1', 'claude-sonnet-5-5'], noTrack: true },
     });
 
     const classified = actions.classifyHeadlessExecMutation(
@@ -77,7 +77,7 @@ describe('delegated edit-task-model (set model) classification', () => {
 
   it('queues the no-track set model mutation instead of rejecting it as workflow-not-resolved', () => {
     const actions = createGuiMutationTaskActions(makeContext());
-    const payload = { args: ['set', 'model', 'wf-1/task-1', 'claude-sonnet-5'], noTrack: true as const };
+    const payload = { args: ['set', 'model', 'wf-1/task-1', 'claude-sonnet-5-5'], noTrack: true as const };
     const { workflowId, priority } = actions.classifyHeadlessExecMutation(payload);
     const submit = vi.fn(() => ({ intentId: 'intent-1', accepted: true }));
 
@@ -111,7 +111,7 @@ describe('delegated edit-task-model (set model) classification', () => {
     ['invoker:edit-task-prompt', ['wf-1/task-1', 'do the thing']],
     ['invoker:edit-task-type', ['wf-1/task-1', 'docker']],
     ['invoker:edit-task-agent', ['wf-1/task-1', 'codex']],
-    ['invoker:edit-task-model', ['wf-1/task-1', 'claude-sonnet-5']],
+    ['invoker:edit-task-model', ['wf-1/task-1', 'claude-sonnet-5-5']],
     ['invoker:set-task-external-gate-policies', ['wf-1/task-1', [{ workflowId: 'wf-0', gatePolicy: 'completed' }]]],
   ])('%s translates to a registered set sub-command that classifies to its workflow', (channel, args) => {
     const actions = createGuiMutationTaskActions(makeContext());
@@ -169,13 +169,13 @@ describe('headless set model', () => {
   });
 
   it('routes set model <taskId> <model> through commandService.editTaskModel', async () => {
-    await runHeadless(['set', 'model', 'wf-1/task-1', 'claude-sonnet-5'], deps);
+    await runHeadless(['set', 'model', 'wf-1/task-1', 'claude-sonnet-5-5'], deps);
 
     expect(deps.commandService.editTaskModel).toHaveBeenCalledTimes(1);
     const envelope = vi.mocked(deps.commandService.editTaskModel).mock.calls[0]?.[0] as {
       payload: { taskId: string; executionModel: string | null };
     };
-    expect(envelope.payload).toEqual({ taskId: 'wf-1/task-1', executionModel: 'claude-sonnet-5' });
+    expect(envelope.payload).toEqual({ taskId: 'wf-1/task-1', executionModel: 'claude-sonnet-5-5' });
   });
 
   it('clears the model when the value is empty, matching the GUI reset payload', async () => {
