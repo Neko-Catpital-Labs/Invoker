@@ -60,6 +60,7 @@ export class TaskStateMachine {
           return (
             dep.status === 'completed' ||
             dep.status === 'failed' ||
+            dep.status === 'closed' ||
             dep.status === 'stale'
           );
         }

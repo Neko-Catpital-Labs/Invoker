@@ -4318,6 +4318,7 @@ export class Orchestrator {
     const required = dep.requiredStatus ?? 'completed';
     const gatePolicy = dep.gatePolicy ?? this.defaultExternalGatePolicy(dep.taskId);
     const isMergeGateDep = (dep.taskId?.trim() || '__merge__') === '__merge__';
+    if (prerequisite.status === 'closed') return false;
     return prerequisite.status === required
       || (
         isReviewReadyLikeGatePolicy(gatePolicy)

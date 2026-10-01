@@ -2972,6 +2972,52 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(leafId)!.execution.blockedBy).toBeUndefined();
     });
 
+    it.each([
+      { gatePolicy: 'completed' as const, description: 'strict completed' },
+      { gatePolicy: 'review_ready' as const, description: 'review-ready' },
+    ])('keeps a $description dependent blocked when the upstream merge gate is closed', ({ gatePolicy }) => {
+      orchestrator.loadPlan({
+        name: `gate-prereq-closed-${gatePolicy}`,
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: `gate-downstream-closed-${gatePolicy}`,
+        externalDependencies: [
+          { workflowId: prereqWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy },
+        ],
+        tasks: [{ id: 'leaf', description: 'leaf waits on upstream merge gate' }],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      persistence.updateTask(prereqTaskId, { status: 'completed', execution: { completedAt: new Date() } });
+      persistence.updateTask(prereqMergeId, {
+        status: 'closed',
+        execution: { completedAt: new Date(), reviewStatus: 'Closed unmerged' },
+      });
+      persistence.updateTask(leafId, {
+        status: 'blocked',
+        execution: { blockedBy: `waiting on ${prereqMergeId} (running)` },
+      });
+      orchestrator.syncAllFromDb();
+
+      const started = orchestrator.autoStartExternallyUnblockedReadyTasks();
+
+      expect(started.map((t) => t.id)).not.toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('blocked');
+      expect(orchestrator.getTask(leafId)!.execution.blockedBy).toBe(`waiting on ${prereqMergeId} (running)`);
+
+      persistence.updateTask(leafId, { status: 'pending', execution: { blockedBy: undefined } });
+      orchestrator.syncAllFromDb();
+      const readiness = orchestrator.getTaskLaunchReadiness(leafId);
+
+      expect(readiness.ready).toBe(false);
+      expect(readiness.reason).toContain(`waiting on ${prereqMergeId} (closed)`);
+    });
+
     it('keeps a ci_failed dependent pending while the upstream workflow is still running', () => {
       orchestrator.loadPlan({
         name: 'gate-prereq-ci-running',
