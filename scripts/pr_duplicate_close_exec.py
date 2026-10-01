@@ -64,17 +64,13 @@ def _merged_pr_number_by_title(gh: GhClient, repo: str) -> dict[str, int]:
         number = int(item.get("number") or 0)
         if not title or not number:
             continue
-        # `gh pr list --state merged` is newest-first; keep the first (most
-        # recent) match on a title collision among merged PRs themselves.
+        # Safety invariant: merged PR title collisions keep the newest merged PR because gh returns merged PRs newest-first.
         merged_by_title.setdefault(title, number)
     return merged_by_title
 
 
 def _compute_patch_id(git_facts: GitFactsClient, pr: CandidatePr) -> str | None:
-    # Diff against the PR's own base, not always master: two duplicate PRs
-    # can be based on different branches (one stacked on another open PR),
-    # and diffing both against master would pull in whichever branch's own
-    # unrelated changes, making a real duplicate's patch-id fail to match.
+    # Safety invariant: patch-id compares against each PR's own base so stacked duplicate PRs do not include unrelated branch changes.
     upstream = f"origin/{pr.base_ref_name}" if pr.base_ref_name else "origin/master"
     merge_base_sha = git_facts.merge_base(upstream, pr.head_ref_oid)
     if merge_base_sha is None:
