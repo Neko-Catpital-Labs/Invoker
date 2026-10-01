@@ -267,6 +267,132 @@ class SafePushTests(unittest.TestCase):
         gh_wrapper.chmod(0o755)
         return {"PATH": f"{wrapper_dir}:{os.environ['PATH']}"}
 
+    def _fake_github_remote_and_pr_json(self, *, pr_identifier: int | str, payload: dict[str, object]) -> dict[str, str]:
+        wrapper_dir = self.root / "bin"
+        wrapper_dir.mkdir(exist_ok=True)
+        pr_json = wrapper_dir / "pr.json"
+        pr_json.write_text(json.dumps(payload), encoding="utf-8")
+        git_wrapper = wrapper_dir / "git"
+        git_wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                if [ "${{1:-}}" = "remote" ] && [ "${{2:-}}" = "get-url" ]; then
+                  echo 'git@github.com:acme/widgets.git'
+                  exit 0
+                fi
+                exec {REAL_GIT!r} "$@"
+                """
+            ),
+            encoding="utf-8",
+        )
+        git_wrapper.chmod(0o755)
+        gh_wrapper = wrapper_dir / "gh"
+        gh_wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                if [ "${{1:-}}" = "pr" ] && [ "${{2:-}}" = "view" ] && [ "${{3:-}}" = "{pr_identifier}" ]; then
+                  cat {str(pr_json)!r}
+                  exit 0
+                fi
+                exec {REAL_GH!r} "$@"
+                """
+            ),
+            encoding="utf-8",
+        )
+        gh_wrapper.chmod(0o755)
+        return {"PATH": f"{wrapper_dir}:{os.environ['PATH']}"}
+
+    def test_stale_orphan_push_settles_when_current_pr_has_no_blockers(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.tsv"
+        env = self._fake_github_remote_and_pr_json(
+            pr_identifier=123,
+            payload={
+                "state": "OPEN",
+                "headRefName": "main",
+                "mergeable": "MERGEABLE",
+                "mergeStateStatus": "CLEAN",
+                "reviewDecision": "",
+                "statusCheckRollup": [
+                    {
+                        "name": "PR Body",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-10-01T10:00:00Z",
+                        "completedAt": "2026-10-01T10:00:01Z",
+                    },
+                    {
+                        "name": "PR Body",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-10-01T10:01:00Z",
+                        "completedAt": "2026-10-01T10:01:01Z",
+                    },
+                ],
+            },
+        )
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "orphan-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+            env=env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertIn("no longer has orphan-repair blockers", result.stderr)
+        self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
+        self.assertEqual(ledger.read_text(encoding="utf-8").split("\t")[:3], ["orphan-attempt", "123", "fp1"])
+
+    def test_stale_orphan_push_still_fails_when_current_pr_has_blockers(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        self.commit(self.repo, "repair")
+        ledger = self.root / "ledger.tsv"
+        env = self._fake_github_remote_and_pr_json(
+            pr_identifier=123,
+            payload={
+                "state": "OPEN",
+                "headRefName": "main",
+                "mergeable": "MERGEABLE",
+                "mergeStateStatus": "CLEAN",
+                "reviewDecision": "",
+                "statusCheckRollup": [
+                    {
+                        "name": "PR Body",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-10-01T10:01:00Z",
+                        "completedAt": "2026-10-01T10:01:01Z",
+                    },
+                ],
+            },
+        )
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "orphan-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+            env=env,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stale-head", result.stderr)
+        self.assertEqual(safe_push.remote_branch_sha("main", remote="origin", cwd=self.other), remote_after_race)
+        self.assertFalse(ledger.exists())
+
     def test_missing_branch_settles_as_noop_when_pr_already_merged(self) -> None:
         env = self._fake_github_remote_and_gh(pr_identifier=456, state="MERGED")
         ledger = self.root / "ledger.jsonl"

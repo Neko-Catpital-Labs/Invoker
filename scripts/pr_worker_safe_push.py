@@ -177,6 +177,83 @@ def pr_state(pr_identifier: int | str, *, repo: str, cwd: Path | str | None = No
     return completed.stdout.strip() or None
 
 
+def pr_view_json(
+    pr_identifier: int | str,
+    *,
+    repo: str,
+    cwd: Path | str | None = None,
+) -> Mapping[str, object] | None:
+    completed = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_identifier),
+            "--repo",
+            repo,
+            "--json",
+            "state,headRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
+        ],
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        decoded = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _rollup_name(item: object) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    value = item.get("name") or item.get("context")
+    return str(value) if value else None
+
+
+def _rollup_timestamp(item: object) -> str:
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("completedAt") or item.get("startedAt") or "")
+
+
+def _rollup_state(item: object) -> str:
+    if not isinstance(item, dict):
+        return ""
+    value = item.get("conclusion") or item.get("state") or ""
+    return str(value).upper()
+
+
+def latest_failed_check_names(status_check_rollup: object) -> list[str]:
+    if not isinstance(status_check_rollup, list):
+        return []
+    latest_by_name: dict[str, object] = {}
+    for item in status_check_rollup:
+        name = _rollup_name(item)
+        if not name:
+            continue
+        if name not in latest_by_name or _rollup_timestamp(item) > _rollup_timestamp(latest_by_name[name]):
+            latest_by_name[name] = item
+    failed_states = {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"}
+    return sorted(name for name, item in latest_by_name.items() if _rollup_state(item) in failed_states)
+
+
+def pr_has_orphan_repair_blockers(pr: Mapping[str, object]) -> bool:
+    mergeable = str(pr.get("mergeable") or "")
+    merge_state = str(pr.get("mergeStateStatus") or "")
+    review_decision = str(pr.get("reviewDecision") or "")
+    return (
+        mergeable == "CONFLICTING"
+        or merge_state == "DIRTY"
+        or review_decision == "CHANGES_REQUESTED"
+        or bool(latest_failed_check_names(pr.get("statusCheckRollup")))
+    )
+
+
 def safe_push(
     *,
     branch: str,
@@ -362,6 +439,43 @@ def _settled_via_pr_merge_or_close(args: argparse.Namespace) -> str | None:
     return state if state in ("MERGED", "CLOSED") else None
 
 
+def _orphan_pr_identifier(args: argparse.Namespace) -> tuple[str | None, int | str] | None:
+    if args.json_pr is not None:
+        return None, args.json_pr
+    key = args.tsv_key
+    if not key:
+        return None
+    if "#" in key:
+        repo, number = key.rsplit("#", 1)
+        return (repo, int(number)) if number.isdigit() and repo else None
+    return (None, int(key)) if key.isdigit() else None
+
+
+def _settled_via_orphan_pr_no_current_blockers(args: argparse.Namespace) -> str | None:
+    if not args.record_tsv_ledger:
+        return None
+    parsed = _orphan_pr_identifier(args)
+    if parsed is None:
+        return None
+    repo_override, pr_identifier = parsed
+    repo = repo_override or repo_slug(args.remote, cwd=Path(args.cwd))
+    if repo is None:
+        return None
+    pr = pr_view_json(pr_identifier, repo=repo, cwd=Path(args.cwd))
+    if pr is None:
+        return None
+    state = pr.get("state")
+    if state in ("MERGED", "CLOSED"):
+        return f"PR #{pr_identifier} is already {str(state).lower()}"
+    if state != "OPEN":
+        return None
+    if str(pr.get("headRefName") or "") != normalize_branch(args.branch):
+        return None
+    if pr_has_orphan_repair_blockers(pr):
+        return None
+    return f"PR #{pr_identifier} no longer has orphan-repair blockers"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
@@ -392,6 +506,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     except SafePushError as exc:
+        if args.expected_head is not None and exc.exit_code == 20 and str(exc).startswith("stale-head:"):
+            settled = _settled_via_orphan_pr_no_current_blockers(args)
+            if settled is not None:
+                _record_ledgers(args)
+                print(
+                    f"pr-worker-safe-push: noop: {settled}; refs/heads/{normalize_branch(args.branch)} "
+                    "moved since the captured head, nothing to push",
+                    file=sys.stderr,
+                )
+                return 0
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return exc.exit_code or 1
     except json.JSONDecodeError as exc:
