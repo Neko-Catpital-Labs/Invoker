@@ -14,6 +14,7 @@ const OMP_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
   { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
   { id: 'anthropic/claude-sonnet-4', label: 'Anthropic Claude Sonnet 4' },
   { id: 'anthropic/claude-opus-4', label: 'Anthropic Claude Opus 4' },
+  { id: 'anthropic/claude-sonnet-5-5', label: 'Anthropic Claude Sonnet 5.5' },
   { id: 'openai/gpt-5', label: 'OpenAI GPT-5' },
   { id: 'openai/gpt-5-codex', label: 'OpenAI GPT-5 Codex' },
   { id: 'openai/o3', label: 'OpenAI o3' },

@@ -128,7 +128,7 @@ describe('task-runner-wiring', () => {
       repoRoot: '/repo',
       invokerConfig: {
         defaultBranch: 'main',
-        defaultExecution: { executionAgent: 'omp', executionModel: 'anthropic/claude-opus-4' },
+        defaultExecution: { executionAgent: 'omp', executionModel: 'anthropic/claude-sonnet-5-5' },
         docker: { imageName: 'image' },
         autoFixCi: true,
       },

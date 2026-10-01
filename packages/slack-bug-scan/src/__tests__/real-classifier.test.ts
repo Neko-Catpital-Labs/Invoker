@@ -30,7 +30,7 @@ describe('createSlackBugScanClassifier', () => {
     await classify({ channelId: 'C1', threadTs: '1.0', repoUrl: 'git@github.com:acme/widgets.git', threadText: 'some thread text' });
 
     const call = (anthropic.messages.parse as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(call.model).toBe('claude-opus-5');
+    expect(call.model).toBe('claude-sonnet-5-5');
     const promptText = call.messages[0].content;
     expect(promptText).toContain('git@github.com:acme/widgets.git');
     expect(promptText).toContain('some thread text');
