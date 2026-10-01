@@ -536,7 +536,14 @@ function fileSource(root, filePath) {
     process.exit(1);
   }
 
-  const content = loadWorkingTreeFile(root, normalized);
+  let content;
+  try {
+    content = readFileSync(path.join(root, normalized), 'utf8');
+  } catch {
+    console.error(`[comments] unable to read --file target: ${normalized}`);
+    process.exit(1);
+  }
+
   return {
     name: `file ${normalized}`,
     text: wholeFileDiff(normalized, content),
