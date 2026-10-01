@@ -5,6 +5,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKILL_MD="$REPO_ROOT/skills/make-pr/SKILL.md"
 REVIEW_COMPRESSION_MD="$REPO_ROOT/skills/review-compression/SKILL.md"
+PR_BODY_TEMPLATE="$REPO_ROOT/scripts/pr-body-template.md"
 
 # Tiny shell helpers only. This test does not parse GitHub payloads.
 # It locks specific policy lines in the skill docs so the regression fails
@@ -39,6 +40,15 @@ must_contain "$SKILL_MD" "mixes behavior, refactor, cleanup, or test-harness/pro
 must_contain "$SKILL_MD" "<summary>Test Plan</summary>" "make-pr skill must collapse Test Plan content in a details block"
 must_contain "$SKILL_MD" "<summary>Revert Plan</summary>" "make-pr skill must collapse Revert Plan content in a details block"
 must_contain "$SKILL_MD" "rejects a plan section whose content is not collapsed" "make-pr skill must state the validator enforces collapsed plan sections"
+
+must_contain "$SKILL_MD" "Every PR body carries a visible \`## Measured\` section" "make-pr skill must require a visible Measured section"
+must_contain "$SKILL_MD" "each with that command's pasted output in a fenced block" "make-pr skill must require pasted base and head output"
+must_contain "$SKILL_MD" "a pass count or a sentence about the result is not a measurement" "make-pr skill must reject pass counts as a measurement"
+must_contain "$SKILL_MD" "write \`none: <reason>\` in place of the rows" "make-pr skill must document the none: escape for slices with nothing to measure"
+must_contain "$SKILL_MD" "collapsed content does not count" "make-pr skill must forbid a collapsed Measured section"
+must_contain "$PR_BODY_TEMPLATE" "## Measured" "PR body template must carry the Measured section"
+must_contain "$PR_BODY_TEMPLATE" "### Base" "PR body template must carry the Measured base row"
+must_contain "$PR_BODY_TEMPLATE" "### Head" "PR body template must carry the Measured head row"
 
 # The ordering section delegates the rest of the rules to review-compression,
 # so that referenced section must actually exist.
