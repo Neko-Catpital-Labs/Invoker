@@ -272,6 +272,7 @@ export interface QueryFlags {
   groupBy?: string;
   decision?: string;
   reason?: string;
+  task?: string;
   positional: string[];
 }
 
@@ -315,6 +316,9 @@ export function parseQueryFlags(args: string[]): QueryFlags {
       i += 2;
     } else if (arg === '--reason' && i + 1 < args.length) {
       flags.reason = args[i + 1];
+      i += 2;
+    } else if (arg === '--task' && i + 1 < args.length) {
+      flags.task = args[i + 1];
       i += 2;
     } else if (arg.startsWith('--')) {
       throw new Error(`Unknown query flag: "${arg}"`);
