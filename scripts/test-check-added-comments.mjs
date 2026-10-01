@@ -242,9 +242,9 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
       /newly-added comment/,
     );
 
-    writeFileSync(path.join(root, 'scripts/pr_worker_safe_push.py'), 'value = 1\n');
+    writeFileSync(path.join(root, 'scripts/unchecked.txt'), 'value = 1\n');
     assert.throws(
-      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/pr_worker_safe_push.py'], { encoding: 'utf8' }),
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/unchecked.txt'], { encoding: 'utf8' }),
       /not checked by comment policy/,
     );
   } finally {
@@ -455,10 +455,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 }
 
 {
-  assert.throws(
-    () => execFileSync(process.execPath, [scriptPath, '--file', 'scripts/codex-session-audit.py'], { encoding: 'utf8' }),
-    /not checked by comment policy/,
-  );
+  const output = execFileSync(process.execPath, [scriptPath, '--file', 'scripts/codex-session-audit.py'], { encoding: 'utf8' });
+  assert.match(output, /Checked added source lines; no disallowed comments found\./);
 }
 
 {
