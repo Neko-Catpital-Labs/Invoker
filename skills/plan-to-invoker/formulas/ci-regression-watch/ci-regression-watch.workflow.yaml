@@ -16,7 +16,7 @@ tasks:
       Review claim: The change corrects the CI regression's root cause at its source, with no unrelated edits.
       Review lane: behavior
       Safety invariant: Other CI jobs and product behavior stay unchanged except for the corrected defect.
-      Effectiveness measurement: `{{verify_command}}` fails before this change and passes after; that transition is the effectiveness signal.
+      Effectiveness measurement: The task summary records the repro protocol outcome: either a local failing exit before the fix plus a passing exit after it, or an infra-class `Repro waiver:` with CI log evidence plus the passing verification.
       Slice rationale: One behavior slice: the failing CI job's root cause and deterministic proof.
       Architectural effect: None expected; no new module boundaries unless the root cause requires it.
       Goal: Make the CI job `{{job_name}}` pass on current master.
