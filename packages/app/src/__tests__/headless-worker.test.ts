@@ -242,3 +242,23 @@ describe('headless worker start/stop', () => {
     } as never)).rejects.toThrow(/no live owner worker runtime/);
   });
 });
+
+describe('headless worker start/stop', () => {
+  it('rejects "stop" as an unknown worker kind before calling a worker runtime controller', async () => {
+    const stop = vi.fn();
+    await expect(runHeadless(['worker', 'stop', E2E_AUTOFIX_WORKER_KIND], {
+      invokerConfig: {},
+      getWorkerRuntimeController: () => ({ start: vi.fn(), stop } as never),
+    } as never)).rejects.toThrow(/Unknown worker kind: "stop"/);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('rejects "start" as an unknown worker kind before calling a worker runtime controller', async () => {
+    const start = vi.fn();
+    await expect(runHeadless(['worker', 'start', E2E_AUTOFIX_WORKER_KIND], {
+      invokerConfig: {},
+      getWorkerRuntimeController: () => ({ start, stop: vi.fn() } as never),
+    } as never)).rejects.toThrow(/Unknown worker kind: "start"/);
+    expect(start).not.toHaveBeenCalled();
+  });
+});
