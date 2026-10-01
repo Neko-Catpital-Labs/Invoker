@@ -52,7 +52,7 @@ Override them in `~/.invoker/config.json`:
 ```json
 {
   "slackHarnessPresets": {
-    "omp+claude": { "tool": "omp", "model": "anthropic/claude-opus-4" },
+    "omp+claude": { "tool": "omp", "model": "anthropic/claude-sonnet-5-5" },
     "codex": { "tool": "codex" }
   },
   "defaultSlackHarnessPreset": "omp+claude",
