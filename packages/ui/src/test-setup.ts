@@ -40,7 +40,9 @@ function createMemoryStorage(): Storage {
   };
 }
 
-if (typeof window !== 'undefined') {
+function installMemoryStorageShims(): void {
+  if (typeof window === 'undefined') return;
+
   Object.defineProperty(window, 'localStorage', {
     configurable: true,
     value: createMemoryStorage(),
@@ -51,7 +53,10 @@ if (typeof window !== 'undefined') {
   });
 }
 
+installMemoryStorageShims();
+
 beforeEach(() => {
+  installMemoryStorageShims();
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
