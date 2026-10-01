@@ -134,6 +134,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate CI workflow policy
+        run: node scripts/test-ci-workflow-merge-queue-policy.mjs
+
       - name: Run quality check
         run: ${{ matrix.command }}
 
@@ -485,7 +488,6 @@ jobs:
         uses: pnpm/action-setup@v4
 
       - name: Install Node runtime and native build dependencies
-        if: matrix.runner_label != 'Github_Runner'
         shell: bash
         env:
           CI_INSTALL_PACKAGES: libatomic1 build-essential python3
@@ -507,6 +509,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Validate CI workflow policy
+        run: node scripts/test-ci-workflow-merge-queue-policy.mjs
 
       - name: Verify Playwright shard inventory
         run: node scripts/repro/repro-ci-playwright-shard-inventory.mjs
