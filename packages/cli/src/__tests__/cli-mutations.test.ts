@@ -241,7 +241,7 @@ const POSITIVE_SET_CASES: Record<string, { task: OwnerTask; values: string[] }> 
   pool: { task: ownerTask(), values: ['gpu-pool'] },
   executor: { task: ownerTask(), values: ['docker'] },
   agent: { task: ownerTask(), values: ['claude'] },
-  model: { task: ownerTask(), values: ['claude-opus-5'] },
+  model: { task: ownerTask(), values: ['claude-sonnet-5-5'] },
   'fix-prompt': { task: ownerTask({ status: 'failed' }), values: ['Retry with verbose logging'] },
   'fix-context': { task: ownerTask({ status: 'failed' }), values: ['Build log excerpt'] },
   'gate-policy': { task: ownerTask(), values: ['wf-upstream', 'review_ready'] },
