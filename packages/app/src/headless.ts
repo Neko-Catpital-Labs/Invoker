@@ -615,6 +615,7 @@ export async function headlessCheckPrStatus(
   }
 }
 
+/** Dispatch headless worker list, status, lifecycle, and manual tick commands. */
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
@@ -682,7 +683,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const definition = registry.get(subCommand);
   if (!definition) {
     const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
-    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status, start, stop`);
+    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status, start, stop, tick`);
   }
 
   let lock;
