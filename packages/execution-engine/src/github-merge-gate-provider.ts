@@ -257,14 +257,14 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const rejected = data.reviewDecision === 'CHANGES_REQUESTED';
 
     let statusText: string;
-    if (data.state === 'MERGED') {
+    if (lifecycle === 'merged') {
       statusText = 'Merged';
+    } else if (lifecycle === 'closed') {
+      statusText = 'Closed';
     } else if (data.reviewDecision === 'APPROVED') {
       statusText = 'Approved, awaiting merge';
     } else if (data.reviewDecision === 'CHANGES_REQUESTED') {
       statusText = 'Changes requested';
-    } else if (data.state === 'CLOSED') {
-      statusText = 'Closed';
     } else {
       statusText = 'Awaiting review';
     }

@@ -748,6 +748,35 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.statusText).toBe('Closed');
     });
 
+    it.each([
+      ['APPROVED', false],
+      ['CHANGES_REQUESTED', true],
+    ] as const)(
+      'keeps a closed PR terminal when its last review decision is %s',
+      async (reviewDecision, rejected) => {
+        process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+        const { spawn } = await import('node:child_process');
+        const spawnMock = vi.mocked(spawn);
+
+        spawnMock.mockImplementation(((cmd: string) => {
+          if (cmd === 'gh') {
+            return mockSpawnResult(JSON.stringify({
+              state: 'CLOSED',
+              reviewDecision,
+              url: 'https://github.com/owner/repo/pull/3',
+            }), 0);
+          }
+          return mockSpawnResult('', 0);
+        }) as any);
+
+        const result = await provider.checkApproval({ identifier: '3', cwd: '/tmp/repo' });
+
+        expect(result.lifecycle).toBe('closed');
+        expect(result.rejected).toBe(rejected);
+        expect(result.statusText).toBe('Closed');
+      },
+    );
+
     it('returns PR head metadata and failed checks for review-gate auto-fix', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const { spawn } = await import('node:child_process');
