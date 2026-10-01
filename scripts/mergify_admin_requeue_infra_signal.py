@@ -7,10 +7,7 @@ try:
 except ImportError:
     from mergify_admin_requeue_headless_shell import run_headless
 
-# Captured verbatim from real SshExecutor crashes seen on PRs #5933, #6976,
-# #7012, and #7019 during the same admin-bypass cron tick: the coding agent
-# never launches, so no amount of retrying can produce a different repair
-# result until an operator refreshes that SSH pool member's credentials.
+# Safety invariant: this SSH/OAuth signature means the coding agent never launched, so retrying cannot repair until an operator refreshes that SSH pool member's credentials.
 SSH_OAUTH_INFRA_SIGNATURE = "Failed to authenticate: OAuth session expired and could not be refreshed"
 
 

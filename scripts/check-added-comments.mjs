@@ -25,7 +25,6 @@ const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([]);
 const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
   'scripts/analyze-json-log.py',
   'scripts/codex-session-audit.py',
-  'scripts/mergify_admin_requeue_infra_signal.py',
   'scripts/mergify_admin_requeue_model.py',
   'scripts/mergify_admin_requeue_plan.py',
   'scripts/mergify_admin_requeue_repair_body.py',
