@@ -235,8 +235,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/admin-bypass-sweep/SKILL.md b/skills/admin-bypass-sweep/SKILL.md',
-    '+++ b/skills/admin-bypass-sweep/SKILL.md',
+    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
+    '+++ b/skills/foo/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```bash',
     '+# Safety invariant: wait for GitHub to recompute mergeability before merging.',
@@ -248,8 +248,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/admin-bypass-sweep/SKILL.md b/skills/admin-bypass-sweep/SKILL.md',
-    '+++ b/skills/admin-bypass-sweep/SKILL.md',
+    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
+    '+++ b/skills/foo/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```bash',
     '+# mergeable can read UNKNOWN immediately after a base change',
@@ -347,26 +347,26 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
     execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: root, stdio: 'ignore' });
-    mkdirSync(path.join(root, 'skills/admin-bypass-sweep'), { recursive: true });
+    mkdirSync(path.join(root, 'skills/foo'), { recursive: true });
     writeFileSync(
-      path.join(root, 'skills/admin-bypass-sweep/SKILL.md'),
+      path.join(root, 'skills/foo/SKILL.md'),
       ['# Admin', '', '```bash', '# Safety invariant: wait for GitHub to recompute mergeability before merging.', 'sleep 5', '```', ''].join('\n'),
     );
     const output = execFileSync(
       process.execPath,
-      [scriptPath, '--root', root, '--file', 'skills/admin-bypass-sweep/SKILL.md'],
+      [scriptPath, '--root', root, '--file', 'skills/foo/SKILL.md'],
       { encoding: 'utf8' },
     );
     assert.match(output, /Checked added source lines; no disallowed comments found\./);
 
     writeFileSync(
-      path.join(root, 'skills/admin-bypass-sweep/SKILL.md'),
+      path.join(root, 'skills/foo/SKILL.md'),
       ['# Admin', '', '```bash', '# explains the next command', 'sleep 5', '```', ''].join('\n'),
     );
     assert.throws(
       () => execFileSync(
         process.execPath,
-        [scriptPath, '--root', root, '--file', 'skills/admin-bypass-sweep/SKILL.md'],
+        [scriptPath, '--root', root, '--file', 'skills/foo/SKILL.md'],
         { encoding: 'utf8' },
       ),
       /newly-added comment/,
@@ -374,6 +374,55 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+{
+  const diff = [
+    'diff --git a/scripts/thing.py b/scripts/thing.py',
+    '+++ b/scripts/thing.py',
+    '@@ -0,0 +1,2 @@',
+    '+# Safety invariant: do not take the lock twice.',
+    '+# then call the helper',
+    '',
+  ].join('\n');
+  const violations = collectAddedCommentViolations(diff);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+}
+
+{
+  const diff = [
+    'diff --git a/packages/core/src/thing.ts b/packages/core/src/thing.ts',
+    '+++ b/packages/core/src/thing.ts',
+    '@@ -0,0 +1,3 @@',
+    '+/*',
+    '+ * Safety invariant: never call this twice.',
+    '+ */',
+    '',
+  ].join('\n');
+  const violations = collectAddedCommentViolations(diff);
+  assert.equal(
+    violations.length,
+    1,
+    'a multi-line block is not blessed merely because one of its lines contains Safety invariant',
+  );
+  assert.equal(violations[0].line, 1);
+}
+
+{
+  const diff = [
+    'diff --git a/packages/core/src/thing.ts b/packages/core/src/thing.ts',
+    '+++ b/packages/core/src/thing.ts',
+    '@@ -0,0 +1 @@',
+    '+const value = true; /* Safety invariant: single-line form is allowed */',
+    '',
+  ].join('\n');
+  assert.equal(collectAddedCommentViolations(diff).length, 0);
+}
+
+{
+  const output = execFileSync(process.execPath, [scriptPath, '--file', 'scripts/codex-session-audit.py'], { encoding: 'utf8' });
+  assert.match(output, /Checked added source lines; no disallowed comments found\./);
 }
 
 // Temp git case: a diff larger than Node's 1MB execFileSync default still runs.
