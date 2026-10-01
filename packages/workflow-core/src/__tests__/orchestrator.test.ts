@@ -4446,11 +4446,11 @@ describe('Orchestrator', () => {
       const mergeTask = orchestrator.getAllTasks().find((candidate) => candidate.config.isMergeNode)!;
 
       orchestrator.editTaskAgent(mergeTask.id, 'claude');
-      orchestrator.editTaskModel(mergeTask.id, 'claude-sonnet-5');
+      orchestrator.editTaskModel(mergeTask.id, 'claude-sonnet-5-5');
 
       const updated = orchestrator.getTask(mergeTask.id)!;
       expect(updated.config.executionAgent).toBe('claude');
-      expect(updated.config.executionModel).toBe('claude-sonnet-5');
+      expect(updated.config.executionModel).toBe('claude-sonnet-5-5');
     });
 
     it('cancels active work before retrying for a pool edit', () => {
