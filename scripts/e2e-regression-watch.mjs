@@ -1222,17 +1222,17 @@ export function liveQueryHasNonTerminalWork(failureOrSha, jobName, queryFn = hea
 // ---------------------------------------------------------------------------
 
 /**
- * kind is namespaced per CI job + failure identity + attempt ordinal.
- * Attempt scoping lets a later retry after a completed/failed repair claim a
- * fresh key, while identity scoping keeps two tests under one job independent.
+ * kind is namespaced per CI job + failure identity. The attempt count belongs
+ * in metadata/state, not the durable filing key: otherwise parallel repair
+ * workers can file duplicate workflows for the same CI incident by observing
+ * different local attempt counters.
  */
 export function repairFilingKind(failure) {
   const job = failure.markerJobName ?? failure.jobName;
   const test = failure.failureId && failure.failureId !== JOB_LEVEL_FAILURE_ID
     ? failure.failureId
     : JOB_LEVEL_FAILURE_ID;
-  const nextAttempt = Number(failure.attempts ?? 0) + 1;
-  return `ci-regression:${slugify(job)}:${slugify(test)}:a${nextAttempt}`;
+  return `ci-regression:${slugify(job)}:${slugify(test)}`;
 }
 
 export function buildRepairFilingMetadata(failure) {
