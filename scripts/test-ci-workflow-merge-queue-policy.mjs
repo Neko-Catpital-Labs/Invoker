@@ -137,6 +137,19 @@ function assertNativeNodePrerequisiteStep(jobName, job, label = jobName) {
   );
 }
 
+function assertRunsPolicyCheck(jobName, nextStepName) {
+  const job = jobs[jobName];
+  assert(job, `Missing ${jobName} job`);
+  const policyStep = (job.steps ?? []).find((step) => step.name === 'Validate CI workflow policy');
+  assert(policyStep, `${jobName} must include "Validate CI workflow policy"`);
+  assert(
+    String(policyStep.run ?? '').trim() === 'node scripts/test-ci-workflow-merge-queue-policy.mjs',
+    `${jobName} must run the CI workflow policy check from scripts/test-ci-workflow-merge-queue-policy.mjs`,
+  );
+  assertStepBefore(job, 'Install dependencies', 'Validate CI workflow policy', jobName);
+  assertStepBefore(job, 'Validate CI workflow policy', nextStepName, jobName);
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -162,6 +175,7 @@ assert(
   'Dependency Cruise must not pin to the disk-constrained self-hosted core runner',
 );
 assertNativeNodePrerequisiteStep('quality-required', jobs['quality-required'], 'quality-required / Dependency Cruise');
+assertRunsPolicyCheck('quality-required', 'Run quality check');
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
@@ -224,6 +238,7 @@ assert(
   vitestWorkspaceEntry.runner_label === 'ubuntu-latest',
   'Vitest Workspace must use fresh GitHub-hosted capacity so runner disk and toolchain state cannot block the suite',
 );
+assertRunsPolicyCheck('required-fast', 'Verify Playwright shard inventory');
 assert(
   !vitestWorkspaceSuite.includes('pnpm test'),
   'Vitest Workspace must not inherit unrelated root test-chain checks through pnpm test',
