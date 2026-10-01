@@ -1400,6 +1400,7 @@ function startHeadlessMode(): void {
         }),
         runtimeServices,
         appRootDir: __dirname,
+        getWorkerRuntimeController: () => workerRuntimeController,
       } as HeadlessDeps;
 
       // Every standalone execution path (launch dispatcher, fix/retry handlers,
