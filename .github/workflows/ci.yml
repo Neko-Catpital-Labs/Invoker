@@ -123,6 +123,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate CI workflow policy
+        run: node scripts/test-ci-workflow-merge-queue-policy.mjs
+
       - name: Run quality check
         run: ${{ matrix.command }}
 
@@ -476,6 +479,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Validate CI workflow policy
+        run: node scripts/test-ci-workflow-merge-queue-policy.mjs
 
       - name: Verify Playwright shard inventory
         run: node scripts/repro/repro-ci-playwright-shard-inventory.mjs
