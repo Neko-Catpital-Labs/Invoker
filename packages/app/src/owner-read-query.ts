@@ -103,6 +103,7 @@ export function answerOwnerReadQuery(
   });
   const workerDecisionsRequest = (): WorkerDecisionsRequest => ({
     ...(typeof body.workflowId === 'string' ? { workflowId: body.workflowId } : {}),
+    ...(typeof body.taskId === 'string' ? { taskId: body.taskId } : {}),
     ...(typeof body.workerKind === 'string' ? { workerKind: body.workerKind } : {}),
     ...(body.decision === 'act' || body.decision === 'skip' ? { decision: body.decision } : {}),
     ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
