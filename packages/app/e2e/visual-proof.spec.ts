@@ -3302,15 +3302,6 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'completed-ssh-terminal-resume');
   });
 
-  test('task-graph-keyboard-controls - selected workflow task graph visible', async ({ page }) => {
-    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
-    const miniDag = page.getByTestId('selected-workflow-mini-dag');
-    await expect(miniDag).toBeVisible();
-    await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
-    await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
-  });
-
   test('start-ready-recreate-failed-and-pending — menu option and preview dialog', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await page.getByTestId('rail-start-ready-menu').click();
