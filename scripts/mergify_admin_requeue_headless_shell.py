@@ -6,10 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HEADLESS_LIB = REPO_ROOT / "scripts" / "headless-lib.sh"
 
-# Sources scripts/headless-lib.sh directly (never scripts/cron-pr-lib.sh): by the
-# time any caller of this module runs, cron-pr-lib.sh's cron_lock is already held
-# by the calling bash script (scripts/cron-pr-admin-bypass-land.sh), so re-sourcing
-# it and calling cron_lock again would self-deadlock or silently no-op.
+# Safety invariant: source scripts/headless-lib.sh directly because cron-pr-lib.sh's cron_lock is already held and re-sourcing it can self-deadlock or silently no-op.
 _SOURCE_HEADLESS_LIB = 'set -euo pipefail\nsource "$1"\n'
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -27,10 +24,7 @@ def run_headless(command: str, *extra_args: str, timeout_seconds: float = DEFAUL
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired:
-        # A wedged owner-IPC connection (no reachable owner, a hung socket) must
-        # never block a cron tick indefinitely -- surface it as an ordinary
-        # non-zero CompletedProcess so every caller's existing "returncode != 0"
-        # handling raises a clear RuntimeError instead of hanging the process.
+        # Safety invariant: a wedged owner-IPC connection must return a non-zero CompletedProcess instead of blocking a cron tick indefinitely.
         return subprocess.CompletedProcess(
             args, returncode=124, stdout="", stderr=f"timed out after {timeout_seconds}s",
         )
