@@ -71,6 +71,26 @@ function assertStepBefore(job, firstStepName, secondStepName, jobName) {
   assert(firstIndex < secondIndex, `${jobName} must run "${firstStepName}" before "${secondStepName}"`);
 }
 
+function assertInstallsLibatomicBeforeSetupNode(jobName) {
+  const job = jobs[jobName];
+  assert(job, `Missing ${jobName} job`);
+  const steps = job.steps ?? [];
+  const setupNodeIndex = steps.findIndex((step) => step.uses === 'actions/setup-node@v4');
+  assert(setupNodeIndex >= 0, `${jobName} must configure Node with actions/setup-node@v4`);
+
+  const libatomicInstallIndex = steps.findIndex((step) => {
+    const packages = String(step.env?.CI_INSTALL_PACKAGES ?? '').split(/\s+/);
+    return String(step.run ?? '').trim() === `bash ${INSTALLER_SCRIPT_PATH}`
+      && packages.includes('libatomic1')
+      && step.env?.CI_INSTALL_PROBE_SONAME === 'libatomic.so.1';
+  });
+  assert(libatomicInstallIndex >= 0, `${jobName} must install libatomic1 before Node setup`);
+  assert(
+    libatomicInstallIndex < setupNodeIndex,
+    `${jobName} must install libatomic1 before actions/setup-node@v4 so Node ${workflow.env?.NODE_VERSION ?? ''} can start`,
+  );
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -95,6 +115,7 @@ assert(
   !('runner_label' in dependencyCruiseEntry),
   'Dependency Cruise must not pin to the disk-constrained self-hosted core runner',
 );
+assertInstallsLibatomicBeforeSetupNode('quality-required');
 
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
@@ -108,6 +129,7 @@ assert(
   jobs['typescript-types']['runs-on'] === 'ubuntu-latest',
   'TypeScript Types must use GitHub-hosted capacity so self-hosted workspace pressure cannot fail before tsc runs',
 );
+assertInstallsLibatomicBeforeSetupNode('typescript-types');
 
 assert(jobs['required-package-builds'], 'Missing required-package-builds job');
 assert(
@@ -143,6 +165,7 @@ assertUsesSharedInstaller('ui-vitest', 'Install Node runtime and native build de
   CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'UI Vitest requires {{MISSING}}; run as root or provide passwordless sudo for apt-get.',
   CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
 });
+assertInstallsLibatomicBeforeSetupNode('ui-vitest');
 
 const requiredFastEntries = jobs['required-fast'].strategy?.matrix?.include ?? [];
 const vitestWorkspaceEntry = requiredFastEntries.find((entry) => entry.name === 'Vitest Workspace');
