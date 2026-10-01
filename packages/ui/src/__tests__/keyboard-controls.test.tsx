@@ -624,10 +624,10 @@ describe('Graph camera controls (component)', () => {
   beforeEach(() => {
     // App's theme hook touches localStorage; keep a shim so F1 can assert it
     // does not perform storage writes after the initial render settles.
-    originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
     const localStorageShim = createLocalStorageShim();
     localStorageSetItemMock = vi.fn(localStorageShim.setItem);
-    Object.defineProperty(globalThis, 'localStorage', {
+    Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: {
         getItem: localStorageShim.getItem,
@@ -651,9 +651,9 @@ describe('Graph camera controls (component)', () => {
     rectSpy = null;
     mock.cleanup();
     if (originalLocalStorageDescriptor) {
-      Object.defineProperty(globalThis, 'localStorage', originalLocalStorageDescriptor);
+      Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor);
     } else {
-      Object.defineProperty(globalThis, 'localStorage', {
+      Object.defineProperty(window, 'localStorage', {
         configurable: true,
         value: createLocalStorageShim(),
       });
