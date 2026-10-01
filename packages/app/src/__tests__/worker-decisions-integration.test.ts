@@ -75,6 +75,29 @@ describe('worker decisions end-to-end (real SQLite)', () => {
     const byReason = listWorkerDecisions(adapter, { reason: 'budget' });
     expect(byReason.actions.map((action) => action.id)).toEqual(['skip-row']);
 
+    adapter.saveTask('wf-1', {
+      id: 'wf-1/task-b',
+      description: 'task b',
+      status: 'failed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: {},
+      execution: {},
+      taskStateVersion: 1,
+    } as TaskState);
+    adapter.upsertWorkerAction(write({
+      id: 'other-task',
+      taskId: 'wf-1/task-b',
+      subjectId: 'wf-1/task-b',
+      externalKey: 'autofix:wf-1/task-b:0:a1',
+      summary: 'Queued auto-fix for the other task',
+      updatedAt: '2026-01-01T00:00:04.000Z',
+    }));
+    const forTask = listWorkerDecisions(adapter, { taskId: 'wf-1/task-a' });
+    expect(forTask.actions.map((action) => action.id).sort()).toEqual(['act-row', 'skip-row']);
+    const unscoped = listWorkerDecisions(adapter, { workflowId: 'wf-1' });
+    expect(unscoped.actions.map((action) => action.id)).toContain('other-task');
+
     const text = formatWorkerDecisions(all.actions);
     expect(text).toContain('SKIP');
     expect(text).toContain('reason=retry-budget-disabled');
