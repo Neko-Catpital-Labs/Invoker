@@ -330,6 +330,7 @@ export interface WorkerActionHistoryResponse {
 }
 export interface WorkerDecisionsRequest {
   workflowId?: string;
+  taskId?: string;
   workerKind?: string;
   decision?: 'act' | 'skip';
   reason?: string;
