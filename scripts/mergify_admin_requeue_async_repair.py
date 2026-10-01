@@ -27,16 +27,13 @@ def _slugify(value: str, *, max_len: int = 40) -> str:
     return (slug or "check")[:max_len].strip("-") or "check"
 
 
-# Shared with mergify_admin_requeue_infra_signal.py, which needs the exact
-# plan_name a build_repair_*_plan call below already produced, to look up that
-# same submission's Invoker workflow by name before deciding whether to submit
-# another one.
+# Safety invariant: mergify_admin_requeue_infra_signal.py must reuse the exact plan_name produced here before deciding whether to submit another workflow.
 def repair_check_plan_name(pr_number: int, check_name: str, start_head: str) -> str:
     return f"admin-bypass-repair-check-pr-{pr_number}-{_slugify(check_name)}-{start_head[:7]}"
 
 
 def repair_conflict_plan_name(pr_number: int, start_head: str) -> str:
-    # Legacy name kept for settling pre-unification conflict-repair ledger rows.
+    # Safety invariant: keep this legacy name so pre-unification conflict-repair ledger rows can still settle.
     return f"admin-bypass-repair-conflict-pr-{pr_number}-{start_head[:7]}"
 
 
@@ -53,9 +50,7 @@ def requeue_stuck_plan_name(pr_number: int, start_head: str) -> str:
 
 
 def _yaml_str(value: str) -> str:
-    # JSON string encoding is a valid YAML flow scalar and, unlike naive shell
-    # quoting, correctly escapes quotes/colons/backslashes in PR titles/branch
-    # names without a second layer of ad-hoc stripping.
+    # Safety invariant: encode YAML scalars with JSON so PR titles and branch names keep quotes, colons, and backslashes intact.
     return json.dumps(value)
 
 
@@ -66,7 +61,7 @@ def _indent_block(text: str, spaces: int) -> str:
 
 
 def _stay_in_task_checkout_instructions(head_ref: str, *, fetch_extra: str | None = None) -> str:
-    # Safe-push only reads this task checkout; never steer agents into a side worktree.
+    # Safety invariant: safe-push only reads this task checkout, so repair agents must never edit or commit in a side worktree.
     fetch_refs = head_ref if not fetch_extra else f"{head_ref} {fetch_extra}"
     return (
         "Stay in this Invoker task checkout for every edit and commit. "
@@ -106,13 +101,7 @@ class RepairSubmissionAcknowledgement:
     workflow_id: str | None = None
 
 
-# A workflow id is one bare token. `[^\s]+` was too permissive: a backslash is
-# not whitespace, so an escaped newline in the submit stdout let the capture run
-# on into the next field (observed: `wf-1788334466115-1\\nrequired-fast`, which
-# matches no workflow and so never settles). Exclude the quoting/escaping
-# characters an id can never contain; stay permissive about the rest, because
-# real ids are not all numeric (`wf-stress-1`, `wf-hitch-fat`) and the app's own
-# predicate is `/^wf-[^/]+$/` (persisted-workflow-mutation-coordinator.ts).
+# Safety invariant: workflow id capture must exclude quoting and escaping characters after `wf-1788334466115-1\\nrequired-fast` failed to settle.
 _WORKFLOW_ID_RE = re.compile(r"(?:Workflow ID:|workflow:)\s*(wf-[^\s\\'\",]+)")
 
 
@@ -151,10 +140,7 @@ def _repair_task_yaml(
 
 
 def _foreign_safe_push_command(*, head_ref: str, start_head: str, skip_guard: str) -> str:
-    # A foreign worktree never has Invoker's own scripts/pr_worker_safe_push.py
-    # (that script lives only in the Invoker checkout). Reimplement its
-    # expected-head safety check inline with plain git so the push still
-    # refuses to run if the branch moved since this repair started.
+    # Safety invariant: foreign worktrees lack Invoker's safe-push script, so their inline git push must still refuse moved heads.
     return (
         "set -euo pipefail\n"
         f"{skip_guard}"
@@ -194,9 +180,7 @@ def _safe_push_task_yaml(
     if foreign:
         command = _foreign_safe_push_command(head_ref=head_ref, start_head=start_head, skip_guard=skip_guard)
     else:
-        # Owner-side JSONL settlement is recorded by mergify_admin_requeue_workflow_fastpath
-        # from durable workflow/task state. Never pass the owner machine's ledger path into
-        # a remote worker command (Linux workers cannot write /Users/... paths).
+        # Safety invariant: never pass the owner machine's ledger path to a remote worker; fastpath records settlement from durable workflow state.
         command = (
             "set -euo pipefail\n"
             f"{skip_guard}"
@@ -263,9 +247,7 @@ def _resolve_bot_thread_task_yaml(*, thread_id: str, start_head: str) -> str:
 
 
 def _shlex(value: str) -> str:
-    # Minimal POSIX single-quote wrap; values here are SHAs, branch names, and
-    # our own ledger paths/kinds -- none contain single quotes in practice, but
-    # this keeps the generated command block safe regardless.
+    # Safety invariant: shell values must stay single-quoted even when a future branch or path unexpectedly contains a quote.
     return "'" + value.replace("'", "'\\''") + "'"
 
 
@@ -284,11 +266,7 @@ def _extract_error_signal(text: str) -> str:
 
 
 def _job_log_excerpt(log_path: str) -> str:
-    # log_path (from GhExecutor.download_job_log) is a local tempfile on the
-    # orchestrator's own machine. submit_async_repair_plan dispatches this
-    # prompt to Invoker's headless runner, which executes on a separate
-    # worker that does not share that filesystem, so the path itself would
-    # not resolve there -- inline the tail of the log content instead.
+    # Safety invariant: inline log text because repair workers cannot read the orchestrator-local GhExecutor.download_job_log tempfile path.
     if not log_path:
         return "(not available)"
     try:
@@ -299,11 +277,7 @@ def _job_log_excerpt(log_path: str) -> str:
         return "(empty)"
     if len(text) <= _JOB_LOG_EXCERPT_MAX_CHARS:
         return text
-    # A blind tail is anchored to the end of the log, but a CI job ends with
-    # post-job cleanup, not with its error, so the failing step can fall
-    # outside the budget entirely. Keep the failure lines first and fall back
-    # to the raw tail only when nothing matches (same contract as
-    # buildAgentExitFailureDetail in packages/execution-engine, PR #6305).
+    # Safety invariant: preserve matched failure lines before the raw tail so post-job cleanup cannot evict the real CI error from the budget.
     signal = _extract_error_signal(text)
     if signal:
         return signal[-_JOB_LOG_EXCERPT_MAX_CHARS:]
@@ -346,10 +320,7 @@ def build_repair_check_plan(
     yaml_text = _write_plan_header(name=name, base_branch=pr.base_ref_name, repo=repo)
     yaml_text += _repair_task_yaml(description=f"Repair PR #{pr.number} (failed check {check_name})", prompt=prompt)
     if foreign:
-        # A foreign worktree never has Invoker's own
-        # mergify_admin_requeue_repair_normalize.py (prerequisite-PR splitting
-        # is an Invoker-repo-only concept), so go straight from repair to a
-        # plain safe push instead of running that Invoker-only normalize step.
+        # Safety invariant: foreign repairs must skip Invoker-only prerequisite splitting and go straight to plain safe-push.
         yaml_text += _safe_push_task_yaml(
             task_id="safe-push",
             description=f"Safely push PR #{pr.number} only if its head did not move",

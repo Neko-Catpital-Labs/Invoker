@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-# The normalize process must not dirty the checkout it is about to dirty-check.
+# Safety invariant: The normalize process must not dirty the checkout it is about to dirty-check.
 sys.dont_write_bytecode = True
 
 try:
@@ -41,34 +41,14 @@ except ImportError:
     )
     from mergify_admin_requeue_snapshot import GhClient
 
-# Runs inside the Invoker `normalize` task's own checkout, one hop after the
-# `repair` task's agent turn -- this is the async replacement for the local
-# post-run_claude_repair inspection AdminBypassRepairer.repair_check used to do
-# synchronously in the cron process. It re-implements: dirty-check/reset,
-# normalize_repair_commit (rebase-shaped diff handling), PR-body
-# re-validation, and -- if the fix needs restructuring -- create_repair_prerequisite
-# (a small prerequisite PR) instead of letting `safe-push` push directly.
-
 PREREQ_SENTINEL = Path(".invoker-repair-prereq-created")
 
-# Written unconditionally as this task's first action: reaching `normalize` at
-# all means the submitted repair attempt concluded (successfully, as a noop, or
-# as a still-invalid fix), which is what frees plan.py's repair_in_flight check
-# for this (pr, headSha, blockerKey) -- regardless of what happens below. Only
-# a crash before `normalize` even starts (the `repair` task itself dying) skips
-# this write, and that's exactly the case the in-flight TTL exists to bound.
+# Safety invariant: Record settlement before later exits so plan.py frees repair_in_flight for this repair attempt unless normalize never starts, which the in-flight TTL bounds.
 def _record_settle_marker(state_file: Path, pr_number: int, start_head: str, check_name: str) -> None:
     Ledger(state_file).record("repair-check-settled", pr_number, start_head, check_name)
 
 
-# A queue-only required check (see is_queue_only_required_check) never runs on
-# an ordinary PR head, only on the merge-queue draft -- so an agent repair
-# attempt against it settling with no commit isn't "nothing needed fixing", it
-# means the check's failure can't be repaired locally at all. plan.py's
-# plan_bottom_progress reads for this exact ("queue-only-noop", pr, headSha,
-# check) row to know it can restore the admin-bypass label and let Mergify's
-# queue retry the check for real, instead of leaving the PR permanently
-# unlabeled with no path back into the queue.
+# Safety invariant: Queue-only required checks that noop must record queue-only-noop so plan.py can restore admin-bypass and let Mergify retry the check in the queue.
 def _record_queue_only_noop_if_applicable(
     state_file: Path, pr_number: int, start_head: str, check_name: str,
 ) -> None:
@@ -76,23 +56,7 @@ def _record_queue_only_noop_if_applicable(
         Ledger(state_file).record("queue-only-noop", pr_number, start_head, check_name)
 
 
-# The agent repair task made no commit for a failing "PR Body" check. Two
-# very different situations look identical from here, so decide which one it
-# is by re-checking validity now:
-#   - the body is actually fine (already valid, or the PR was merged/closed
-#     out from under the repair mid-flight, so there's nothing left to fix) --
-#     record "repair-noop", which plan.py's plan_stack_execution reads
-#     (hardcoded to the "PR Body" key) to stop treating this check as blocking.
-#   - the body is still invalid, and the agent had every chance to fix it but
-#     didn't -- that's a human decision, not something worth re-submitting
-#     every tick. Record "repair-invalid" (see plan.py's
-#     latest_repair_invalid_blocker, which reads it into a human_decision
-#     blocker) and post the stop comment once, the same shape
-#     AdminBypassGhExecutor.comment_blocked posts from the synchronous path.
-# Deliberately NOT decided at submission time (see
-# repro-babysit-pr-body-human-split.sh): a real agent might still fix a body
-# that looks invalid right now, so the async repair always gets the chance to
-# try before anything here calls it unfixable.
+# Safety invariant: A no-commit PR Body repair must re-check current validity before recording repair-noop or repair-invalid so an async repair gets its chance before being called unfixable.
 def _record_repair_noop_or_invalid_for_pr_body(
     state_file: Path, repo: str, pr_number: int, start_head: str, check_name: str, base: str, cwd: Path,
 ) -> None:
@@ -102,9 +66,7 @@ def _record_repair_noop_or_invalid_for_pr_body(
     detail = gh.pr_detail(repo, pr_number)
     ledger = Ledger(state_file)
     if str(detail.get("state") or "OPEN") != "OPEN":
-        # The PR was merged or closed while the repair was in flight. There is
-        # no longer a base to diff against (an orphaned/merged branch may not
-        # even share history with it), and nothing left to fix either way.
+        # Safety invariant: A merged or closed PR Body repair records repair-noop without diffing because the base may no longer share history and there is nothing left to fix.
         ledger.record("repair-noop", pr_number, start_head, check_name)
         return
     body = str(detail.get("body") or "")
