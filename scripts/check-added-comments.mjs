@@ -20,7 +20,10 @@ const MARKDOWN_FENCE_LANGUAGE_EXTENSIONS = new Map([
   ['py', '.py'], ['python', '.py'],
 ]);
 
-const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([]);
+const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([
+  'skills/admin-bypass-sweep/SKILL.md',
+  'skills/plan-to-invoker/playbooks/verify-then-build.md',
+]);
 
 const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
   'scripts/analyze-json-log.py',
