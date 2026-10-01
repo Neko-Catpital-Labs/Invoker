@@ -1234,7 +1234,6 @@ function startHeadlessMode(): void {
         }),
         runtimeServices,
         appRootDir: __dirname,
-        getWorkerRuntimeController: () => workerRuntimeController,
       } as HeadlessDeps;
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
