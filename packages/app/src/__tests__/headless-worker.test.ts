@@ -264,16 +264,7 @@ describe('headless worker start/stop', () => {
 });
 
 describe('headless worker start/stop', () => {
-  // Incident 2026-08-13: `--headless worker stop <kind>` is documented (see
-  // docs/remote-ssh-targets.md) and has a full delegation implementation in
-  // headless-client.ts, but nothing in the actual runtime dispatch
-  // (runHeadless -> headlessWorker) calls it -- "start"/"stop" fall through
-  // to the single-kind manual-tick branch, which rejects them as unknown
-  // worker kinds. `invoker-ui --headless worker stop e2e-autofix` fails with
-  // `Unknown worker kind: "stop"` against a live owner, even though a live
-  // WorkerRuntimeController (now reachable via getWorkerRuntimeController)
-  // is available and able to do it. The next slice makes these pass.
-  it('currently rejects "stop" as an unknown worker kind, even with a live controller available', async () => {
+  it('rejects "stop" as an unknown worker kind before calling a worker runtime controller', async () => {
     const stop = vi.fn();
     await expect(runHeadless(['worker', 'stop', E2E_AUTOFIX_WORKER_KIND], {
       invokerConfig: {},
@@ -282,7 +273,7 @@ describe('headless worker start/stop', () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('currently rejects "start" as an unknown worker kind, even with a live controller available', async () => {
+  it('rejects "start" as an unknown worker kind before calling a worker runtime controller', async () => {
     const start = vi.fn();
     await expect(runHeadless(['worker', 'start', E2E_AUTOFIX_WORKER_KIND], {
       invokerConfig: {},
