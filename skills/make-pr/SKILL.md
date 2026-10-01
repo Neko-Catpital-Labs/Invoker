@@ -123,6 +123,24 @@ graph TD
 
 </details>
 
+## Measured
+
+Paste what the repro or benchmark command printed, before and after this change. Write `none: <reason>` instead when the slice has nothing to measure.
+
+Command: `exact command`
+
+### Base
+
+```text
+pasted output from the base commit
+```
+
+### Head
+
+```text
+pasted output from this branch
+```
+
 ## Visual Proof
 
 Required when the diff changes UI-impacting files. Include before/after screenshots or a video link.
@@ -156,6 +174,8 @@ Test Plan and Revert Plan are the opposite: keep their `## Test Plan` / `## Reve
 CI validates the declared Review Lane and Review Unit against the actual changed files. Keep `behavior`, `refactor`, and `cleanup` slices separate from docs, policy, and proof files. Keep `proof` separate from product, docs, and policy files. Keep `policy` separate from product and proof files. Keep `docs` separate from product, policy, proof, and product-test files. The exact classification and review-unit boundaries live in `scripts/validate-pr-body.mjs` and `scripts/review-unit-rules.mjs`; split the PR when the local validator reports a mismatch.
 
 When an existing PR changes after its body or proof was written, rerun this skill from the current diff before updating the PR. If the new diff touches UI-impacting files, rerun `skills/visual-proof/SKILL.md` and replace old screenshot or video links with fresh proof for the current code. Do not reuse earlier proof media after UI behavior changes.
+Every PR body carries a visible `## Measured` section, placed after `## Test Plan`. It holds a `Command:` line naming the exact repro or benchmark command, then a `### Base` row and a `### Head` row, each with that command's pasted output in a fenced block. Paste the output the command printed, such as its timing line; a pass count or a sentence about the result is not a measurement. Run the command on the base commit and on this branch, and paste both. When the slice has nothing to measure, write `none: <reason>` in place of the rows. Do not put `## Measured` or its rows inside `<details>`; collapsed content does not count. `scripts/validate-pr-body.mjs` checks the section by its shape and warns when it is missing, collapsed, or has no pasted output under `### Base` or `### Head`. The warning becomes a failure only with `--require-measured`, because a hard requirement would fail the PR Body check on every PR that was already open.
+
 Before writing any "Fixed"/"resolves"/"no longer happens" claim backed by a screenshot or video, actually open that exact media yourself — Read the image, or extract and Read video frames — in the same turn you write the claim. Do not trust an automated DOM/test assertion as a substitute for looking; a test passing proves the test's assertion, not that you looked at what the media shows. State precisely what you saw on a `Manually inspected:` line inside `## Visual Proof`. `scripts/validate-pr-body.mjs` rejects a Visual Proof section that has media but no `Manually inspected:` line. See `skills/prove-it/SKILL.md` for the full rule, including the same standard applied to live-system status claims.
 
 Visual proof must show the changed behavior itself, not just the changed screen area. Before creating or updating the PR, open every screenshot or video and verify the user-visible target is present and identifiable. For conditional or event-driven UI, drive the exact condition that triggers the new state and capture that state. A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof, even when the right file changed.
@@ -299,6 +319,7 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - ensure revert guidance is honest
 - keep Test Plan and Revert Plan content inside their collapsed `<details><summary>Test Plan</summary>` / `<summary>Revert Plan</summary>` blocks
 - do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
+- paste the repro or benchmark command's base and head output under a visible `## Measured` section, or write `none: <reason>`
 - validate the body against the current branch diff with `node scripts/validate-pr-body-local.mjs --body-file <file> --base <base-branch>`
 - run `pnpm run check:comments` and remove any newly-added comment it flags, including one carried in from a cherry-pick
 - for stacked PRs, treat diff-atomicity blockers as fatal, even when readability-only warnings still print

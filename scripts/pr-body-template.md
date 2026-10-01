@@ -60,6 +60,24 @@ graph TD
 
 </details>
 
+## Measured
+
+Paste what the repro or benchmark command printed, before and after this change. Write `none: <reason>` instead when the slice has nothing to measure.
+
+Command: `exact command`
+
+### Base
+
+```text
+pasted output from the base commit
+```
+
+### Head
+
+```text
+pasted output from this branch
+```
+
 ## Visual Proof
 
 Required when the diff changes UI-impacting files. Include before/after screenshots or a video link.
