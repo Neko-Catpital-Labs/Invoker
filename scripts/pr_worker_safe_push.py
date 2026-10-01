@@ -29,6 +29,10 @@ class NothingToPushError(SafePushError):
     """Remote moved past --expected-head, but local HEAD has no work beyond it either."""
 
 
+class StaleHeadNoopError(SafePushError):
+    """Remote moved past --expected-head, so the conditional push must be skipped."""
+
+
 class HeadUnchangedError(SafePushError):
     """Local HEAD is still the captured start SHA; the repair never landed on this checkout."""
 
@@ -217,9 +221,10 @@ def safe_push(
                     expected, live, head_before, branch_name, remote=remote, cwd=cwd,
                 )
             if replayed is None:
-                raise SafePushError(
-                    f"stale-head: refs/heads/{branch_name} is {live}; expected {expected}",
-                    exit_code=20,
+                raise StaleHeadNoopError(
+                    f"noop: stale-head: refs/heads/{branch_name} is {live}; "
+                    f"expected {expected}; skipped push",
+                    exit_code=0,
                 )
             expected = live
         lease = f"refs/heads/{branch_name}:{expected}"
@@ -375,7 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _record_ledgers(args)
         print(f"pr-worker-safe-push: pushed refs/heads/{normalize_branch(args.branch)} to {pushed}")
         return 0
-    except NothingToPushError as exc:
+    except (NothingToPushError, StaleHeadNoopError) as exc:
         print(f"pr-worker-safe-push: {exc}", file=sys.stderr)
         return 0
     except BranchMissingError as exc:
