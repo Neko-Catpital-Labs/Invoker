@@ -276,6 +276,36 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
+    'diff --git a/skills/admin-bypass-sweep/SKILL.md b/skills/admin-bypass-sweep/SKILL.md',
+    '+++ b/skills/admin-bypass-sweep/SKILL.md',
+    '@@ -0,0 +1,3 @@',
+    '+```js',
+    '+const value = true; // explains the obvious',
+    '+```',
+    '',
+  ].join('\n');
+  assert.equal(
+    collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.js']])).length,
+    0,
+    'a grandfathered skill markdown path must stay exempt even for a genuinely new fence comment',
+  );
+}
+
+{
+  const diff = [
+    'diff --git a/skills/plan-to-invoker/playbooks/verify-then-build.md b/skills/plan-to-invoker/playbooks/verify-then-build.md',
+    '+++ b/skills/plan-to-invoker/playbooks/verify-then-build.md',
+    '@@ -0,0 +1,3 @@',
+    '+```bash',
+    '+invoker-ui --headless delete-all   # optional: avoid PlanConflictError',
+    '+```',
+    '',
+  ].join('\n');
+  assert.equal(collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.sh']])).length, 0);
+}
+
+{
+  const diff = [
     'diff --git a/docs/foo.md b/docs/foo.md',
     '+++ b/docs/foo.md',
     '@@ -0,0 +1,3 @@',
