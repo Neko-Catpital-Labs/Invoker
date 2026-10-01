@@ -111,6 +111,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3
+          CI_INSTALL_NO_APT_ERROR: quality-required / Dependency Cruise requires libatomic1, build-essential, and python3, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'quality-required / Dependency Cruise requires libatomic1, build-essential, and python3; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -188,10 +199,10 @@ jobs:
       - name: Install Node runtime and native build dependencies
         shell: bash
         env:
-          CI_INSTALL_PACKAGES: libatomic1 make g++ python3 unzip
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip
           CI_INSTALL_PROBE_SONAME: libatomic.so.1
           CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
-          CI_INSTALL_NO_APT_ERROR: UI Vitest requires libatomic1, make, g++, python3, and unzip, but apt-get is unavailable.
+          CI_INSTALL_NO_APT_ERROR: UI Vitest requires libatomic1, build-essential, python3, and unzip, but apt-get is unavailable.
           CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'UI Vitest requires {{MISSING}}; run as root or provide passwordless sudo for apt-get.'
           CI_INSTALL_FALLBACK_PACKAGE: libatomic1
         run: bash scripts/ci/install-node-system-libraries.sh
@@ -331,6 +342,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip xvfb jq
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip Xvfb jq
+          CI_INSTALL_NO_APT_ERROR: e2e-proof requires libatomic1, build-essential, python3, unzip, xvfb, and jq, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'e2e-proof requires libatomic1, build-essential, python3, unzip, xvfb, and jq; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -339,9 +361,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             .node-version
-
-      - name: Install test system packages
-        run: apt-get update && apt-get install -y unzip xvfb jq make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -465,6 +484,18 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        if: matrix.runner_label != 'Github_Runner'
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3
+          CI_INSTALL_NO_APT_ERROR: required-fast requires libatomic1, build-essential, and python3, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'required-fast requires libatomic1, build-essential, and python3; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -579,11 +610,11 @@ jobs:
         if: matrix.runner_label != 'Github_Runner'
         shell: bash
         env:
-          CI_INSTALL_PACKAGES: libatomic1 make g++ python3 unzip
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip
           CI_INSTALL_PROBE_SONAME: libatomic.so.1
           CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
-          CI_INSTALL_NO_APT_ERROR: libatomic1, make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.
-          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: make, g++, python3, and unzip are required for Node ${{ env.NODE_VERSION }} but cannot be installed without sudo.
+          CI_INSTALL_NO_APT_ERROR: libatomic1, build-essential, python3, and unzip are required for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: build-essential, python3, and unzip are required for Node ${{ env.NODE_VERSION }} but cannot be installed without sudo.
           CI_INSTALL_FALLBACK_PACKAGE: libatomic1
         run: bash scripts/ci/install-node-system-libraries.sh
 
@@ -651,6 +682,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip xvfb jq
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip Xvfb jq
+          CI_INSTALL_NO_APT_ERROR: reset-rulebook-repro requires libatomic1, build-essential, python3, unzip, xvfb, and jq, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'reset-rulebook-repro requires libatomic1, build-essential, python3, unzip, xvfb, and jq; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -659,9 +701,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             .node-version
-
-      - name: Install test system packages
-        run: apt-get update && apt-get install -y unzip xvfb jq make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -711,6 +750,17 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3
+          CI_INSTALL_NO_APT_ERROR: scheduled-repros requires libatomic1, build-essential, and python3, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'scheduled-repros requires libatomic1, build-essential, and python3; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -912,6 +962,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
+          CI_INSTALL_NO_APT_ERROR: Playwright shards require libatomic1, build-essential, python3, and unzip, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'Playwright shards require libatomic1, build-essential, python3, and unzip; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -920,15 +981,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             .node-version
-
-      - name: Install native build tools
-        shell: bash
-        env:
-          CI_INSTALL_PACKAGES: unzip make g++ python3
-          CI_INSTALL_PROBE_COMMANDS: unzip make g++ python3
-          CI_INSTALL_NO_APT_ERROR: Playwright shards require unzip, make, g++, and python3, but apt-get is unavailable.
-          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'Playwright shards require unzip, make, g++, and python3; run as root or provide passwordless sudo for apt-get.'
-        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1000,6 +1052,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
+          CI_INSTALL_NO_APT_ERROR: playwright-nightly-perf requires libatomic1, build-essential, python3, and unzip, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'playwright-nightly-perf requires libatomic1, build-essential, python3, and unzip; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -1008,9 +1071,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             .node-version
-
-      - name: Install native build tools
-        run: apt-get update && apt-get install -y unzip make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1073,6 +1133,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
+          CI_INSTALL_NO_APT_ERROR: playwright-nightly-visual-proof requires libatomic1, build-essential, python3, and unzip, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'playwright-nightly-visual-proof requires libatomic1, build-essential, python3, and unzip; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -1081,9 +1152,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             .node-version
-
-      - name: Install native build tools
-        run: apt-get update && apt-get install -y unzip make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1154,6 +1222,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3 unzip
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3 unzip
+          CI_INSTALL_NO_APT_ERROR: ssh shards require libatomic1, build-essential, python3, and unzip, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'ssh shards require libatomic1, build-essential, python3, and unzip; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
@@ -1162,9 +1241,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             .node-version
-
-      - name: Install native build tools
-        run: apt-get update && apt-get install -y unzip make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1240,17 +1316,16 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Install Node runtime system dependencies
-        if: matrix.name == 'Worktree Provisioning'
-        run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            SUDO=""
-            if command -v sudo >/dev/null 2>&1; then
-              SUDO="sudo"
-            fi
-            $SUDO apt-get update
-            $SUDO apt-get install -y libatomic1
-          fi
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3
+          CI_INSTALL_NO_APT_ERROR: optional-other requires libatomic1, build-essential, and python3, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'optional-other requires libatomic1, build-essential, and python3; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -1478,10 +1553,11 @@ jobs:
       - name: Install system libraries for Node
         shell: bash
         env:
-          CI_INSTALL_PACKAGES: libatomic1
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3
           CI_INSTALL_PROBE_SONAME: libatomic.so.1
-          CI_INSTALL_NO_APT_ERROR: docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.
-          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libatomic1 for Node ${{ env.NODE_VERSION }}; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3
+          CI_INSTALL_NO_APT_ERROR: docker / comprehensive requires libatomic1, build-essential, and python3 for Node ${{ env.NODE_VERSION }}, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libatomic1, build-essential, and python3 for Node ${{ env.NODE_VERSION }}; run as root or provide passwordless sudo for apt-get.'
           CI_INSTALL_FALLBACK_PACKAGE: libatomic1
         run: bash scripts/ci/install-node-system-libraries.sh
 
