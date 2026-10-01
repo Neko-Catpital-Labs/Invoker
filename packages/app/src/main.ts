@@ -2,7 +2,19 @@
 
 import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import {
+  closeSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { config as loadDotenv } from 'dotenv';
 import {
@@ -194,7 +206,8 @@ import {
   rejectTask as sharedRejectTask,
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { createTaskTerminalAdapter } from './task-terminal-adapter.js';
 import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
 import { createEmbeddedTerminalBackend } from './embedded-terminal-backend.js';
@@ -1417,15 +1430,26 @@ function startHeadlessMode(): void {
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
         const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
         const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
-        backupPlan(plan, undefined, logger);
+        if (!payload.noTrack) {
+          backupPlan(plan, undefined, logger);
+        }
         const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
         const workflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
         if (!workflowId) {
           throw new Error(`Failed to resolve workflow id for delegated plan: ${payload.planPath}`);
         }
-        const started = orchestrator.startExecution();
-        logger.info(`standalone started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+        setImmediate(() => {
+          try {
+            const started = orchestrator.startExecution();
+            logger.info(`standalone started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+          } catch (err) {
+            logger.error(
+              `headless.run deferred standalone startExecution failed workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'ipc-delegate' },
+            );
+          }
+        });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
         return { workflowId, tasks };
       };
@@ -2038,49 +2062,238 @@ function startHeadlessMode(): void {
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> => {
-          const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
-          const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-          const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
-          const workflowIds: string[] = [];
-          let upstream: { workflowId: string; featureBranch: string } | undefined;
+          let planName = '<unparsed>';
+          let primaryWorkflowId = '<none>';
+          try {
+            const { readFile } = await import('node:fs/promises');
+            const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+            const submission = parsePlanSubmissionBundle(await readFile(payload.planPath, 'utf-8'));
+            planName = submission.name;
+            const workflowIds: string[] = [];
+            let upstream: { workflowId: string; featureBranch: string } | undefined;
 
-          for (const parsedPlan of submission.plans) {
-            let plan = applyConfiguredPlanDefaults(parsedPlan);
-            if (upstream) {
-              plan = {
-                ...plan,
-                baseBranch: upstream.featureBranch,
-                externalDependencies: [
-                  ...(plan.externalDependencies ?? []),
-                  {
-                    workflowId: upstream.workflowId,
-                    taskId: '__merge__',
-                    requiredStatus: 'completed',
-                    gatePolicy: 'review_ready',
-                  } as const,
-                ],
-              };
+            for (const parsedPlan of submission.plans) {
+              let plan = applyConfiguredPlanDefaults(parsedPlan);
+              if (upstream) {
+                plan = {
+                  ...plan,
+                  baseBranch: upstream.featureBranch,
+                  externalDependencies: [
+                    ...(plan.externalDependencies ?? []),
+                    {
+                      workflowId: upstream.workflowId,
+                      taskId: '__merge__',
+                      requiredStatus: 'completed',
+                      gatePolicy: 'review_ready',
+                    } as const,
+                  ],
+                };
+              }
+              if (!payload.noTrack) {
+                backupPlan(plan, undefined, logger);
+              }
+              const workflowId = orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+              workflowIds.push(workflowId);
+              upstream = { workflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
             }
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-            const workflowId = orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id))!;
-            existingWorkflowIds.add(workflowId);
-            workflowIds.push(workflowId);
-            upstream = { workflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
+
+            const workflowId = workflowIds[workflowIds.length - 1];
+            if (!workflowId) {
+              throw new Error('Loaded plan did not create a workflow.');
+            }
+            primaryWorkflowId = workflowId;
+            setImmediate(() => {
+              try {
+                const started = orchestrator.startExecution();
+                logger.info(
+                  `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+                  { module: 'ipc-delegate' },
+                );
+              } catch (err) {
+                logger.error(
+                  `headless.run deferred standalone startExecution failed plan="${planName}" workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+                  { module: 'ipc-delegate' },
+                );
+              }
+            });
+            const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+            return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName };
+          } catch (err) {
+            logger.error(
+              `headless.run intake failed plan="${planName}" workflow="${primaryWorkflowId}" path="${payload.planPath}": ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'ipc-delegate' },
+            );
+            throw err;
+          }
+        };
+
+        const startHeadlessRunFifoIntake = (): void => {
+          const fifoPath = path.join(resolveInvokerHomeRoot(), 'headless-run.fifo');
+          let stopped = false;
+          let fifoFd: number | undefined;
+          try {
+            if (existsSync(fifoPath)) {
+              unlinkSync(fifoPath);
+            }
+            execFileSync('mkfifo', [fifoPath], { stdio: 'ignore' });
+            fifoFd = openSync(fifoPath, 'r+');
+          } catch (err) {
+            logger.warn(
+              `headless.run fifo intake unavailable path="${fifoPath}": ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'ipc-delegate' },
+            );
+            return;
           }
 
-          const workflowId = workflowIds[workflowIds.length - 1];
-          if (!workflowId) {
-            throw new Error('Loaded plan did not create a workflow.');
-          }
-          const started = orchestrator.startExecution();
-          logger.info(
-            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
-            { module: 'ipc-delegate' },
-          );
-          const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-          return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
+          const pendingFifoPlanPaths: string[] = [];
+          let fifoDrainTimer: NodeJS.Timeout | undefined;
+          const drainFifoPlanPaths = (): void => {
+            fifoDrainTimer = undefined;
+            const batch = pendingFifoPlanPaths.splice(0, pendingFifoPlanPaths.length);
+            for (const planPath of batch) {
+              void executeStandaloneHeadlessRun({ planPath, noTrack: true }).catch((err) => {
+                logger.error(
+                  `headless.run fifo async intake failed plan="<unknown>" workflow="<none>" path="${planPath}": ${err instanceof Error ? err.message : String(err)}`,
+                  { module: 'ipc-delegate' },
+                );
+              });
+            }
+          };
+          const scheduleFifoIntake = (planPath: string): void => {
+            pendingFifoPlanPaths.push(planPath);
+            if (fifoDrainTimer) return;
+            fifoDrainTimer = setTimeout(drainFifoPlanPaths, 250);
+          };
+          const stream = createReadStream(fifoPath, { fd: fifoFd, encoding: 'utf8', autoClose: false });
+          const reader = createInterface({ input: stream, crlfDelay: Infinity });
+          reader.on('line', (line) => {
+            const planPath = line.trim();
+            if (!planPath) return;
+            scheduleFifoIntake(planPath);
+          });
+          stream.on('error', (err) => {
+            if (!stopped) {
+              logger.error(
+                `headless.run fifo intake stream failed path="${fifoPath}": ${err instanceof Error ? err.message : String(err)}`,
+                { module: 'ipc-delegate' },
+              );
+            }
+          });
+          process.once('exit', () => {
+            stopped = true;
+            try {
+              if (fifoDrainTimer) clearTimeout(fifoDrainTimer);
+              drainFifoPlanPaths();
+              reader.close();
+              if (fifoFd !== undefined) closeSync(fifoFd);
+              if (existsSync(fifoPath)) unlinkSync(fifoPath);
+            } catch {
+              // Best-effort cleanup; stale FIFOs are replaced on the next owner boot.
+            }
+          });
         };
+
+        const startHeadlessRunFileIntake = (): void => {
+          const invokerHome = resolveInvokerHomeRoot();
+          const queueDir = path.join(invokerHome, 'headless-run-intake.d');
+          const logPath = path.join(invokerHome, 'headless-run-intake.log');
+          const offsetPath = path.join(invokerHome, 'headless-run-intake.offset');
+          const readyPath = path.join(invokerHome, 'headless-run-intake.ready');
+          let offset = 0;
+          let partialLine = '';
+          let draining = false;
+          try {
+            mkdirSync(queueDir, { recursive: true });
+            for (const entry of readdirSync(queueDir)) {
+              if (entry.endsWith('.item')) unlinkSync(path.join(queueDir, entry));
+            }
+            writeFileSync(logPath, '', 'utf8');
+            writeFileSync(offsetPath, '0\n', 'utf8');
+            writeFileSync(readyPath, `${process.pid}\n`, 'utf8');
+          } catch (err) {
+            logger.warn(
+              `headless.run file intake unavailable path="${logPath}": ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'ipc-delegate' },
+            );
+            return;
+          }
+
+          const drain = async (): Promise<void> => {
+            if (draining) return;
+            draining = true;
+            try {
+              const queuedItems = readdirSync(queueDir)
+                .filter((entry) => entry.endsWith('.item'))
+                .sort();
+              for (const entry of queuedItems) {
+                const itemPath = path.join(queueDir, entry);
+                let planPath = '';
+                try {
+                  planPath = readFileSync(itemPath, 'utf8').trim();
+                  if (planPath) {
+                    await executeStandaloneHeadlessRun({ planPath, noTrack: true });
+                  }
+                  unlinkSync(itemPath);
+                } catch (err) {
+                  logger.error(
+                    `headless.run file intake failed plan="<unknown>" workflow="<none>" path="${planPath || itemPath}": ${err instanceof Error ? err.message : String(err)}`,
+                    { module: 'ipc-delegate' },
+                  );
+                }
+              }
+              const size = statSync(logPath).size;
+              if (size <= offset) return;
+              const length = size - offset;
+              const buffer = Buffer.alloc(length);
+              const fd = openSync(logPath, 'r');
+              try {
+                readSync(fd, buffer, 0, length, offset);
+              } finally {
+                closeSync(fd);
+              }
+              offset = size;
+              const text = partialLine + buffer.toString('utf8');
+              const lines = text.split('\n');
+              partialLine = lines.pop() ?? '';
+              for (const line of lines) {
+                const planPath = line.trim();
+                if (!planPath) continue;
+                try {
+                  await executeStandaloneHeadlessRun({ planPath, noTrack: true });
+                } catch (err) {
+                  logger.error(
+                    `headless.run file intake failed plan="<unknown>" workflow="<none>" path="${planPath}": ${err instanceof Error ? err.message : String(err)}`,
+                    { module: 'ipc-delegate' },
+                  );
+                }
+              }
+              writeFileSync(offsetPath, `${offset}\n`, 'utf8');
+            } catch (err) {
+              logger.error(
+                `headless.run file intake drain failed path="${logPath}": ${err instanceof Error ? err.message : String(err)}`,
+                { module: 'ipc-delegate' },
+              );
+            } finally {
+              draining = false;
+            }
+          };
+
+          const timer = setInterval(() => { void drain(); }, 10);
+          timer.unref?.();
+          process.once('exit', () => {
+            clearInterval(timer);
+            for (const filePath of [readyPath, offsetPath, logPath]) {
+              try {
+                if (existsSync(filePath)) unlinkSync(filePath);
+              } catch {
+                // Best-effort cleanup; stale intake files are replaced on owner boot.
+              }
+            }
+          });
+        };
+
+        startHeadlessRunFileIntake();
+        startHeadlessRunFifoIntake();
 
 
         const executeStandaloneHeadlessResume = async (
@@ -2095,12 +2308,27 @@ function startHeadlessMode(): void {
 
         messageBus.onRequest('headless.run', async (req: unknown) => {
           noteStandaloneOwnerActivity();
-          const { planPath, traceId } = req as { planPath: string; traceId?: string };
+          const { planPath, traceId, noTrack, ackOnly } = req as { planPath: string; traceId?: string; noTrack?: boolean; ackOnly?: boolean };
           logger.info(
             `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=standalone`,
             { module: 'ipc-delegate' },
           );
-          const result = await executeStandaloneHeadlessRun({ planPath });
+          if (noTrack && ackOnly) {
+            setImmediate(() => {
+              void executeStandaloneHeadlessRun({ planPath, noTrack }).catch((err) => {
+                logger.error(
+                  `headless.run async intake failed trace=${traceId ?? '<none>'} planPath="${planPath}": ${err instanceof Error ? err.message : String(err)}`,
+                  { module: 'ipc-delegate' },
+                );
+              });
+            });
+            logger.info(
+              `headless.run ack-only accepted trace=${traceId ?? '<none>'} planPath="${planPath}" mode=standalone`,
+              { module: 'ipc-delegate' },
+            );
+            return { ok: true };
+          }
+          const result = await executeStandaloneHeadlessRun({ planPath, noTrack });
           logger.info(
             `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${result.tasks.length} mode=standalone`,
             { module: 'ipc-delegate' },
@@ -3432,12 +3660,27 @@ startMainProcessBootstrap({
           resetUiPerfStats,
         }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
-        const { planPath, traceId } = req as { planPath: string; traceId?: string };
+        const { planPath, traceId, noTrack, ackOnly } = req as { planPath: string; traceId?: string; noTrack?: boolean; ackOnly?: boolean };
         logger.info(
           `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=gui`,
           { module: 'ipc-delegate' },
         );
-        const result = await mutationActions.executeHeadlessRun({ planPath });
+        if (noTrack && ackOnly) {
+          setImmediate(() => {
+            void mutationActions.executeHeadlessRun({ planPath, noTrack }).catch((err) => {
+              logger.error(
+                `headless.run async intake failed trace=${traceId ?? '<none>'} planPath="${planPath}": ${err instanceof Error ? err.message : String(err)}`,
+                { module: 'ipc-delegate' },
+              );
+            });
+          });
+          logger.info(
+            `headless.run ack-only accepted trace=${traceId ?? '<none>'} planPath="${planPath}" mode=gui`,
+            { module: 'ipc-delegate' },
+          );
+          return { ok: true };
+        }
+        const result = await mutationActions.executeHeadlessRun({ planPath, noTrack });
         logger.info(
           `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${result.tasks.length} mode=gui`,
           { module: 'ipc-delegate' },

@@ -748,6 +748,26 @@ async function resolveOwnerAndDelegate(
   return null; // Could not resolve
 }
 
+async function tryDirectNoTrackRunDelegation(
+  args: string[],
+  deps: HeadlessClientDeps,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<number | null> {
+  if (noTrack !== true || args[0] !== 'run') return null;
+
+  const outcome = await delegateMutation(
+    args,
+    deps.messageBus,
+    waitForApproval,
+    noTrack,
+    POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS,
+  );
+  if (outcome.kind !== 'delegated') return null;
+  const exitCode = process.exitCode;
+  return typeof exitCode === 'number' ? exitCode : 0;
+}
+
 async function resolveExistingOwnerAndDelegate(
   args: string[],
   deps: HeadlessClientDeps,
@@ -895,6 +915,11 @@ export async function runHeadlessClientCommand(
     if (owner === null && tryAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
       return 0;
     }
+  }
+
+  const directNoTrackRun = await tryDirectNoTrackRunDelegation(args, deps, waitForApproval, noTrack);
+  if (directNoTrackRun !== null) {
+    return directNoTrackRun;
   }
 
   const result = await resolveOwnerAndDelegate(args, deps, waitForApproval, noTrack);

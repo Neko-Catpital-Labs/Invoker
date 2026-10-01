@@ -13,7 +13,7 @@ function buildSha(): string {
 const gitSha = buildSha();
 
 export default defineConfig({
-  entry: ['src/main.ts', 'src/preload.ts', 'src/headless-client.ts', 'src/action-graph-diagnostics.ts', 'src/sqlite-quick-check-worker.ts'],
+  entry: ['src/main.ts', 'src/preload.ts', 'src/headless-client.ts', 'src/headless-ipc-client.ts', 'src/action-graph-diagnostics.ts', 'src/sqlite-quick-check-worker.ts'],
   format: ['cjs'],
   outDir: 'dist',
   external: ['electron', 'node:sqlite', 'sql.js', 'dockerode', 'node-pty', 'dotenv'],

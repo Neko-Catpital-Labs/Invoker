@@ -1,9 +1,197 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Build and launch the Invoker Electron app (GUI mode).
 # Also used for headless mode: ./run.sh --headless run <plan.yaml>
+
+if [ "${INVOKER_RUN_SH_BASH_ACTIVE:-0}" != "1" ]; then
+  if [ "${1:-}" = "--headless" ] \
+    && { [ "${2:-}" = "--no-track" ] || [ "${2:-}" = "--do-not-track" ]; } \
+    && [ "${3:-}" = "run" ]; then
+    _ipc_plan_path="${4:-}"
+    _ipc_home="${INVOKER_DB_DIR:-$HOME/.invoker}"
+    _ipc_intake_dir="$_ipc_home/headless-run-intake.d"
+    if [ -d "$_ipc_intake_dir" ]; then
+      case "$_ipc_plan_path" in
+        /*) ;;
+        *)
+          case "$0" in
+            /*) _ipc_plan_path="${0%/*}/$_ipc_plan_path" ;;
+          esac
+          ;;
+      esac
+      printf '%s\n' "$_ipc_plan_path" > "$_ipc_intake_dir/$$.item"
+      exit 0
+    fi
+    _ipc_intake_ready="$_ipc_home/headless-run-intake.ready"
+    _ipc_intake_log="$_ipc_home/headless-run-intake.log"
+    if [ -f "$_ipc_intake_ready" ]; then
+      case "$_ipc_plan_path" in
+        /*) ;;
+        *)
+          case "$0" in
+            /*) _ipc_plan_path="${0%/*}/$_ipc_plan_path" ;;
+          esac
+          ;;
+      esac
+      printf '%s\n' "$_ipc_plan_path" >> "$_ipc_intake_log"
+      exit 0
+    fi
+  fi
+
+  case "$0" in
+    /*) _fast_repo_root="${0%/*}" ;;
+    *) _fast_repo_root="" ;;
+  esac
+
+  if [ -n "$_fast_repo_root" ] \
+    && [ "${1:-}" = "--headless" ] \
+    && { [ "${2:-}" = "--no-track" ] || [ "${2:-}" = "--do-not-track" ]; } \
+    && [ "${3:-}" = "run" ] \
+    && [ -n "${INVOKER_IPC_SOCKET:-}" ] \
+    && [ -S "${INVOKER_IPC_SOCKET:-}" ] \
+    && command -v perl >/dev/null 2>&1; then
+    _ipc_plan_path="${4:-}"
+    case "$_ipc_plan_path" in
+      /*) ;;
+      *) _ipc_plan_path="$_fast_repo_root/$_ipc_plan_path" ;;
+    esac
+    _ipc_fifo="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run.fifo"
+    if [ -p "$_ipc_fifo" ]; then
+      printf '%s\n' "$_ipc_plan_path" > "$_ipc_fifo"
+      echo "--no-track enabled: delegated submission accepted; exiting without tracking."
+      exit 0
+    fi
+    _ipc_queue_root="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-queue"
+    _ipc_queue_lock="${_ipc_queue_root}.lock"
+    [ -d "$_ipc_queue_root" ] || mkdir -p "$_ipc_queue_root"
+    _ipc_item="$_ipc_queue_root/$$.item"
+    printf '%s\n' "$_ipc_plan_path" > "$_ipc_item"
+    if ( set -C; : > "$_ipc_queue_lock" ) 2>/dev/null; then
+      perl "$_fast_repo_root/scripts/headless-run-ipc.pl" --drain-queue "$_ipc_queue_root" "$_ipc_queue_lock" >/dev/null 2>>"${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-ipc.err" &
+    fi
+    echo "--no-track enabled: delegated submission accepted; exiting without tracking."
+    exit 0
+  fi
+
+  if [ "${1:-}" = "--headless" ] \
+    && [ "${2:-}" = "query" ] \
+    && [ -n "${INVOKER_DB_DIR:-}" ]; then
+    _ipc_intake_dir="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-intake.d"
+    for _ipc_wait in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100; do
+      if [ -d "$_ipc_intake_dir" ] && ls "$_ipc_intake_dir"/*.item >/dev/null 2>&1; then
+        sleep 0.05
+      else
+        break
+      fi
+    done
+    _ipc_intake_log="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-intake.log"
+    _ipc_intake_offset="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-intake.offset"
+    for _ipc_wait in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100; do
+      if [ -f "$_ipc_intake_log" ] && [ -f "$_ipc_intake_offset" ]; then
+        _ipc_intake_size=$(wc -c < "$_ipc_intake_log" 2>/dev/null | tr -d '[:space:]')
+        _ipc_intake_size="${_ipc_intake_size:-0}"
+        _ipc_intake_done=$(cat "$_ipc_intake_offset" 2>/dev/null || printf '0')
+        if [ "${_ipc_intake_size:-0}" = "${_ipc_intake_done:-0}" ]; then
+          break
+        fi
+        sleep 0.05
+      else
+        break
+      fi
+    done
+    _ipc_queue_root="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-queue"
+    _ipc_queue_lock="${_ipc_queue_root}.lock"
+    _ipc_wait=0
+    while [ "$_ipc_wait" -lt 100 ]; do
+      if ! ls "$_ipc_queue_root"/*.item >/dev/null 2>&1 && [ ! -e "$_ipc_queue_lock" ]; then
+        break
+      fi
+      sleep 0.05
+      _ipc_wait=$((_ipc_wait + 1))
+    done
+  fi
+
+  INVOKER_RUN_SH_BASH_ACTIVE=1 exec bash "$0" "$@"
+fi
+
 set -e
+
+_launcher_path="${BASH_SOURCE[0]:-$0}"
+case "$_launcher_path" in
+  /*) _fast_repo_root="${_launcher_path%/*}" ;;
+  *) _fast_repo_root="" ;;
+esac
+
+if [ -n "$_fast_repo_root" ] \
+  && [ "${1:-}" = "--headless" ] \
+  && { [ "${2:-}" = "--no-track" ] || [ "${2:-}" = "--do-not-track" ]; } \
+  && [ "${3:-}" = "run" ] \
+  && [ -n "${INVOKER_IPC_SOCKET:-}" ] \
+  && [ -S "${INVOKER_IPC_SOCKET:-}" ] \
+  && command -v perl >/dev/null 2>&1; then
+  _ipc_queue_root="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-queue"
+  _ipc_queue_lock="${_ipc_queue_root}.lock"
+  [ -d "$_ipc_queue_root" ] || mkdir -p "$_ipc_queue_root"
+  _ipc_stamp="${EPOCHREALTIME:-$SECONDS}"
+  _ipc_stamp="${_ipc_stamp//[^0-9]/}"
+  _ipc_item="$_ipc_queue_root/$_ipc_stamp-$$-$RANDOM.item"
+  _ipc_plan_path="${4:-}"
+  case "$_ipc_plan_path" in
+    /*) ;;
+    *) _ipc_plan_path="$_fast_repo_root/$_ipc_plan_path" ;;
+  esac
+  printf '%s\n' "$_ipc_plan_path" > "$_ipc_item"
+  if ( set -o noclobber; : > "$_ipc_queue_lock" ) 2>/dev/null; then
+    perl "$_fast_repo_root/scripts/headless-run-ipc.pl" --drain-queue "$_ipc_queue_root" "$_ipc_queue_lock" >/dev/null 2>>"${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-ipc.err" &
+  fi
+  echo "--no-track enabled: delegated submission accepted; exiting without tracking."
+  exit 0
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
+
+if [ "${1:-}" = "--headless" ] \
+  && { [ "${2:-}" = "--no-track" ] || [ "${2:-}" = "--do-not-track" ]; } \
+  && [ "${3:-}" = "run" ] \
+  && [ -n "${INVOKER_IPC_SOCKET:-}" ] \
+  && [ -S "${INVOKER_IPC_SOCKET:-}" ] \
+  && command -v perl >/dev/null 2>&1; then
+  _ipc_plan_path="${4:-}"
+  case "$_ipc_plan_path" in
+    /*) ;;
+    *) _ipc_plan_path="$REPO_ROOT/$_ipc_plan_path" ;;
+  esac
+  _ipc_fifo="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run.fifo"
+  if [ -p "$_ipc_fifo" ]; then
+    printf '%s\n' "$_ipc_plan_path" > "$_ipc_fifo"
+    exit 0
+  fi
+  _ipc_queue_root="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-queue"
+  _ipc_queue_lock="${_ipc_queue_root}.lock"
+  [ -d "$_ipc_queue_root" ] || mkdir -p "$_ipc_queue_root"
+  _ipc_stamp="${EPOCHREALTIME:-$SECONDS}"
+  _ipc_stamp="${_ipc_stamp//[^0-9]/}"
+  _ipc_item="$_ipc_queue_root/$_ipc_stamp-$$-$RANDOM.item"
+  printf '%s\n' "$_ipc_plan_path" > "$_ipc_item"
+  if ( set -o noclobber; : > "$_ipc_queue_lock" ) 2>/dev/null; then
+    perl "$REPO_ROOT/scripts/headless-run-ipc.pl" --drain-queue "$_ipc_queue_root" "$_ipc_queue_lock" >/dev/null 2>>"${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-ipc.err" &
+  fi
+  echo "--no-track enabled: delegated submission accepted; exiting without tracking."
+  exit 0
+fi
+
+if [ "${1:-}" = "--headless" ] \
+  && [ "${2:-}" = "query" ] \
+  && [ -n "${INVOKER_DB_DIR:-}" ]; then
+  _ipc_queue_root="${INVOKER_DB_DIR:-$HOME/.invoker}/headless-run-queue"
+  _ipc_queue_lock="${_ipc_queue_root}.lock"
+  for _ipc_wait in {1..100}; do
+    if ! ls "$_ipc_queue_root"/*.item >/dev/null 2>&1 && [ ! -e "$_ipc_queue_lock" ]; then
+      break
+    fi
+    sleep 0.05
+  done
+fi
 
 if [ "${INVOKER_DEVELOPMENT_PROFILE_ACTIVE:-0}" != "1" ]; then
   exec node "$REPO_ROOT/scripts/with-invoker-development-profile.mjs" -- bash "$0" "$@"
@@ -84,6 +272,10 @@ if [ "$1" = "--headless" ]; then
     exec bash "$REPO_ROOT/scripts/retry-tasks-by-status.sh" "$@"
   fi
 
+  if [ -n "${INVOKER_DB_DIR:-}" ]; then
+    mkdir -p "${INVOKER_DB_DIR}/headless-run-queue" 2>/dev/null || true
+  fi
+
   # Build app and dependencies if headless entry point is missing (e.g. fresh worktree).
   if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
     pnpm --filter @invoker/core build >&2
@@ -100,6 +292,20 @@ if [ "$1" = "--headless" ]; then
   if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
     echo "Building @invoker/app (headless-client.js missing)..." >&2
     pnpm --filter @invoker/app build >&2
+  fi
+  if { [ "${1:-}" = "--no-track" ] || [ "${1:-}" = "--do-not-track" ]; } \
+    && [ "${2:-}" = "run" ] \
+    && command -v perl >/dev/null 2>&1; then
+    set +e
+    perl "$REPO_ROOT/scripts/headless-run-ipc.pl" "$@"
+    _ipc_status=$?
+    set -e
+    if [ "$_ipc_status" -eq 0 ]; then
+      exit 0
+    fi
+    if [ "$_ipc_status" -ne 86 ]; then
+      exit "$_ipc_status"
+    fi
   fi
   exec node ./packages/app/dist/headless-client.js "$@"
 fi
