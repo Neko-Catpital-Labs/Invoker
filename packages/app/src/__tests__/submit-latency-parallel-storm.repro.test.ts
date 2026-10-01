@@ -24,6 +24,7 @@ const APP_MAIN = join(REPO_ROOT, 'packages', 'app', 'dist', 'main.js');
 const INTAKE_COUNT = 50;
 const ACK_BUDGET_MS = 200;
 const CONTROLLED_REPRO_RUN = process.env.INVOKER_REPRO_EXPECT === 'bug' || process.env.INVOKER_REPRO_EXPECT === 'fixed';
+const DEFAULT_FIXED_PROOF_MODE = process.env.INVOKER_REPRO_EXPECT === 'fixed';
 const OWNER_READY_TIMEOUT_MS = 60_000;
 const CLIENT_TIMEOUT_MS = 30_000;
 const QUERY_TIMEOUT_MS = 30_000;
@@ -400,6 +401,7 @@ describe.skipIf(!CONTROLLED_REPRO_RUN)('headless run intake latency under a 50-c
         return;
       }
 
+      expect(DEFAULT_FIXED_PROOF_MODE, `expected fixed-mode after-proof run; ${measured}`).toBe(true);
       expect(p95, `parallel intake ack p95 exceeded budget; ${measured}`).toBeLessThan(ACK_BUDGET_MS);
       expect(lostNames, `parallel intake lost plan names; ${measured}`).toEqual([]);
       expect(doubledNames, `parallel intake duplicated plan names; ${measured}`).toEqual([]);
