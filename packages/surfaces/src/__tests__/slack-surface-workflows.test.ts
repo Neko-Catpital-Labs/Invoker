@@ -761,7 +761,7 @@ describe('in-channel workflow assistant', () => {
     ) => Promise<string>;
 
     try {
-      await expect(runOneShotPlanner.call(surface, { tool: 'omp', model: 'claude-sonnet-4-5' }, 'ignored prompt')).resolves.toBe(
+      await expect(runOneShotPlanner.call(surface, { tool: 'omp', model: 'claude-sonnet-5-5' }, 'ignored prompt')).resolves.toBe(
         'The running task is wf-1-2/api.',
       );
       expect(logSpy).toHaveBeenCalledWith(
