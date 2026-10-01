@@ -615,6 +615,10 @@ export async function headlessCheckPrStatus(
   }
 }
 
+/**
+ * Dispatches headless worker commands for listing, status, lifecycle control,
+ * live ticking, and one-shot worker execution.
+ */
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
