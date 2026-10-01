@@ -10,8 +10,8 @@ All notable changes to Invoker will be documented in this file.
 
 ## 0.2.1
 
-- Install writes worker-flagged Claude hooks into the Invoker worker settings
-  instead of copying from interactive `~/.claude`.
+- Install stores the Claude hook under the Invoker home and registers it in
+  interactive `~/.claude/settings.json`.
 - Invoker prepare no longer copies hooks into the Claude worker config; it
   leaves an existing worker `settings.json` hooks map alone.
 
