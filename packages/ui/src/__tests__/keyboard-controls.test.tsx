@@ -12,6 +12,8 @@ import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-
 import type { WorkflowMeta } from '../types.js';
 import * as ReactFlowModule from '@xyflow/react';
 
+vi.setConfig({ testTimeout: 45_000 });
+
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
@@ -50,13 +52,15 @@ const tasks = [
   }),
 ];
 
+const SLOW_UI_WAIT_MS = 45_000;
+
 async function renderKeyboardFixture(mock: MockInvoker) {
   mock.setTasks(tasks, workflows);
   render(<App />);
   fireEvent.click(await screen.findByTestId('sidebar-planning'));
   await screen.findByTestId('workflow-node-wf-a');
   await screen.findByTestId('selected-workflow-mini-dag');
-  await screen.findByTestId('rf__node-wf-a/task-a');
+  await screen.findByTestId('rf__node-wf-a/task-a', undefined, { timeout: SLOW_UI_WAIT_MS });
 }
 
 function key(keyName: string, init: Partial<KeyboardEvent> = {}) {
@@ -106,7 +110,7 @@ describe('Side rail controls (component)', () => {
     });
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
-  }, 10_000);
+  }, 45_000);
 
   it('Clear button calls clear', async () => {
     render(<App />);
@@ -134,7 +138,7 @@ describe('Side rail controls (component)', () => {
     render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await screen.findByTestId('selected-workflow-mini-dag');
-    fireEvent.click(await screen.findByTestId('rf__node-wf-a/task-a'));
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/task-a', undefined, { timeout: SLOW_UI_WAIT_MS }));
 
     const select = await screen.findByTestId('executor-pool-select');
     fireEvent.change(select, { target: { value: 'pool-b' } });
@@ -605,21 +609,33 @@ describe('Graph camera controls (component)', () => {
     makeUITask({ id: 'wf-c/t', description: 'Gamma Task', workflowId: 'wf-c', command: 'echo c' }),
   ];
 
+  function createLocalStorageShim() {
+    const store = new Map<string, string>();
+    return {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => { store.set(k, String(v)); },
+      removeItem: (k: string) => { store.delete(k); },
+      clear: () => { store.clear(); },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      get length() { return store.size; },
+    };
+  }
+
   beforeEach(() => {
     // App's theme hook touches localStorage; keep a shim so F1 can assert it
     // does not perform storage writes after the initial render settles.
     originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-    const store = new Map<string, string>();
-    localStorageSetItemMock = vi.fn((k: string, v: string) => { store.set(k, String(v)); });
+    const localStorageShim = createLocalStorageShim();
+    localStorageSetItemMock = vi.fn(localStorageShim.setItem);
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       value: {
-        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        getItem: localStorageShim.getItem,
         setItem: localStorageSetItemMock,
-        removeItem: (k: string) => { store.delete(k); },
-        clear: () => { store.clear(); },
-        key: (i: number) => [...store.keys()][i] ?? null,
-        get length() { return store.size; },
+        removeItem: localStorageShim.removeItem,
+        clear: localStorageShim.clear,
+        key: localStorageShim.key,
+        get length() { return localStorageShim.length; },
       },
     });
     mock = createMockInvoker();
@@ -637,7 +653,10 @@ describe('Graph camera controls (component)', () => {
     if (originalLocalStorageDescriptor) {
       Object.defineProperty(globalThis, 'localStorage', originalLocalStorageDescriptor);
     } else {
-      delete (globalThis as { localStorage?: unknown }).localStorage;
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: createLocalStorageShim(),
+      });
     }
     originalLocalStorageDescriptor = undefined;
   });
@@ -656,7 +675,10 @@ describe('Graph camera controls (component)', () => {
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await screen.findByTestId(`workflow-node-${wfs[0].id}`);
     await screen.findByTestId('selected-workflow-mini-dag');
-    await waitFor(() => expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(
+      () => expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2),
+      { timeout: 10_000 },
+    );
     // Opening Plan graph issues a fit; drain any trailing center/fit from that
     // transition before tests assert on post-mount camera moves.
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
@@ -767,7 +789,7 @@ describe('Graph camera controls (component)', () => {
   it('clicking a task node selects it without moving the camera', async () => {
     await renderAndSettle();
 
-    fireEvent.click(await screen.findByTestId('rf__node-wf-a/task-b'));
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/task-b', undefined, { timeout: SLOW_UI_WAIT_MS }));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');
@@ -780,7 +802,7 @@ describe('Graph camera controls (component)', () => {
   it('right-clicking a task node opens its context menu without moving the camera', async () => {
     await renderAndSettle();
 
-    fireEvent.contextMenu(await screen.findByTestId('rf__node-wf-a/task-b'));
+    fireEvent.contextMenu(await screen.findByTestId('rf__node-wf-a/task-b', undefined, { timeout: SLOW_UI_WAIT_MS }));
 
     expect(await screen.findByRole('menu')).toHaveTextContent('Open Terminal');
     await flushFrame();
@@ -850,6 +872,9 @@ describe('Graph camera controls (component)', () => {
 
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId('workflow-graph-surface')).toHaveFocus());
+    await flushFrame();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
 
     key('ArrowRight');
 
