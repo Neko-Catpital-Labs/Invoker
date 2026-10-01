@@ -62,7 +62,7 @@ def completed_keys(rows: list[dict[str, Any]]) -> set[tuple[str, int, str, str]]
         if isinstance(fields[0], str) and isinstance(fields[1], int) and all(
             isinstance(value, str) for value in fields[2:]
         ):
-            keys.add(fields)  # type: ignore[arg-type]
+            keys.add(fields)  # type: ignore[arg-type]  # Safety invariant: only narrowed key tuples enter the set.
     return keys
 
 
