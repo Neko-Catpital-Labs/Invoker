@@ -37,9 +37,9 @@ import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
+import type { WorkerRuntimeController } from './worker-control.js';
 import type { TaskHandleMap } from './execution/task-runner-wiring.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import type { WorkerRuntimeController } from './worker-control.js';
 
 
 export interface HeadlessDeps {
