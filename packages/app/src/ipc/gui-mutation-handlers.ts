@@ -53,7 +53,13 @@ import {
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
 import { backupPlan } from '../plan-backup.js';
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
-import { assertRemoteRepoUrlCloneable, isRemoteRepoUrl } from '../plan-parser.js';
+import {
+  applyConfiguredPlanDefaults,
+  assertRemoteRepoUrlCloneable,
+  isRemoteRepoUrl,
+  parsePlanSubmissionBundleFile,
+  type PlanSubmissionBundle,
+} from '../plan-parser.js';
 import { repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
@@ -762,14 +768,16 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     }
   }
 
-  async function executeHeadlessRun(
-    payload: HeadlessRunMutationPayload,
-  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
-    const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
-    const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-    taskHandles.clear();
-    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-    const workflowIds: string[] = [];
+  let intakePersistQueue: Promise<unknown> = Promise.resolve();
+
+  function serializeIntakePersist<T>(persist: () => T): Promise<T> {
+    const settled = intakePersistQueue.then(persist, persist);
+    intakePersistQueue = settled.then(() => undefined, () => undefined);
+    return settled;
+  }
+
+  function persistPlanSubmission(submission: PlanSubmissionBundle): string[] {
+    const persistedWorkflowIds: string[] = [];
     let upstream: { workflowId: string; featureBranch: string } | undefined;
 
     for (const parsedPlan of submission.plans) {
@@ -790,19 +798,29 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         };
       }
       backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+      const loadedWorkflowId = orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const workflow = persistence.loadWorkflow(loadedWorkflowId);
       if (!workflow) {
-        throw new Error('Loaded plan did not create a workflow.');
+        throw new Error(
+          `Plan "${plan.name}" reported workflow "${loadedWorkflowId}" but no such workflow is readable from persistence.`,
+        );
       }
-      existingWorkflowIds.add(workflow.id);
-      workflowIds.push(workflow.id);
+      persistedWorkflowIds.push(workflow.id);
       upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
     }
 
+    return persistedWorkflowIds;
+  }
+
+  async function executeHeadlessRun(
+    payload: HeadlessRunMutationPayload,
+  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
+    const submission = await parsePlanSubmissionBundleFile(payload.planPath);
+    const workflowIds = await serializeIntakePersist(() => persistPlanSubmission(submission));
+
     const workflowId = workflowIds[workflowIds.length - 1];
     if (!workflowId) {
-      throw new Error('Loaded plan did not create a workflow.');
+      throw new Error(`Plan "${submission.name}" did not create a workflow.`);
     }
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     setImmediate(() => {

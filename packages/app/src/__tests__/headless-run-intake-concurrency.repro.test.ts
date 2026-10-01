@@ -1,11 +1,12 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { SQLiteAdapter } from '@invoker/data-store';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const INTAKE_COUNT = 10;
 const CONTROLLED_REPRO_RUN = process.env.INVOKER_REPRO_EXPECT === 'bug' || process.env.INVOKER_REPRO_EXPECT === 'fixed';
@@ -216,5 +217,214 @@ describe.skipIf(!CONTROLLED_REPRO_RUN)('headless run intake snapshot-diff attrib
     expect(report.misattributed, `an intake ack must name its own workflow; ${report.measured}`).toEqual([]);
     expect(report.sharedAckIds, `two intakes must not ack the same workflow id; ${report.measured}`).toEqual([]);
     expect(report.orphanedWorkflowIds, `every stored workflow must be acked to some intake; ${report.measured}`).toEqual([]);
+  });
+});
+
+type HandlerIntakeAck = IntakeAck & {
+  storedName: string | undefined;
+  storedTaskCount: number;
+  ackedTaskCount: number;
+};
+
+type HandlerFixture = {
+  tmpDir: string;
+  repoUrl: string;
+  adapter: SQLiteAdapter;
+  taskHandles: Map<string, unknown>;
+  handlerScans: { listWorkflows: number };
+  actions: {
+    executeHeadlessRun: (payload: { planPath: string }) => Promise<{
+      workflowId: string;
+      tasks: unknown[];
+      workflowIds: string[];
+      workflowCount: number;
+      planName: string;
+    }>;
+  };
+};
+
+const silentLogger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error() {},
+  child() { return silentLogger; },
+};
+
+function writeIntakePlan(tmpDir: string, repoUrl: string, name: string): string {
+  const planPath = join(tmpDir, `${name.replace(/\s+/g, '-').toLowerCase()}.yaml`);
+  writeFileSync(planPath, [
+    `name: ${name}`,
+    `repoUrl: ${repoUrl}`,
+    'tasks:',
+    '  - id: root',
+    `    description: ${name} root task`,
+    '    command: "true"',
+    '',
+  ].join('\n'));
+  return planPath;
+}
+
+function countWorkflowTableScans(
+  adapter: SQLiteAdapter,
+  counts: { listWorkflows: number },
+): SQLiteAdapter {
+  return new Proxy(adapter, {
+    get(target, property, receiver) {
+      if (property === 'listWorkflows') {
+        return (...args: unknown[]) => {
+          counts.listWorkflows += 1;
+          return (target.listWorkflows as (...inner: unknown[]) => unknown)(...args);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as SQLiteAdapter;
+}
+
+async function createHandlerFixture(tempDirs: string[]): Promise<HandlerFixture> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'headless-intake-handler-'));
+  tempDirs.push(tmpDir);
+  const homeDir = join(tmpDir, 'home');
+  vi.stubEnv('HOME', homeDir);
+  vi.stubEnv('INVOKER_DB_DIR', join(homeDir, '.invoker'));
+  vi.stubEnv('INVOKER_REPO_CONFIG_PATH', join(homeDir, '.invoker', 'config.json'));
+
+  const { createGuiMutationTaskActions } = await import('../ipc/gui-mutation-handlers.js');
+  const repoUrl = join(tmpDir, 'repo.git');
+  execFileSync('git', ['init', '--bare', repoUrl], { stdio: 'ignore' });
+
+  const adapter = await SQLiteAdapter.create(join(tmpDir, 'invoker.db'), { ownerCapability: true });
+  const messageBus = new InMemoryBus();
+  let orchestrator = new Orchestrator({
+    persistence: adapter as never,
+    messageBus,
+    maxConcurrency: 1,
+    logger: silentLogger as never,
+    resolveRepoDefaultBranch: () => 'master',
+  });
+  orchestrator.syncAllFromDb();
+
+  const taskHandles = new Map<string, unknown>();
+  const handlerScans = { listWorkflows: 0 };
+  const context = {
+    logger: silentLogger,
+    persistence: countWorkflowTableScans(adapter, handlerScans),
+    messageBus,
+    executorRegistry: {},
+    agentRegistry: {},
+    repoRoot: tmpDir,
+    invokerConfig: { allowGraphMutation: false },
+    effectiveMaxConcurrency: 1,
+    taskHandles,
+    getOrchestrator: () => orchestrator,
+    setOrchestrator: (next: typeof orchestrator) => { orchestrator = next; },
+    getCommandService: () => ({}),
+    setCommandService: () => {},
+    getWorkflowMutationCoordinator: () => null,
+    workflowMutationDispatcher: new Map(),
+    getActiveMutationContext: () => undefined,
+    getRendererTaskFeed: () => ({}),
+    getStartupWorkflowId: () => null,
+    getLaunchDispatcher: () => null,
+    requireTaskExecutor: () => ({}),
+    getTaskExecutor: () => null,
+    rebuildTaskRunner: () => {},
+    initServices: async () => {},
+    requestWorkflowMetadataPublish: () => {},
+    cancelDeferredWorkflowLaunch: () => {},
+    killRunningTask: async () => {},
+    buildCommandServiceInvalidationDeps: () => ({}),
+  };
+
+  return {
+    tmpDir,
+    repoUrl,
+    adapter,
+    taskHandles,
+    handlerScans,
+    actions: createGuiMutationTaskActions(context as never) as HandlerFixture['actions'],
+  };
+}
+
+async function intakeThroughHandler(
+  fixture: HandlerFixture,
+  planPath: string,
+  name: string,
+): Promise<HandlerIntakeAck> {
+  const result = await fixture.actions.executeHeadlessRun({ planPath });
+  const stored = fixture.adapter.loadWorkflow(result.workflowId);
+  const storedTasks = result.workflowId ? fixture.adapter.loadTasks(result.workflowId) : [];
+  return {
+    name,
+    workflowId: result.workflowId,
+    storedName: stored?.name,
+    storedTaskCount: storedTasks.length,
+    ackedTaskCount: result.tasks.length,
+  };
+}
+
+describe('headless run intake concurrency contract (executeHeadlessRun handler)', () => {
+  const tempDirs: string[] = [];
+  let fixture: HandlerFixture | undefined;
+
+  afterEach(() => {
+    fixture?.adapter.close();
+    fixture = undefined;
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it('acks every overlapping intake with its own already-persisted workflow', async () => {
+    fixture = await createHandlerFixture(tempDirs);
+    const names = intakeNames(INTAKE_COUNT);
+    const planPaths = names.map((name) => writeIntakePlan(fixture!.tmpDir, fixture!.repoUrl, name));
+
+    const acks = await Promise.all(
+      names.map((name, index) => intakeThroughHandler(fixture!, planPaths[index]!, name)),
+    );
+    const report = inspectIntakes(fixture.adapter, names, acks);
+    console.error(`[headless-run-intake-concurrency] handler ${report.measured}`);
+
+    expect(report.ackedWithoutId, `every intake ack must carry a workflow id; ${report.measured}`).toEqual([]);
+    expect(report.lostNames, `overlapping intake lost plan names; ${report.measured}`).toEqual([]);
+    expect(report.doubledNames, `overlapping intake duplicated plan names; ${report.measured}`).toEqual([]);
+    expect(report.misattributed, `an intake ack must name its own workflow; ${report.measured}`).toEqual([]);
+    expect(report.sharedAckIds, `two intakes must not ack the same workflow id; ${report.measured}`).toEqual([]);
+    expect(report.orphanedWorkflowIds, `every stored workflow must be acked to some intake; ${report.measured}`).toEqual([]);
+
+    const unreadableAtAck = acks.filter((ack) => ack.storedName !== ack.name).map((ack) => `${ack.name}->${ack.storedName ?? '<absent>'}`);
+    const ackedWithoutTasks = acks.filter((ack) => ack.storedTaskCount === 0 || ack.ackedTaskCount === 0).map((ack) => ack.name);
+    expect(unreadableAtAck, `a successful ack must name a workflow row already readable from persistence; ${report.measured}`).toEqual([]);
+    expect(ackedWithoutTasks, `a successful ack must have its tasks persisted before it returns; ${report.measured}`).toEqual([]);
+  });
+
+  it('resolves each intake by keyed read instead of scanning the workflow table', async () => {
+    fixture = await createHandlerFixture(tempDirs);
+    const names = intakeNames(INTAKE_COUNT);
+    const planPaths = names.map((name) => writeIntakePlan(fixture!.tmpDir, fixture!.repoUrl, name));
+
+    await Promise.all(names.map((name, index) => intakeThroughHandler(fixture!, planPaths[index]!, name)));
+
+    expect(
+      fixture.handlerScans.listWorkflows,
+      `intake must not scan the whole workflow table before acking; scans=${fixture.handlerScans.listWorkflows} intakes=${names.length}`,
+    ).toBe(0);
+  });
+
+  it('leaves another intake\'s in-flight task handles alone', async () => {
+    fixture = await createHandlerFixture(tempDirs);
+    const names = intakeNames(INTAKE_COUNT);
+    const planPaths = names.map((name) => writeIntakePlan(fixture!.tmpDir, fixture!.repoUrl, name));
+    const peerHandle = { taskId: 'peer-intake/root' };
+    fixture.taskHandles.set(peerHandle.taskId, peerHandle);
+
+    await Promise.all(names.map((name, index) => intakeThroughHandler(fixture!, planPaths[index]!, name)));
+
+    expect(
+      fixture.taskHandles.get(peerHandle.taskId),
+      'an overlapping intake must not drop a peer task handle, or its terminal and cancel paths lose the running task',
+    ).toBe(peerHandle);
   });
 });
