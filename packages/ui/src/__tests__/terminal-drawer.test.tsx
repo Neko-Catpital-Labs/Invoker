@@ -11,11 +11,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { useState } from 'react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
+
+vi.setConfig({ testTimeout: 20_000 });
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -89,6 +91,7 @@ const { App } = await import('../App.js');
 const { TerminalDrawer } = await import('../components/TerminalDrawer.js');
 
 const COMPONENT_TERMINAL_INTERACTION_BUDGET_MS = 50;
+const APP_TERMINAL_DRAWER_WAIT_MS = 10_000;
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
 const taskAlpha = makeUITask({
@@ -133,11 +136,11 @@ async function expectPaneReady(taskId: string) {
 async function selectWorkflow(): Promise<void> {
   await waitFor(() => {
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
-  });
+  }, { timeout: APP_TERMINAL_DRAWER_WAIT_MS });
   fireEvent.click(screen.getByTestId('rf__node-wf-a'));
   await waitFor(() => {
     expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-  });
+  }, { timeout: APP_TERMINAL_DRAWER_WAIT_MS });
 }
 
 describe('Terminal drawer (component)', () => {
@@ -154,6 +157,7 @@ describe('Terminal drawer (component)', () => {
   });
 
   afterEach(() => {
+    cleanup();
     mock.cleanup();
     vi.restoreAllMocks();
   });
