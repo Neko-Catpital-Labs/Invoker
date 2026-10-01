@@ -13,12 +13,7 @@ from urllib.parse import quote
 GH_COMMAND_TIMEOUT_SECONDS = 20
 GH_RETRY_MAX_ATTEMPTS = 3
 GH_RETRY_BACKOFF_SECONDS = 2
-# Worst case for one call: GH_COMMAND_TIMEOUT_SECONDS * GH_RETRY_MAX_ATTEMPTS, plus
-# backoff between attempts. A run makes 100+ of these calls for ~50 admin-bypass
-# PRs, so this must stay a small fraction of the pr-admin-bypass-land worker's
-# tick timeout (packages/execution-engine/src/workers/pr-maintenance-workers.ts,
-# DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS, currently 240s) or one stuck
-# call can alone blow the whole tick's budget. Keep comfortably under 240s.
+# Safety invariant: GH_CALL_WORST_CASE_SECONDS must stay comfortably below the 240s PR maintenance tick timeout.
 GH_CALL_WORST_CASE_SECONDS = GH_COMMAND_TIMEOUT_SECONDS * GH_RETRY_MAX_ATTEMPTS + GH_RETRY_BACKOFF_SECONDS * (
     GH_RETRY_MAX_ATTEMPTS * (GH_RETRY_MAX_ATTEMPTS - 1) // 2
 )
@@ -194,9 +189,7 @@ class GhClient:
         run_logged(["gh", "api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"base={base}"])
 
     def merge_squash(self, repo: str, number: int) -> None:
-        # No --admin: this must only merge a PR GitHub itself already
-        # reports as MERGEABLE with green CI (see plan_bottom_progress's
-        # all_observed_checks_green gate) -- never an admin override.
+        # Safety invariant: merge_squash must never use --admin; it only merges GitHub-MERGEABLE PRs with green CI.
         run_logged(["gh", "pr", "merge", str(number), "--repo", repo, "--squash"])
 
     def compare_status(self, repo: str, base: str, head: str) -> str:
@@ -212,10 +205,7 @@ class GhClient:
         return str(json.loads(out).get("default_branch") or "")
 
     def file_text(self, repo: str, path: str) -> str | None:
-        # A missing file (no admin-bypass Mergify rule in this repo) is the
-        # expected case for most foreign repos. A 404 is not in
-        # TRANSIENT_GH_ERROR_MARKERS, so run_logged raises it on the first
-        # attempt without retrying/backing off.
+        # Safety invariant: missing Mergify config files in foreign repos return None immediately without transient retries.
         try:
             out = self._run(["gh", "api", f"repos/{repo}/contents/{path}", "--jq", ".content"])
         except (subprocess.CalledProcessError, RuntimeError):
