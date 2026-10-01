@@ -273,7 +273,7 @@ describe('TaskRunner launch-dispatch wiring', () => {
 
   it('dispatches the task-requested execution agent and model to executor.start', async () => {
     const task = makeTask({
-      config: { workflowId: 'wf-d', runnerKind: 'ssh', poolId: 'ssh-pool', executionAgent: 'omp', executionModel: 'anthropic/claude-opus-4' },
+      config: { workflowId: 'wf-d', runnerKind: 'ssh', poolId: 'ssh-pool', executionAgent: 'omp', executionModel: 'anthropic/claude-sonnet-5-5' },
     });
     let completeCallback: ((response: WorkResponse) => void) | undefined;
     const executor = {
@@ -333,7 +333,7 @@ describe('TaskRunner launch-dispatch wiring', () => {
     const run = runner.executeTask(task);
     await vi.waitFor(() => expect(executor.start).toHaveBeenCalled());
     expect(executor.start.mock.calls[0]?.[0].inputs.executionAgent).toBe('omp');
-    expect(executor.start.mock.calls[0]?.[0].inputs.executionModel).toBe('anthropic/claude-opus-4');
+    expect(executor.start.mock.calls[0]?.[0].inputs.executionModel).toBe('anthropic/claude-sonnet-5-5');
     completeCallback?.({
       requestId: 'req',
       actionId: task.id,
