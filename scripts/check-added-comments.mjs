@@ -540,10 +540,17 @@ function fileSources(root, files) {
       process.exit(1);
     }
 
+    let content;
+    try {
+      content = readFileSync(path.join(root, relativePath), 'utf8');
+    } catch (error) {
+      console.error(`[comments] Failed to read --file target ${relativePath}: ${error.message}`);
+      process.exit(1);
+    }
     return {
       name: `--file ${relativePath}`,
-      text: buildFullFileDiffText(relativePath, loadWorkingTreeFile(root, relativePath)),
-      resolveMarkdownFenceMap: markdownFenceMapResolver((fencePath) => loadWorkingTreeFile(root, fencePath)),
+      text: buildFullFileDiffText(relativePath, content),
+      resolveMarkdownFenceMap: markdownFenceMapResolver(() => content),
     };
   });
 }
