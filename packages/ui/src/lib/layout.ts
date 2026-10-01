@@ -12,16 +12,29 @@
  */
 
 import type { TaskState } from '../types.js';
+import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
 
-// elkjs (~1.6 MB bundled) is loaded lazily so it does not ride in the cold
-// startup entry chunk. The first workflow graph paint uses WorkflowGraph, which
-// does not call layoutTaskGraph; ELK is only fetched when the task DAG renders.
-let elkModulePromise: Promise<{ default: new () => ElkLayoutEngine }> | null = null;
-function loadElk(): Promise<{ default: new () => ElkLayoutEngine }> {
+interface ElkConstructorOptions {
+  workerUrl?: string;
+}
+
+type ElkConstructor = new (options?: ElkConstructorOptions) => ElkLayoutEngine;
+
+// elkjs' layout payload is a large generated worker. Load the tiny API lazily
+// and hand it Vite's emitted worker asset so Rollup does not create a >500 kB
+// JavaScript chunk for the generated layout engine.
+let elkModulePromise: Promise<{ default: ElkConstructor }> | null = null;
+function loadElk(): Promise<{ default: ElkConstructor }> {
   if (!elkModulePromise) {
-    elkModulePromise = import('elkjs/lib/elk.bundled.js') as Promise<{
-      default: new () => ElkLayoutEngine;
-    }>;
+    if (import.meta.env.MODE === 'test' && typeof Worker === 'undefined') {
+      elkModulePromise = import('elkjs/lib/elk.bundled.js') as Promise<{
+        default: ElkConstructor;
+      }>;
+    } else {
+      elkModulePromise = import('elkjs/lib/elk-api.js') as Promise<{
+        default: ElkConstructor;
+      }>;
+    }
   }
   return elkModulePromise;
 }
@@ -104,7 +117,7 @@ export async function layoutTaskGraph(
       elk = options.elk;
     } else {
       const { default: ELK } = await loadElk();
-      elk = new ELK();
+      elk = new ELK({ workerUrl: elkWorkerUrl });
     }
     const graph = {
       id: 'task-dag',
