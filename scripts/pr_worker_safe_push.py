@@ -102,6 +102,10 @@ def _is_ancestor(ancestor: str, descendant: str, *, cwd: Path | str | None = Non
     return completed.returncode == 0
 
 
+def _same_tree(left: str, right: str, *, cwd: Path | str | None = None) -> bool:
+    return run_git(["rev-parse", f"{left}^{{tree}}"], cwd=cwd) == run_git(["rev-parse", f"{right}^{{tree}}"], cwd=cwd)
+
+
 # The remote branch can move between the caller capturing --expected-head and
 # this script running for a reason unrelated to the local repair itself --
 # e.g. an unrelated rebase-onto-base maintenance pass rewinding the branch
@@ -205,7 +209,7 @@ def safe_push(
             )
         if live != expected:
             head_before = local_head(cwd=cwd)
-            if head_before == expected:
+            if head_before == expected or _same_tree(expected, head_before, cwd=cwd):
                 raise NothingToPushError(
                     f"noop: refs/heads/{branch_name} moved to {live} while local HEAD has no "
                     f"work beyond the captured {expected}; nothing to push",

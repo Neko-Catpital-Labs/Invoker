@@ -164,6 +164,27 @@ class SafePushTests(unittest.TestCase):
         self.assertEqual(self.remote_head(), remote_after_race)
         self.assertFalse(ledger.exists())
 
+    def test_moved_remote_head_with_empty_local_commit_settles_as_noop(self) -> None:
+        self.clone_other()
+        remote_after_race = self.commit(self.other, "race", "race\n")
+        git(self.other, "push", "origin", "HEAD:refs/heads/main")
+        git(self.repo, "commit", "--allow-empty", "-m", "empty repair marker")
+        ledger = self.root / "ledger.tsv"
+
+        result = self.invoke_helper(
+            "--branch", "main",
+            "--expected-head", self.expected,
+            "--record-tsv-ledger", str(ledger),
+            "--tsv-kind", "queue-attempt",
+            "--tsv-key", "123",
+            "--tsv-marker", "fp1",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("noop", result.stderr)
+        self.assertEqual(self.remote_head(), remote_after_race)
+        self.assertFalse(ledger.exists())
+
     def test_unchanged_local_head_refuses_push_with_exit_21(self) -> None:
         ledger = self.root / "ledger.tsv"
         remote_before = self.remote_head()
