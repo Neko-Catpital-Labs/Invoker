@@ -176,6 +176,26 @@ describe('headless query worker-decisions', () => {
       ),
     ).rejects.toThrow('Invalid --decision');
   });
+
+  it('scopes worker-decisions to --task and leaves an unscoped query without taskId', async () => {
+    const listWorkerActions = vi.fn(() => []);
+    const deps = makeDecisionDeps();
+    deps.persistence.listWorkerActions = listWorkerActions;
+
+    await runReadOnlyHeadlessQueryToString(
+      ['query', 'worker-decisions', '--task', 'wf-1/task-a', '--output', 'json'],
+      deps,
+    );
+    expect(listWorkerActions).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'wf-1/task-a' }));
+
+    listWorkerActions.mockClear();
+    await runReadOnlyHeadlessQueryToString(
+      ['query', 'worker-decisions', '--workflow', 'wf-1', '--output', 'json'],
+      deps,
+    );
+    const filters = listWorkerActions.mock.calls[0]?.[0] as { taskId?: string };
+    expect(filters.taskId).toBeUndefined();
+  });
 });
 
 function makeTaskQueryDeps(overrides: {

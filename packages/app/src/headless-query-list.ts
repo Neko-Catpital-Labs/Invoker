@@ -413,6 +413,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       const workflowFilter = flags.workflow ?? flags.positional[0];
       const response = listWorkerDecisions(deps.persistence, {
         ...(workflowFilter ? { workflowId: workflowFilter } : {}),
+        ...(flags.task ? { taskId: flags.task } : {}),
         ...(flags.decision === 'act' || flags.decision === 'skip' ? { decision: flags.decision } : {}),
         ...(flags.reason ? { reason: flags.reason } : {}),
       });

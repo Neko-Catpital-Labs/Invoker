@@ -66,6 +66,18 @@ describe('WorkerDecisionsSection', () => {
     expect(screen.getByTestId('worker-decisions-filter-skip')).toBeTruthy();
   });
 
+  it('requests decisions for the task instead of filtering a workflow page', async () => {
+    const getWorkerDecisions = installGetWorkerDecisions();
+    render(<WorkerDecisionsSection workflowId="wf-1" taskId="wf-1/task-1" />);
+
+    await screen.findAllByTestId('worker-decision-row');
+    expect(getWorkerDecisions).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+    }));
+    expect(screen.queryByText(/worker-retry-budget-exhausted/)).not.toBeTruthy();
+  });
+
   it('re-requests with decision=skip when the skip filter is clicked', async () => {
     const getWorkerDecisions = installGetWorkerDecisions();
     render(<WorkerDecisionsSection workerKind="autofix" />);
