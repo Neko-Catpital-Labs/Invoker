@@ -14,10 +14,7 @@ STACK_MARKER_RE = re.compile(r"<!--\s*mergify-stack-data:\s*(\{.*?\})\s*-->", re
 SHA_RE = re.compile(r"`([0-9a-fA-F]{40})`")
 GH_ACTIONS_JOB_RE = re.compile(r"/actions/runs/\d+/job/(\d+)")
 
-# The one repo whose worktree carries Invoker's own repair helper scripts
-# (mergify_admin_requeue_repair_normalize.py, pr_worker_safe_push.py). Any
-# other repo's worktree is "foreign": it never has those scripts, so repair
-# plans for it must not invoke them.
+# Safety invariant: only Invoker worktrees may use Invoker-only repair helper scripts, so foreign-repo plans must not invoke them.
 DEFAULT_INVOKER_REPO = "Neko-Catpital-Labs/Invoker"
 
 
@@ -178,11 +175,7 @@ class Ledger:
                 if isinstance(row, dict):
                     self.rows.append(row)
 
-    # `repo` is keyword-only and defaults to None (no repo filter applied), so
-    # every pre-existing single-repo caller keeps its exact prior behavior.
-    # Multi-repo callers pass repo= to scope reads/writes to one repo's rows,
-    # so two repos sharing a PR number (or retry-cap key) never cross-pollute
-    # each other's ledger state in one shared ledger file.
+    # Safety invariant: repo defaults to no filter for legacy single-repo callers while multi-repo callers must pass repo= so shared PR numbers and retry keys never cross-pollute one ledger file.
     def count(self, kind: str, pr: int, head_sha: str, key: str, *, repo: str | None = None) -> int:
         return sum(
             1 for row in self.rows
@@ -214,12 +207,7 @@ class Ledger:
         return latest_row
 
     def count_by_unit(self, kind: str, pr: int, key: str, *, repo: str | None = None) -> int:
-        # Same as count(), but persistent across a commit change: a
-        # successful repair attempt pushes a new commit as a normal side
-        # effect, and that must not silently reset the retry cap for this
-        # (pr, kind, key) unit of work. Used for the retry-cap/backoff
-        # decision; count()/latest() stay head_sha-scoped for repair_in_flight,
-        # which genuinely needs "is *this* submission still running".
+        # Safety invariant: retry-cap/backoff counts must persist across repair-pushed commits, while count()/latest() stay head_sha-scoped for repair_in_flight.
         return sum(
             1 for row in self.rows
             if row.get("kind") == kind
@@ -368,13 +356,7 @@ def _parse_mergify_rules(lines: list[str]) -> tuple[str, frozenset[str], frozens
 def resolve_admin_bypass_rules_for_repo(
     repo: str, file_text: str | None, default_branch: str | None
 ) -> tuple[str, frozenset[str], frozenset[str]]:
-    # A foreign repo (anything but DEFAULT_INVOKER_REPO) rarely ships an
-    # admin-bypass Mergify rule shaped like Invoker's own -- when it does,
-    # honor it exactly like the Invoker path (trunk/labels/required checks
-    # all parsed from the rule). When it doesn't, fall back to the repo's
-    # default branch as trunk with no required-check allowlist, so the
-    # caller repairs whatever checks are actually observed failing on that
-    # PR instead of refusing to act for lack of a configured rule.
+    # Safety invariant: foreign repos with a parseable admin-bypass rule must honor it exactly, and foreign repos without one must fall back to default-branch trunk with no required-check allowlist.
     if file_text:
         try:
             return _parse_mergify_rules(file_text.splitlines())
@@ -394,12 +376,7 @@ def latest_contexts_by_required_check(raw_contexts: list[Mapping[str, object]], 
             continue
         if sha and sha != head_sha:
             continue
-        # An empty required_checks set means the repo has no admin-bypass
-        # Mergify rule (a foreign, non-Invoker repo -- see
-        # resolve_admin_bypass_rules_for_repo's fallback), so there is no
-        # allowlist to filter against. Observe every check instead of
-        # filtering down to nothing, so squash-merge-when-green planning has
-        # real CI signal to read for these repos.
+        # Safety invariant: an empty required_checks set means there is no allowlist, so observe every non-self check instead of filtering away all CI signal.
         if required and name not in required:
             continue
         ctx = CheckContext(name=name, state=state, details_url=url, head_sha=sha or head_sha, completed_at=completed)
