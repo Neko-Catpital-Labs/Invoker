@@ -150,6 +150,21 @@ function assertRunsPolicyCheck(jobName, nextStepName) {
   assertStepBefore(job, 'Validate CI workflow policy', nextStepName, jobName);
 }
 
+function assertRequiredFastInstallsNodePrerequisitesForEveryRunner() {
+  const step = assertUsesSharedInstaller('required-fast', 'Install Node runtime and native build dependencies', {
+    CI_INSTALL_PACKAGES: 'libatomic1 build-essential python3',
+    CI_INSTALL_PROBE_SONAME: 'libatomic.so.1',
+    CI_INSTALL_PROBE_COMMANDS: 'make g++ python3',
+    CI_INSTALL_NO_APT_ERROR: 'required-fast requires libatomic1, build-essential, and python3, but apt-get is unavailable.',
+    CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'required-fast requires libatomic1, build-essential, and python3; run as root or provide passwordless sudo for apt-get.',
+    CI_INSTALL_FALLBACK_PACKAGE: 'libatomic1',
+  });
+  assert(
+    !step.if,
+    'required-fast must install libatomic1 before actions/setup-node@v4 for every matrix runner, including Github_Runner',
+  );
+}
+
 for (const jobName of FULL_CI_JOBS) {
   assert(jobs[jobName], `Missing CI job ${jobName}`);
   assert(jobs[jobName].if === FULL_CI_GATE, `${jobName} must run only for full CI events`);
@@ -238,6 +253,7 @@ assert(
   vitestWorkspaceEntry.runner_label === 'ubuntu-latest',
   'Vitest Workspace must use fresh GitHub-hosted capacity so runner disk and toolchain state cannot block the suite',
 );
+assertRequiredFastInstallsNodePrerequisitesForEveryRunner();
 assertRunsPolicyCheck('required-fast', 'Verify Playwright shard inventory');
 assert(
   !vitestWorkspaceSuite.includes('pnpm test'),
