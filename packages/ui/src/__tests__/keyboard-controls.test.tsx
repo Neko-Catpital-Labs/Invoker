@@ -608,7 +608,7 @@ describe('Graph camera controls (component)', () => {
     // does not perform storage writes after the initial render settles.
     const store = new Map<string, string>();
     localStorageSetItemMock = vi.fn((k: string, v: string) => { store.set(k, String(v)); });
-    Object.defineProperty(globalThis, 'localStorage', {
+    Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: {
         getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
@@ -631,7 +631,6 @@ describe('Graph camera controls (component)', () => {
     rectSpy?.mockRestore();
     rectSpy = null;
     mock.cleanup();
-    delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 
   /**
