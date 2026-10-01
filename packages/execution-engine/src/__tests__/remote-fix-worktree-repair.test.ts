@@ -188,7 +188,7 @@ branch refs/heads/${branch}
         runnerKind: 'ssh' as const,
         poolMemberId: 'remote-1',
         executionAgent: 'omp',
-        executionModel: 'anthropic/claude-opus-4',
+        executionModel: 'anthropic/claude-sonnet-5-5',
       },
     };
 
@@ -221,7 +221,7 @@ branch refs/heads/${branch}
 
     expect(buildFixCommand).toHaveBeenCalledWith(
       expect.stringContaining('Fix the underlying code issue.'),
-      { executionModel: 'anthropic/claude-opus-4' },
+      { executionModel: 'anthropic/claude-sonnet-5-5' },
     );
   });
   it('repairs the remote workspace path before publishing an approved fix', async () => {
