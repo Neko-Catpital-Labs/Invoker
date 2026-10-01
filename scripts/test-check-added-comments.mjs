@@ -493,6 +493,23 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
   }
 }
 
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'invoker-comment-check-file-missing-'));
+  try {
+    let error = null;
+    try {
+      execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/missing.py'], { encoding: 'utf8' });
+    } catch (caught) {
+      error = caught;
+    }
+
+    assert.equal(error?.status, 1);
+    assert.match(error.stderr.toString(), /Failed to read --file target scripts\/missing\.py/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // Temp git case: a diff larger than Node's 1MB execFileSync default still runs.
 // `git diff` streams every changed file back before any path filtering, so a
 // large lockfile update used to kill the checker with ENOBUFS.
