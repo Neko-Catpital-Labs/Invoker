@@ -228,13 +228,15 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
       total += (chunk as Buffer).length;
       if (total > MAX_INVOKE_BODY_BYTES) {
         aborted = true;
-        sendJson(res, 413, { ok: false, error: { message: 'request body too large' } }, req, { forceClose: true });
-        req.resume();
-        return;
+        chunks.length = 0;
+        continue;
       }
-      chunks.push(chunk as Buffer);
+      if (!aborted) chunks.push(chunk as Buffer);
     }
-    if (aborted) return;
+    if (aborted) {
+      sendJson(res, 413, { ok: false, error: { message: 'request body too large' } }, req, { forceClose: true });
+      return;
+    }
 
     let parsed: { channel?: unknown; args?: unknown };
     try {
