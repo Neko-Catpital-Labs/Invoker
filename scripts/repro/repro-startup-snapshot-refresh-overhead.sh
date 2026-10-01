@@ -71,9 +71,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP_DIR="$(mktemp -d -t invoker-startup-snapshot.XXXXXX)"
 HOME_DIR="$TMP_DIR/home"
 DB_DIR="$HOME_DIR/.invoker"
+ELECTRON_USER_DATA_DIR="$TMP_DIR/electron-user-data"
+IPC_SOCKET_PATH="$TMP_DIR/ipc-transport.sock"
 BARE_REPO="$TMP_DIR/seed-remote.git"
 SEED_CLONE="$TMP_DIR/seed-clone"
 CONFIG_PATH="$TMP_DIR/config.json"
+ENV_PATH="$TMP_DIR/.env"
+LOG_PATH="$TMP_DIR/invoker.log"
 REPORT_PATH="$TMP_DIR/report.json"
 # Helper.mjs must live inside packages/app so Node ESM resolution can find
 # @playwright/test via the app's node_modules. NODE_PATH does not work for ESM.
@@ -90,7 +94,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$DB_DIR"
+mkdir -p "$DB_DIR" "$ELECTRON_USER_DATA_DIR"
 
 if [[ ! -f "$REPO_ROOT/packages/ui/dist/index.html" ]]; then
   echo "repro: building @invoker/ui dist..."
@@ -136,7 +140,11 @@ import * as path from 'node:path';
 
 const repoRoot = process.env.REPO_ROOT;
 const dbDir = process.env.REPRO_DB_DIR;
+const electronUserDataDir = process.env.REPRO_ELECTRON_USER_DATA_DIR;
 const configPath = process.env.REPRO_CONFIG_PATH;
+const ipcSocketPath = process.env.REPRO_IPC_SOCKET_PATH;
+const envPath = process.env.REPRO_ENV_PATH;
+const logPath = process.env.REPRO_LOG_PATH;
 const bareRepo = process.env.REPRO_BARE_REPO;
 const reportPath = process.env.REPRO_REPORT_PATH;
 const workflowCount = Number(process.env.REPRO_WORKFLOW_COUNT ?? '5');
@@ -179,8 +187,27 @@ const linuxArgs = process.platform === 'linux'
 const launchEnv = {
   ...process.env,
   HOME: process.env.HOME,
+  NODE_ENV: 'repro',
+  TZ: 'UTC',
+  INVOKER_RUNTIME_KIND: 'source-development',
+  INVOKER_DEVELOPMENT_PROFILE: '1',
+  INVOKER_DEVELOPMENT_PROFILE_ACTIVE: '1',
+  INVOKER_SOURCE_ROOT: repoRoot,
+  INVOKER_PROFILE_ID: path.basename(dbDir),
   INVOKER_DB_DIR: dbDir,
+  INVOKER_USER_DATA_DIR: electronUserDataDir,
+  INVOKER_IPC_SOCKET: ipcSocketPath,
   INVOKER_REPO_CONFIG_PATH: configPath,
+  INVOKER_ENV_PATH: envPath,
+  INVOKER_LOG_PATH: logPath,
+  INVOKER_API_PORT: '0',
+  INVOKER_WEB_PORT: '0',
+  INVOKER_TEST_WORKFLOW_IDS: '1',
+  INVOKER_DISABLE_SLACK: '1',
+  INVOKER_GUI_OWNER_MODE: 'gui',
+  INVOKER_E2E_ENABLE_COMPOSITOR: '1',
+  INVOKER_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS: '30000',
+  INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
 };
 
 // chdir so @playwright/test (and the bundled electron) resolves from the
@@ -189,7 +216,7 @@ process.chdir(path.join(repoRoot, 'packages', 'app'));
 
 async function withElectron(label, fn) {
   const app = await electron.launch({
-    args: [...linuxArgs, mainEntry],
+    args: [...linuxArgs, `--user-data-dir=${electronUserDataDir}`, mainEntry],
     env: launchEnv,
     timeout: launchTimeoutMs,
   });
@@ -218,6 +245,18 @@ await withElectron('seed', async (app) => {
       await window.invoker.loadPlan(planText);
     }, yaml);
   }
+  const seeded = await page.evaluate(async () => {
+    const result = await window.invoker.getTasks();
+    const tasks = Array.isArray(result) ? result : result.tasks ?? [];
+    const workflows = Array.isArray(result) ? [] : result.workflows ?? [];
+    return { taskCount: tasks.length, workflowCount: workflows.length };
+  });
+  if (seeded.taskCount < workflowCount * tasksPerWorkflow || seeded.workflowCount < workflowCount) {
+    throw new Error(
+      `seed fixture incomplete: tasks=${seeded.taskCount}/${workflowCount * tasksPerWorkflow} `
+        + `workflows=${seeded.workflowCount}/${workflowCount}`,
+    );
+  }
 });
 
 const observed = await withElectron('measure', async (app) => {
@@ -228,8 +267,13 @@ const observed = await withElectron('measure', async (app) => {
     null,
     { timeout: launchTimeoutMs },
   );
+  await page.getByTestId('sidebar-planning').click();
+  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({
+    state: 'visible',
+    timeout: launchTimeoutMs,
+  });
   await page
-    .locator('[data-testid^="workflow-node-"]')
+    .locator('[data-testid^="workflow-node-"]:visible')
     .first()
     .waitFor({ state: 'visible', timeout: launchTimeoutMs });
   // Let late-firing ui-perf reports (snapshot replace, graph visible)
@@ -289,7 +333,11 @@ run_helper() {
     REPO_ROOT="$REPO_ROOT"
     HOME="$HOME_DIR"
     REPRO_DB_DIR="$DB_DIR"
+    REPRO_ELECTRON_USER_DATA_DIR="$ELECTRON_USER_DATA_DIR"
     REPRO_CONFIG_PATH="$CONFIG_PATH"
+    REPRO_IPC_SOCKET_PATH="$IPC_SOCKET_PATH"
+    REPRO_ENV_PATH="$ENV_PATH"
+    REPRO_LOG_PATH="$LOG_PATH"
     REPRO_BARE_REPO="$BARE_REPO"
     REPRO_REPORT_PATH="$REPORT_PATH"
     REPRO_WORKFLOW_COUNT="$WORKFLOW_COUNT"
@@ -347,6 +395,19 @@ print(f"  startup_workflow_graph_visible.edgeCount: {show(graph.get('edgeCount')
 print(f"  startup_workflow_graph_visible.elapsedMs: {show(graph.get('elapsedMs'))}")
 print(f"  startup_workflow_graph_visible.processElapsedMs: {show(graph.get('processElapsedMs'))}")
 print(f"  useTasks_snapshot_replace events after bootstrap: {len(replaces)}")
+first_replace = replaces[0] if replaces else None
+print(
+    "  useTasks_snapshot_replace.requestDurationMs: "
+    f"{show(first_replace.get('requestDurationMs') if first_replace else None)}"
+)
+print(
+    "  useTasks_snapshot_replace.replaceDurationMs: "
+    f"{show(first_replace.get('replaceDurationMs') if first_replace else None)}"
+)
+print(
+    "  useTasks_snapshot_replace.forceRefresh: "
+    f"{bool(first_replace.get('forceRefresh')) if first_replace else '<none>'}"
+)
 
 non_forced = []
 for entry in replaces:
@@ -355,6 +416,7 @@ for entry in replaces:
     print(
         "  - "
         f"{label} "
+        f"forceRefresh={forced} "
         f"requestDurationMs={show(entry.get('requestDurationMs'))} "
         f"replaceDurationMs={show(entry.get('replaceDurationMs'))} "
         f"taskCount={show(entry.get('taskCount'))} "
