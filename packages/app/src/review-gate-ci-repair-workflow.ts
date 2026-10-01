@@ -144,6 +144,8 @@ function buildRepairPrompt(
     `- Push your changes to the same branch (${branch}).`,
     '- Never open a new PR.',
     '- Do not recreate the source workflow.',
+    '- Once you have a tight repro for a failed check, iterate on that exact failing command plus relevant changed-package gates; do not broaden to a whole-repo/root sweep unless the failed check itself is a whole-repo/root gate or you name the reason before running it.',
+    '- Before committing or pushing after a long verification run, interrupted/backgrounded command, dirty-state cleanup, reset, or any recovery from test side effects, re-check the PR head SHA/status and stop without committing if the head moved or the original failure surface is gone.',
     '- Check the backgrounded verify/CI command\'s status no more than once every ~180 seconds; if it has not finished after about 15 such checks, stop polling and report the situation instead of continuing to poll indefinitely.',
   ].join('\n');
 }
