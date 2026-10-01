@@ -15,12 +15,12 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, existsSync: vi.fn(actual.existsSync), mkdirSync: vi.fn() };
+  return { ...actual, existsSync: vi.fn(actual.existsSync), mkdirSync: vi.fn(), writeFileSync: vi.fn() };
 });
 
 // Must import after mock setup
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { WorktreeExecutor, computeContentHash, isCloneableRepoUrl } from '../worktree-executor.js';
 import { BaseExecutor, isHeartbeatAliveDuringFinalize, normalizeRepoUrlForProvisionLookup } from '../base-executor.js';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -460,6 +460,50 @@ describe('WorktreeExecutor', () => {
     );
     expect(taskCall).toBeDefined();
 
+    taskProcess.emit('close', 0, null);
+  });
+  it('marks the local worktree in-use before a configured provision command can block', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/.invoker/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+    });
+    const pool = mockPool(provisionedExecutor);
+    pool.acquireWorktree.mockImplementation(async (_repoUrl: string, branch: string) => {
+      const sanitized = branch.replace(/\//g, '-');
+      return {
+        clonePath: '/fake/cache/clone',
+        worktreePath: `/fake/.invoker/worktrees/repo-hash/${sanitized}`,
+        branch,
+        release: vi.fn().mockResolvedValue(undefined),
+        softRelease: vi.fn(),
+      };
+    });
+
+    const startPromise = provisionedExecutor.start(makeRequest());
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.find(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+      )).toBeDefined();
+    });
+
+    const acquired = await pool.acquireWorktree.mock.results[0].value;
+    const markPath = acquired.worktreePath.replace('/fake/.invoker/', '/fake/.invoker/in-use/');
+    expect(mkdirSync).toHaveBeenCalledWith(markPath.replace(/\/[^/]+$/, ''), { recursive: true });
+    expect(writeFileSync).toHaveBeenCalledWith(markPath, '');
+
+    provisionProcess.emit('close', 0, null);
+    await startPromise;
     taskProcess.emit('close', 0, null);
   });
   it('BUG: fails the whole task when the provision command fails only because the repo has no package.json', async () => {
