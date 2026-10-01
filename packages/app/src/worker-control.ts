@@ -317,6 +317,9 @@ export function listWorkerDecisions(
   const workflowId = typeof request?.workflowId === 'string' && request.workflowId.trim().length > 0
     ? request.workflowId.trim()
     : undefined;
+  const taskId = typeof request?.taskId === 'string' && request.taskId.trim().length > 0
+    ? request.taskId.trim()
+    : undefined;
   const workerKind = typeof request?.workerKind === 'string' && request.workerKind.trim().length > 0
     ? request.workerKind.trim()
     : undefined;
@@ -331,6 +334,7 @@ export function listWorkerDecisions(
   const offset = nonNegativeIntegerOrZero(request?.offset);
   const baseFilters = {
     ...(workflowId ? { workflowId } : {}),
+    ...(taskId ? { taskId } : {}),
     ...(workerKind ? { workerKind } : {}),
     ...(decision ? { decision } : {}),
   };
