@@ -29,7 +29,6 @@ const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([
 const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
   'scripts/pr_worker_safe_push.py',
   'scripts/repair_filing_ledger.py',
-  'scripts/run_skill_evals.py',
 ]);
 
 function usage() {
