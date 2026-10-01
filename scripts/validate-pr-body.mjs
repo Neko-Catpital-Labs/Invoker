@@ -40,6 +40,9 @@ const COLLAPSED_PLAN_SECTIONS = [
 ];
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
 const SUMMARY_WORD_LIMIT = 30;
+const MEASURED_HEADING = '## Measured';
+const MEASURED_ROW_LABELS = ['Base', 'Head'];
+const MEASURED_GUIDANCE = 'Add a visible ## Measured section with a `Command:` line plus ### Base and ### Head rows that each hold that command\'s pasted output in a fenced block, or write `none: <reason>` when the slice has nothing to measure. Content inside <details> does not count.';
 const VALID_REVIEW_LANES = new Set(['behavior', 'refactor', 'proof', 'cleanup', 'policy', 'docs']);
 
 const MERMAID_BLOCK_PATTERN = /```mermaid[^\n]*\n([\s\S]*?)```/gi;
@@ -230,6 +233,96 @@ function stripDetailsBlocks(text) {
   return String(text).replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, '').trim();
 }
 
+function markBodyLines(text) {
+  let openFence = '';
+  let detailsDepth = 0;
+  return String(text).split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    const marker = /^(`{3,}|~{3,})/.exec(trimmed)?.[1] ?? '';
+    if (openFence) {
+      if (marker && marker[0] === openFence[0] && marker.length >= openFence.length && trimmed === marker) {
+        openFence = '';
+        return { line, fenced: false, collapsed: detailsDepth > 0 };
+      }
+      return { line, fenced: true, collapsed: detailsDepth > 0 };
+    }
+    if (marker) {
+      openFence = marker;
+      return { line, fenced: false, collapsed: detailsDepth > 0 };
+    }
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('<details')) {
+      detailsDepth += 1;
+      if (lower.includes('</details>')) detailsDepth -= 1;
+      return { line, fenced: false, collapsed: true };
+    }
+    if (lower.startsWith('</details>')) {
+      detailsDepth = Math.max(0, detailsDepth - 1);
+      return { line, fenced: false, collapsed: true };
+    }
+    return { line, fenced: false, collapsed: detailsDepth > 0 };
+  });
+}
+
+function getMeasuredSectionLines(lines) {
+  const start = lines.findIndex(({ line, fenced }) => !fenced && line.trim().toLowerCase() === MEASURED_HEADING.toLowerCase());
+  if (start === -1) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex(({ line, fenced }) => !fenced && /^##\s+/.test(line.trim()));
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+function parseMeasuredSection(sectionLines) {
+  const parsed = { command: '', noneReason: null, rowsWithOutput: new Set() };
+  let currentRow = '';
+  for (const { line, fenced } of sectionLines) {
+    const text = line.trim();
+    if (fenced) {
+      if (currentRow && text) parsed.rowsWithOutput.add(currentRow);
+      continue;
+    }
+    if (text.startsWith('###')) {
+      const label = text.replace(/^#+\s*/, '').toLowerCase();
+      currentRow = MEASURED_ROW_LABELS.find((rowLabel) => rowLabel.toLowerCase() === label) ?? '';
+      continue;
+    }
+    if (text.toLowerCase().startsWith('none:')) {
+      parsed.noneReason = text.slice('none:'.length).trim();
+    } else if (text.toLowerCase().startsWith('command:')) {
+      parsed.command = text.slice('command:'.length).trim();
+    }
+  }
+  return parsed;
+}
+
+export function getMeasuredSectionFindings(body) {
+  const lines = markBodyLines(body);
+  const visibleSection = getMeasuredSectionLines(lines.filter(({ collapsed }) => !collapsed));
+  if (!visibleSection) {
+    return [getMeasuredSectionLines(lines)
+      ? `${MEASURED_HEADING} is collapsed inside <details>. ${MEASURED_GUIDANCE}`
+      : `Missing ${MEASURED_HEADING} section. ${MEASURED_GUIDANCE}`];
+  }
+
+  const measured = parseMeasuredSection(visibleSection);
+  if (measured.noneReason !== null) {
+    return measured.noneReason
+      ? []
+      : [`${MEASURED_HEADING} says \`none:\` without a reason. ${MEASURED_GUIDANCE}`];
+  }
+
+  const findings = [];
+  if (!measured.command) {
+    findings.push(`${MEASURED_HEADING} has no \`Command:\` line naming the command that was run. ${MEASURED_GUIDANCE}`);
+  }
+  for (const rowLabel of MEASURED_ROW_LABELS) {
+    if (!measured.rowsWithOutput.has(rowLabel)) {
+      findings.push(`${MEASURED_HEADING} has no pasted output under ### ${rowLabel}. ${MEASURED_GUIDANCE}`);
+    }
+  }
+  return findings;
+}
+
 export function classifyScopeKind(filePath) {
   const path = filePath.replace(/\\/g, '/');
 
@@ -399,6 +492,10 @@ export function getPrBodyWarnings(body, options = {}) {
     });
   }
 
+  if (!options.requireMeasured) {
+    warnings.push(...getMeasuredSectionFindings(body));
+  }
+
   const changedFiles = options.changedFiles ?? [];
   if (changedFiles.length > 10) {
     warnings.push(`PR changes ${changedFiles.length} files. Split before review unless this is one mechanical/generated slice.`);
@@ -499,6 +596,10 @@ export async function validatePrBody(body, options = {}) {
     }
   }
 
+  if (options.requireMeasured) {
+    errors.push(...getMeasuredSectionFindings(trimmed));
+  }
+
   if (reviewLane && !VALID_REVIEW_LANES.has(reviewLane)) {
     errors.push(`Invalid review lane: ${reviewLane}. Expected one of ${Array.from(VALID_REVIEW_LANES).join(', ')}.`);
   }
@@ -563,12 +664,14 @@ export async function validatePrBody(body, options = {}) {
 }
 
 function usage() {
-  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof] [--changed-files-file <file>] [--diff-file <file>]
+  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof] [--require-measured] [--changed-files-file <file>] [--diff-file <file>]
 
 Validates the canonical PR schema:
   Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Test Plan and Revert Plan content must sit inside a collapsed <details><summary>Test Plan</summary> / <summary>Revert Plan</summary> block.
   Optional: ## Architecture (must include ### Before and ### After when present)
+  Measured: a visible ## Measured section needs a Command: line plus ### Base and ### Head rows with pasted output, or \`none: <reason>\`.
+            A missing or incomplete section is a warning by default; pass --require-measured to make it a failure.
   UI changes: pass --require-visual-proof to require screenshot or video proof; restart or multi-state proof must be animated.
   --changed-files-file <file>  Newline-separated changed file paths for scope checks.
   --diff-file <file>           Unified diff text to run the diff atomicity engine.`);
@@ -579,6 +682,7 @@ function parseArgs(argv) {
   let body = '';
   let bodyFile = '';
   let requiresVisualProof = false;
+  let requireMeasured = false;
   let changedFilesFile = '';
   let diffFile = '';
 
@@ -592,6 +696,9 @@ function parseArgs(argv) {
         break;
       case '--require-visual-proof':
         requiresVisualProof = true;
+        break;
+      case '--require-measured':
+        requireMeasured = true;
         break;
       case '--changed-files-file':
         changedFilesFile = argv[++i];
@@ -621,7 +728,7 @@ function parseArgs(argv) {
     usage();
   }
 
-  return { body, bodyFile, requiresVisualProof, changedFilesFile, diffFile };
+  return { body, bodyFile, requiresVisualProof, requireMeasured, changedFilesFile, diffFile };
 }
 
 async function main() {
@@ -631,8 +738,13 @@ async function main() {
     ? readFileSync(args.changedFilesFile, 'utf-8').split('\n').map((line) => line.trim()).filter(Boolean)
     : undefined;
   const diffText = args.diffFile ? readFileSync(args.diffFile, 'utf-8') : undefined;
-  const errors = await validatePrBody(body, { requiresVisualProof: args.requiresVisualProof, changedFiles, diffText });
-  const warnings = getPrBodyWarnings(body, { changedFiles, diffText });
+  const errors = await validatePrBody(body, {
+    requiresVisualProof: args.requiresVisualProof,
+    requireMeasured: args.requireMeasured,
+    changedFiles,
+    diffText,
+  });
+  const warnings = getPrBodyWarnings(body, { requireMeasured: args.requireMeasured, changedFiles, diffText });
 
   if (errors.length > 0) {
     console.error('PR body validation failed:');
