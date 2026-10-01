@@ -180,7 +180,50 @@ None.
 
 assert((await validatePrBody(validMinimal)).length === 0, 'valid minimal body should pass');
 assert((await validatePrBody(validArchitecture)).length === 0, 'valid architecture body should pass');
-assert(getPrBodyWarnings(validMinimal).length === 0, 'short summary should produce no warnings');
+const withMeasured = (measured) => validMinimal.replace('## Test Plan\n', `${measured}\n\n## Test Plan\n`);
+const measuredNone = withMeasured('## Measured\n\nnone: docs-only change');
+const measuredRows = withMeasured([
+  '## Measured',
+  '',
+  'Command: `pnpm --filter @invoker/app test --run src/__tests__/submit-latency-parallel-storm.repro.test.ts`',
+  '',
+  '### Base',
+  '',
+  '```text',
+  '[submit-latency-parallel-storm] p95=812ms budget=200ms',
+  '## not a heading, pasted output',
+  '```',
+  '',
+  '### Head',
+  '',
+  '```text',
+  '[submit-latency-parallel-storm] p95=140ms budget=200ms',
+  '```',
+].join('\n'));
+const measuredCollapsed = withMeasured([
+  '<details>',
+  '<summary>Measured</summary>',
+  '',
+  '## Measured',
+  '',
+  'none: docs-only change',
+  '',
+  '</details>',
+].join('\n'));
+const measuredRowsCollapsed = measuredRows
+  .replace('### Base\n', '<details>\n<summary>Output</summary>\n\n### Base\n')
+  .replace('budget=200ms\n```\n\n## Test Plan', 'budget=200ms\n```\n\n</details>\n\n## Test Plan');
+const measuredRowsQuotingDetails = measuredRows
+  .replace('Command: `pnpm', 'Output inside `<details>` does not count.\n\nCommand: `pnpm')
+  .replace('[submit-latency-parallel-storm] p95=812ms budget=200ms', 'FAIL - Measured only inside <details> -> accepted');
+const measuredNoneWithoutReason = withMeasured('## Measured\n\nnone:');
+const measuredHeadMissing = measuredRows.replace(/### Head[\s\S]*?```\n\n## Test Plan/, '## Test Plan');
+const measuredProseOnly = validMinimal.replace(
+  '- Do not add repro scripts or docs in this slice.',
+  '- Do not change the 200ms budget; p95 was measured at 140ms.',
+);
+
+assert(getPrBodyWarnings(measuredNone).length === 0, 'short summary should produce no warnings');
 
 const noChangedFilesError = 'PR has no file changes; close it instead of merging it.';
 const emptyChangedFilesErrors = await validatePrBody(validMinimal, { changedFiles: [] });
@@ -1459,5 +1502,49 @@ assert(
   !guardedBehaviorNonTouchingErrors.some((error) => error.includes('Guarded behavior')),
   'a diff that does not touch any guarded-behavior marker line should have no effect regardless of PR body content',
 );
+
+const measuredResults = [];
+for (const [name, body, expectRejected] of [
+  ['no Measured section', validMinimal, true],
+  ['Measured only inside <details>', measuredCollapsed, true],
+  ['base and head output only inside <details>', measuredRowsCollapsed, true],
+  ['none: with no reason', measuredNoneWithoutReason, true],
+  ['base row without a head row', measuredHeadMissing, true],
+  ['a millisecond figure in Non-goals prose, no Measured section', measuredProseOnly, true],
+  ['base and head rows with pasted output', measuredRows, false],
+  ['pasted output and prose that quote a <details> tag', measuredRowsQuotingDetails, false],
+  ['none: docs-only change', measuredNone, false],
+]) {
+  const required = (await validatePrBody(body, { requireMeasured: true })).filter((error) => error.includes('## Measured'));
+  const advisory = getPrBodyWarnings(body).filter((warning) => warning.includes('## Measured'));
+  const hardWhenNotRequired = (await validatePrBody(body)).filter((error) => error.includes('## Measured'));
+  const rejected = required.length > 0;
+  const ok = rejected === expectRejected
+    && (advisory.length > 0) === expectRejected
+    && hardWhenNotRequired.length === 0;
+  measuredResults.push({ name, ok });
+  console.log(`${ok ? 'ok' : 'FAIL'} - measured: ${name} -> ${rejected ? 'rejected' : 'accepted'} (expected ${expectRejected ? 'rejected' : 'accepted'}; advisory warnings ${advisory.length}; errors without requireMeasured ${hardWhenNotRequired.length})`);
+}
+assert(
+  measuredResults.every((result) => result.ok),
+  `Measured section checks failed: ${measuredResults.filter((result) => !result.ok).map((result) => result.name).join('; ')}`,
+);
+
+const measuredCliDir = mkdtempSync(join(tmpdir(), 'pr-body-measured-'));
+try {
+  const missingMeasuredFile = join(measuredCliDir, 'missing.md');
+  writeFileSync(missingMeasuredFile, validMinimal);
+  const advisoryRun = runValidatorCli(missingMeasuredFile);
+  assert(advisoryRun.status === 0, 'a body with no Measured section must still pass the CLI by default so already-open PRs are not broken');
+  assert(advisoryRun.stderr.includes('Missing ## Measured section'), 'the CLI must warn about a missing Measured section by default');
+  const requiredRun = spawnSync(process.execPath, ['scripts/validate-pr-body.mjs', '--body-file', missingMeasuredFile, '--require-measured'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  assert(requiredRun.status === 1, '--require-measured must fail a body with no Measured section');
+  assert(requiredRun.stderr.includes('Missing ## Measured section'), '--require-measured must name the missing Measured section');
+} finally {
+  rmSync(measuredCliDir, { recursive: true, force: true });
+}
 
 console.log('OK: PR body validator checks passed');
