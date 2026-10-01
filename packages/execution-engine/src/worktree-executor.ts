@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, unlinkSync } from 'node:fs';
-import { resolve, join, isAbsolute } from 'node:path';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { resolve, join, isAbsolute, basename, dirname, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorStartup, ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
@@ -26,6 +26,7 @@ import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 import { loadLinearEnv } from './remote-agent-env.js';
 import { inspectTaskFreshness } from './task-specification-preflight.js';
+import { inUseMarkRelativePath } from './workspace-in-use-mark.js';
 
 // Re-export for backward compatibility
 export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
@@ -36,6 +37,7 @@ const SSH_PREFIX = 'ssh://';
 const FILE_PREFIX = 'file://';
 const GIT_AT_PATTERN = /^git@[\w.-]+:/;
 const GITHUB_SHORTHAND_PATTERN = /^[\w.-]+\/[\w.-]+$/;
+const LOCAL_IN_USE_MARK_REFRESH_MS = 60_000;
 
 export function isCloneableRepoUrl(repoUrl: string): boolean {
   const trimmed = repoUrl.trim();
@@ -103,6 +105,8 @@ interface WorktreeEntry extends BaseEntry {
   /** Set only when the acquired worktree claimed a DB-backed lease. */
   leaseResourceKey?: string;
   leaseHolderId?: string;
+  inUseMarkPath?: string;
+  inUseMarkTimer?: ReturnType<typeof setInterval>;
 }
 
 /**
@@ -162,6 +166,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private softReleasePoolSlot(entry: WorktreeEntry | undefined): void {
     if (!entry || entry.poolSlotReleased) return;
     entry.poolSlotReleased = true;
+    this.stopLocalInUseMarkRefresh(entry);
     entry.poolSoftRelease?.();
   }
 
@@ -352,6 +357,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         leaseHolderId: acquired.leaseHolderId,
       };
       this.registerEntry(handle, entry);
+      this.startLocalInUseMarkRefresh(entry);
       handle.workspacePath = acquired.worktreePath;
       handle.branch = acquired.branch;
       handle.leaseResourceKey = acquired.leaseResourceKey;
@@ -433,6 +439,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
             leaseHolderId: acquired.leaseHolderId,
           };
           this.registerEntry(handle, entry);
+          this.startLocalInUseMarkRefresh(entry);
           handle.workspacePath = acquired.worktreePath;
           handle.branch = acquired.branch;
           handle.leaseResourceKey = acquired.leaseResourceKey;
@@ -490,6 +497,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           leaseHolderId: acquired.leaseHolderId,
         };
         this.registerEntry(handle, entry);
+        this.startLocalInUseMarkRefresh(entry);
         handle.workspacePath = acquired.worktreePath;
         handle.branch = acquired.branch;
         handle.leaseResourceKey = acquired.leaseResourceKey;
@@ -532,6 +540,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         leaseHolderId: acquired.leaseHolderId,
       };
       this.registerEntry(handle, entry);
+      this.startLocalInUseMarkRefresh(entry);
       handle.workspacePath = acquired.worktreePath;
       handle.branch = acquired.branch;
       handle.leaseResourceKey = acquired.leaseResourceKey;
@@ -565,6 +574,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       leaseHolderId: acquired.leaseHolderId,
     };
     this.registerEntry(handle, entry);
+    this.startLocalInUseMarkRefresh(entry);
     handle.workspacePath = acquired.worktreePath;
     handle.branch = acquired.branch;
     handle.leaseResourceKey = acquired.leaseResourceKey;
@@ -895,6 +905,48 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         try { unlinkSync(lockPath); } catch { /* race: already removed */ }
       }
     }
+  }
+
+  private localInUseMarkPath(worktreePath: string): string | undefined {
+    const worktreeBase = resolve(this.worktreeBaseDir);
+    if (basename(worktreeBase) !== 'worktrees') return undefined;
+    const resolvedWorktree = resolve(worktreePath);
+    const relativeWorktree = relative(worktreeBase, resolvedWorktree);
+    if (!relativeWorktree || relativeWorktree.startsWith('..') || isAbsolute(relativeWorktree)) return undefined;
+    const markRelative = inUseMarkRelativePath(
+      `worktrees/${relativeWorktree.split(sep).join('/')}`,
+    );
+    return join(dirname(worktreeBase), markRelative);
+  }
+
+  private touchLocalInUseMark(entry: WorktreeEntry): void {
+    if (!entry.inUseMarkPath) return;
+    try {
+      mkdirSync(dirname(entry.inUseMarkPath), { recursive: true });
+      writeFileSync(entry.inUseMarkPath, '');
+    } catch (err) {
+      traceExecution(
+        `[WorktreeExecutor] failed to refresh in-use mark path=${entry.inUseMarkPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private startLocalInUseMarkRefresh(entry: WorktreeEntry): void {
+    const markPath = this.localInUseMarkPath(entry.worktreeDir);
+    if (!markPath) return;
+    entry.inUseMarkPath = markPath;
+    this.touchLocalInUseMark(entry);
+    const intervalMs = Math.max(1_000, Math.min(this.heartbeatIntervalMs, LOCAL_IN_USE_MARK_REFRESH_MS));
+    entry.inUseMarkTimer = setInterval(() => this.touchLocalInUseMark(entry), intervalMs);
+    entry.inUseMarkTimer.unref?.();
+  }
+
+  private stopLocalInUseMarkRefresh(entry: WorktreeEntry): void {
+    if (!entry.inUseMarkTimer) return;
+    clearInterval(entry.inUseMarkTimer);
+    entry.inUseMarkTimer = undefined;
   }
 
   private provisionWorktree(

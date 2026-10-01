@@ -376,6 +376,57 @@ describe('RepoPool', () => {
     }
   });
 
+  it('acquireWorktree: refetches and retries when worktree setup reports missing objects', async () => {
+    const branch = 'experiment/race-missing-object';
+    const actionId = 'wf-race/task-missing-object';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          const error = new Error(
+            `bash exited with code 128: Preparing worktree (new branch '${branch}')\n` +
+              'error: unable to read sha1 file of packages/workflow-core/src/__tests__/orchestrator.test.ts (4f797d0e5e76eba5da45250a1a1cd058c5e7af42)\n' +
+              "fatal: Could not reset index file to revision 'HEAD'.",
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+    const execGitSpy = vi.spyOn(poolWithExternalBase as any, 'execGit');
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      const currentBranch = execSync('git branch --show-current', { cwd: acquired.worktreePath })
+        .toString()
+        .trim();
+      expect(currentBranch).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+      expect(execGitSpy).toHaveBeenCalledWith(['fetch', '--all', '--prune'], expect.any(String), undefined);
+    } finally {
+      execGitSpy.mockRestore();
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
   it('acquireWorktree: retries once when worktree add reports target gitdir missing', async () => {
     const branch = 'experiment/race-missing-gitdir';
     const actionId = 'wf-race/task-missing-gitdir';
