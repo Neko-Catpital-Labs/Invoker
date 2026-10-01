@@ -68,14 +68,7 @@ except ImportError:
 
 TRUNK = "master"
 
-# ClaimRepairFiling(kind, subject, state_sha) -> True means "already claimed
-# by someone else (this process, a prior tick, or a different system like
-# ci-regression-watch) -- skip filing"; False means "this call just claimed
-# it -- proceed". Every planning function below defaults this to None, which
-# preserves exact pre-existing behavior (no cross-system dedup check at all)
-# so the large existing test suite for this module needs no changes; only
-# the real production entrypoint (mergify_admin_requeue_exec.run_cycle) wires
-# in the real function, via default_claim_repair_filing below.
+# Safety invariant: ClaimRepairFiling defaults to None to preserve legacy no-dedup planner behavior, and only the production run_cycle entrypoint wires the real cross-system dedup claim.
 ClaimRepairFiling = Callable[[str, str, str], bool]
 ReleaseRepairFiling = Callable[[str, str, str], None]
 
@@ -85,34 +78,16 @@ def repair_filing_kind_for_check(check_name: str) -> str:
 
 
 def mergify_check_state_sha(pr: PrSnapshot, latest: MergifyQueueEvent) -> str:
-    # A merge-queue-derived check can fail against Mergify's ephemeral
-    # speculative-merge commit (PR head + whatever master is right now),
-    # which is not represented anywhere in PrSnapshot -- pr.head_ref_oid
-    # alone can stay identical across two genuinely different real Mergify
-    # attempts (PR dequeued, re-requeued once master moved). comment_id is
-    # this codebase's own existing signal for "a distinct real Mergify
-    # attempt at this same head" (see plan_bottom_progress's
-    # `requeue_key = latest.comment_id or "manual"`), so composite it into
-    # the claim key: two attempts at the same head_ref_oid but a different
-    # comment_id must not collide into the same claim.
+    # Safety invariant: the claim key includes Mergify comment_id so two speculative-merge attempts at the same PR head do not collide.
     return f"{pr.head_ref_oid}:{latest.comment_id or 'no-comment'}"
 
 
 REBASE_CONFLICT_REPAIR_FILING_KIND = "admin-requeue:rebase-conflict"
-# Shared by GitHub DIRTY conflicts and no-CI Mergify dequeue-while-behind.
+# Safety invariant: GitHub DIRTY conflicts and no-CI Mergify dequeue-while-behind share the same rebase-onto-master filing kind.
 REBASE_ONTO_MASTER_FILING_KIND = "admin-requeue:rebase-onto-master"
 REBASE_ONTO_MASTER_LEDGER_KIND = "rebase-onto-master"
 
-# Every claim_repair_filing call site below uses `subject=str(pr.number)` --
-# the raw PR number, same shape as repair_check_plan_name/rebase_onto_master_plan_name
-# in mergify_admin_requeue_async_repair.py (see that module's plan-naming
-# functions), which have no lineage concept either. PRs get recreated with a
-# new number on retarget under this repo's own `stack/` convention (see
-# land-stack.mjs), so a claim made against a PR that later gets closed and
-# replaced by a new PR number for the same logical stack slice just goes
-# stale rather than following the lineage -- not a correctness bug (the new
-# PR's own subject starts fresh), but the old claim never gets cleaned up
-# either. Known limitation, not fixed here.
+# Safety invariant: repair-filing subjects remain raw PR numbers, so retarget-recreated PRs start fresh and old closed-PR claims may go stale instead of following stack lineage.
 
 
 def default_claim_repair_filing(kind: str, subject: str, state_sha: str) -> bool:
@@ -190,10 +165,7 @@ class StackFacts:
 
 
 def is_queue_only_required_check(name: str) -> bool:
-    # Both required-fast matrices in .github/workflows/ci.yml are gated to
-    # merge-queue heads. Classify their shared emitted-name prefix instead of
-    # duplicating individual matrix entries here, so promoting a new entry in
-    # .mergify.yml cannot silently turn it into a missing PR-head check.
+    # Safety invariant: classify queue-only required checks by shared prefix so new .mergify.yml entries cannot become missing PR-head checks.
     return name.startswith(QUEUE_ONLY_REQUIRED_CHECK_PREFIXES)
 
 
@@ -242,13 +214,7 @@ def has_active_queue_event(pr: PrSnapshot, now: int) -> bool:
     latest = pr.latest_mergify
     if not latest:
         return False
-    # A pending `queue` command reports state "waiting" with a null queue
-    # rule while Mergify evaluates its conditions; requeueing on top of it is
-    # a duplicate Mergify ignores but the retry-cap ledger still counts.
-    # Exception: Mergify also reports "waiting" when the PR is blocked on a
-    # conflict queue requirement (DIRTY / CONFLICTING / dequeued / waiting_for
-    # conflict). That is not a productive in-flight queue — treat it as idle
-    # so conflict repair can file (PR #10278).
+    # Safety invariant: treat ordinary Mergify waiting as active to avoid duplicate requeue ledger spend, but treat conflict waiting as idle so conflict repair can file (PR #10278).
     if latest.state == "waiting":
         if pr.merge_state_status == "DIRTY" or pr.mergeable == "CONFLICTING":
             return False
@@ -322,15 +288,7 @@ def cap_action(pr: PrSnapshot, blocker: Blocker, detail: str) -> Action:
     return Action("comment_blocked", pr.number, "capped", f"{detail}. The retry cap was reached for current head {pr.head_ref_oid}.")
 
 
-# Distinct from repair_in_flight's TTL-bounded "still might be running" check:
-# once the submitted attempt's own Invoker workflow already shows the crash
-# text below, there is nothing to wait out -- the coding agent never launched,
-# so no further wait changes the outcome. Checked before repair_in_flight so a
-# confirmed infra crash stops silently eating retry-cap attempts well before
-# the TTL would otherwise expire. This module only adjusts what counts toward
-# the cap; deciding what (if anything) to do about a crashed pool member is
-# the autofix worker's job (packages/execution-engine/src/auto-fix-recovery.ts),
-# not this Python-side admin-bypass planner's.
+# Safety invariant: a confirmed pre-agent SSH/OAuth infra crash must not wait for repair_in_flight TTL or consume code-repair retry budget; pool repair remains owned by auto-fix-recovery.
 def repair_crash_reason(
     ledger: Ledger,
     pr_number: int,
@@ -345,25 +303,15 @@ def repair_crash_reason(
     settled = ledger.latest(f"{submit_kind}-settled", pr_number, head_sha, key)
     if settled is not None and int(settled.get("epoch", 0) or 0) >= int(submitted.get("epoch", 0) or 0):
         return None
-    # Named call (not a default-bound parameter) so tests can patch this
-    # module's `repair_task_crashed_on_infra` name directly instead of the
-    # real one, which shells out to a live Invoker instance.
     if repair_task_crashed_on_infra(plan_name):
         return SSH_OAUTH_INFRA_SIGNATURE
     return None
 
 
-# The retry-cap count for (pr, head, submit_kind, key) minus one, when the
-# most recent unsettled attempt crashed on the known SSH/OAuth infra
-# signature -- that attempt never gave the coding agent a chance to touch the
-# PR, so it should not spend budget a real attempt would have used. Returns
-# the adjusted count and whether an infra crash was found (the caller skips
-# the repair_in_flight TTL wait in that case, since there is nothing left to
-# wait out).
-# Outcomes that must not spend Mergify's code-repair attempt budget.
+# Safety invariant: an unsettled known SSH/OAuth infra crash is subtracted from retry-cap count because the coding agent never touched the PR.
+# Safety invariant: infra, superseded, and capacity-deferred outcomes must not spend Mergify's code-repair attempt budget.
 CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"infra", "superseded", "capacity-deferred"})
-# After an infra settle, give infra-repair this long to own/retry before Mergify
-# may file another repair for the same unit.
+# Safety invariant: after an infra settle, infra-repair owns the unit for this TTL before Mergify may file another repair.
 INFRA_REPAIR_OWNERSHIP_TTL_SECONDS = 30 * 60
 
 
@@ -480,20 +428,7 @@ def repair_attempt_count_excluding_infra_crash(
     return count, crashed_on_infra
 
 
-# The retry-cap decision for (pr, current head, kind, key), shared with the JS
-# CI-regression watcher (scripts/retry-ledger.mjs) instead of re-deriving
-# the same "should we try again?" logic in Python a second time -- see that
-# module's header for why. The count is scoped to the current head_sha: a
-# successful repair attempt pushes a new commit as its normal side effect,
-# completing the old-head unit without spending the new-head budget.
-#
-# backoff_base_ms defaults to 0 (no cooldown between attempts): this module
-# already has its own real "don't resubmit while outstanding" gate
-# (repair_in_flight, a TTL keyed on the current head_sha, checked separately
-# by every caller below), so a second, independent cooldown layer isn't part
-# of what this bug needs fixing. 0 makes the shared decision a pure
-# persistent-count cap check here, matching this module's original timing
-# behavior exactly -- only the count's persistence changes.
+# Safety invariant: retry_decision delegates cap/backoff to retry-ledger.mjs with counts scoped to the current head, and backoff defaults to 0 so this planner keeps its existing repair_in_flight timing gate.
 def retry_decision(
     ledger: Ledger,
     pr_number: int,
@@ -508,8 +443,6 @@ def retry_decision(
     count = count_code_repair_attempts(ledger, submit_kind, pr_number, head_sha, key)
     crashed_on_infra = repair_crash_reason(ledger, pr_number, head_sha, submit_kind, key, plan_name) is not None
     if crashed_on_infra:
-        # Live OAuth/infra crash on the current unsettled attempt: do not spend
-        # code-cap budget, and skip backoff so infra ownership can reclaim it.
         if count > 0:
             count -= 1
         if count >= max_attempts:
@@ -535,13 +468,7 @@ def retry_decision(
     return decision
 
 
-# An acknowledged async repair submission is "in flight" until a
-# same-kind "-settled" row lands with an equal-or-later epoch. The submitted plan's
-# `normalize` task writes that settle row unconditionally as its first action, so
-# reaching `normalize` at all -- pushed, no-op, prereq-created, or still-invalid --
-# frees this PR/blocker for its next tick. Only a crash before `normalize` ever runs
-# (the `repair` task itself dying) leaves no settle row; the TTL bounds that case so
-# a single wedged attempt can't block this (pr, headSha, blockerKey) forever.
+# Safety invariant: a repair is in flight only until an equal-or-later settle row exists, except capacity-deferred stays active and missing settle rows are TTL-bounded.
 REPAIR_IN_FLIGHT_TTL_SECONDS = 5400
 
 
@@ -640,11 +567,7 @@ def mergify_failed_check_actions(
     latest = pr.latest_mergify
     if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
         return ()
-    # A queue-only check always resolves to a no-op repair (nothing to fix
-    # outside the queue -- see is_queue_only_required_check), so trying a
-    # genuinely repairable check first prevents a queue-only check earlier
-    # in Mergify's list from starving out the one failing check a repair
-    # could actually fix.
+    # Safety invariant: try genuinely repairable checks before queue-only checks so a queue-only noop cannot starve the repairable failure.
     ordered_failing_checks = sorted(
         latest.failing_checks, key=lambda name: is_queue_only_required_check(name)
     )
@@ -672,10 +595,7 @@ def mergify_failed_check_actions(
         if claim_repair_filing is not None and claim_repair_filing(
             repair_filing_kind_for_check(name), str(pr.number), mergify_check_state_sha(pr, latest),
         ):
-            # Another filer (a previous tick that crashed before recording,
-            # or a different system entirely, e.g. ci-regression-watch)
-            # already claimed this exact (kind, subject, stateSha) -- try the
-            # next failing check instead of returning a duplicate repair.
+            # Safety invariant: an already-claimed repair filing must skip to the next failing check instead of returning a duplicate repair.
             continue
         return (Action("repair_check", pr.number, name, detail),)
     return ()
@@ -1065,13 +985,7 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
-# Kinds plan_direct_repairs/plan_bot_thread_repairs/mergify_failed_check_actions
-# normally turn into a repair action. When the one blocking such a kind is
-# in-flight, those planners skip it without producing an action -- correct for
-# "don't resubmit," but the blocker is still real. Without this check, the
-# ladder would fall through to plan_bottom_progress and requeue a PR whose
-# required check is still actually failing, just because this tick didn't
-# resubmit a repair for it.
+# Safety invariant: repairable blockers remain blockers while repair submission is skipped/in-flight, so plan_bottom_progress cannot requeue a still-failing PR.
 REPAIRABLE_BLOCKER_KINDS = frozenset({"failed_check", "conflict", "bot_review_thread", "outdated_bot_review_thread"})
 
 
@@ -1105,9 +1019,7 @@ def plan_mergify_queue_repairs(
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
-        # GitHub CONFLICTING/DIRTY beats named CI (#10514): leftover parent
-        # commits after a squash+retarget make CI repair unable to push.
-        # Mergeable-but-behind named CI still never rebases (#10242).
+        # Safety invariant: GitHub CONFLICTING/DIRTY beats named CI because leftover parent commits make CI repair unable to push (#10514), while mergeable-behind named CI still never rebases (#10242).
         conflict = next(
             (blocker for blocker in facts.blockers_by_pr[pr.number] if blocker.kind == "conflict"),
             None,
@@ -1130,18 +1042,14 @@ def plan_mergify_queue_repairs(
             if action is not None:
                 return action
             continue
-        # Named CI failures always go to repair_check — never rebase because
-        # the branch is also behind master (see #10242 rewrite incident).
+        # Safety invariant: named CI failures always go to repair_check and never rebase just because the branch is also behind master (#10242).
         actions = mergify_failed_check_actions(
             pr, ledger, max_repair_attempts, now, facts.suppressed_failed_checks_by_pr.get(pr.number, ()),
             claim_repair_filing,
         )
         if actions:
             return actions[0]
-        # Dequeued with no named required-check failure AND behind master →
-        # Invoker rebase (timeout / speculative merge onto moved trunk). A green
-        # dequeue that is already based on current master still falls through to
-        # plan_bottom_progress's requeue path.
+        # Safety invariant: only a behind-master dequeue with no named required-check failure files Invoker rebase; current-base green dequeues still fall through to requeue.
         latest = pr.latest_mergify
         if (
             latest
@@ -1182,7 +1090,7 @@ def plan_direct_repairs(
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
-                # Legacy conflict-repair filings may still be in flight.
+                # Safety invariant: legacy conflict-repair filings may still be in flight and must block duplicate rebase filings.
                 legacy_key = f"conflict:{pr.number}"
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", legacy_key, now):
                     continue
@@ -1210,12 +1118,7 @@ def plan_direct_repairs(
                     continue
                 if infra_repair_owns_unit(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
                     continue
-                # Same kind formula as mergify_failed_check_actions -- a claim
-                # made via that path (the Mergify-queue-driven view of this
-                # same check) and a claim made via this path (the PR's own
-                # check state) collapse to the identical ledger key, which is
-                # exactly what closes the bug this class reproduces: both
-                # paths often fire for the same real check at once.
+                # Safety invariant: direct PR check repair and Mergify-queue repair use the same filing key so concurrent views of the same check collapse to one claim.
                 if claim_repair_filing is not None and claim_repair_filing(
                     repair_filing_kind_for_check(blocker.key), str(pr.number), pr.head_ref_oid,
                 ):
@@ -1438,15 +1341,7 @@ def plan_rebase_onto_base(
     reason: str,
     claim_repair_filing: ClaimRepairFiling | None = None,
 ) -> Action | None:
-    # Retained for unit tests that pin the legacy Python force-push path.
-    # Production planners no longer call this for behind-master or CI failures;
-    # conflicts and no-CI Mergify dequeues use plan_invoker_rebase_onto_master.
-    # Persistent count (count_by_unit), not the head_sha-scoped count() --
-    # a rebase attempt changes head_sha by definition, so the head_sha-scoped
-    # count could never accumulate past 1 no matter how many times it
-    # genuinely re-hit a conflict. This call site has no backoff/cooldown
-    # concept and never has (a flat cap only, unlike the shared retry_decision
-    # used elsewhere in this module) -- kept that way here deliberately.
+    # Safety invariant: the legacy Python force-push path uses persistent count_by_unit, not head_sha-scoped count(), so repeated rebase conflicts can hit the flat cap.
     rebase_attempts = ledger.count_by_unit("rebase-onto-base-conflict", pr.number, trunk)
     if rebase_attempts >= max_attempts:
         return cap_action(
@@ -1454,11 +1349,7 @@ def plan_rebase_onto_base(
             Blocker("rebase-onto-base", "rebase_conflict", pr.number, "rebase onto base"),
             f"rebase onto `{trunk}` keeps hitting a real conflict; a human needs to rebase PR #{pr.number} manually",
         )
-    # None here (not a cap_action) means "no action this tick" -- a different
-    # filer already claimed this exact (kind, subject, stateSha); every
-    # caller of plan_rebase_onto_base already returns an Action | None
-    # verbatim, so this propagates as "try the next planning pass" without
-    # needing any caller changes.
+    # Safety invariant: an already-claimed rebase filing returns None so callers propagate no-action for this tick instead of filing a duplicate.
     if claim_repair_filing is not None and claim_repair_filing(
         REBASE_CONFLICT_REPAIR_FILING_KIND, str(pr.number), pr.head_ref_oid,
     ):
@@ -1532,13 +1423,7 @@ def plan_bottom_progress(
             )
         return Action("refresh_stale_queue", bottom.number, STALE_QUEUE_EVENT_REFRESH_KEY, detail)
     if not facts.required_checks:
-        # Non-Invoker repo (no admin-bypass Mergify rule -> no required-check
-        # allowlist -> no Mergify queue to requeue into). Land directly via
-        # squash-merge once GitHub reports MERGEABLE and every observed CI
-        # check is green; otherwise wait for CI rather than merging blind.
-        # Invoker itself always resolves a non-empty required_checks set
-        # from its own .mergify.yml, so this branch never fires for it and
-        # it keeps landing through the Mergify-queue requeue path below.
+        # Safety invariant: repos without an admin-bypass rule squash-merge only when GitHub is MERGEABLE and all observed CI is green; Invoker keeps the Mergify requeue path.
         if bottom.mergeable != "MERGEABLE" or not all_observed_checks_green(bottom):
             return None
         key = "squash"
@@ -1546,8 +1431,7 @@ def plan_bottom_progress(
         if attempts >= max_requeue_attempts:
             return cap_action(bottom, Blocker(key, "capped", bottom.number, "squash-merge"), "squash-merge")
         return Action("squash_merge", bottom.number, key, "MERGEABLE with all observed CI green")
-    # Behind master alone is not a rebase trigger: wait / requeue. Rebases are
-    # Invoker jobs for GitHub conflicts and no-CI Mergify dequeues only.
+    # Safety invariant: behind-master alone is not a rebase trigger; rebase jobs are only for GitHub conflicts and no-CI Mergify dequeues.
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
     if latest and latest.state == "dequeued":

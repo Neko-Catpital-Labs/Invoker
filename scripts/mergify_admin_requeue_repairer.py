@@ -55,11 +55,7 @@ class AdminBypassRepairer:
         self.logger = logger
         self.ledger = ledger
         self.repo = repo
-        # A foreign repo's worktree never has Invoker's own repair helper
-        # scripts (mergify_admin_requeue_repair_normalize.py,
-        # pr_worker_safe_push.py), so its generated repair plans must never
-        # invoke them -- see async_repair.build_repair_check_plan's
-        # foreign= parameter.
+        # Safety invariant: Foreign repo repair plans must not invoke Invoker-only helper scripts absent from foreign worktrees.
         self.is_foreign = repo != DEFAULT_INVOKER_REPO
 
     def submit_repair_plan(
@@ -254,9 +250,7 @@ class AdminBypassRepairer:
         return self.blocked_outcome("submitted", ",".join(check_names), start_head, start_head)
 
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
-        # A single planner action can represent several simultaneous Mergify
-        # failures for this exact PR head. Collapse them before submission so
-        # only one workflow owns the branch and its terminal push.
+        # Safety invariant: Simultaneous Mergify failures for one PR head must collapse so only one workflow owns the branch and terminal push.
         if pr.latest_mergify and len(pr.latest_mergify.failing_checks) > 1:
             return self.repair_checks(pr, pr.latest_mergify.failing_checks, now)
         ctx = pr.checks.get(check_name)
@@ -274,9 +268,7 @@ class AdminBypassRepairer:
                 errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
             )
         log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
-        # Invoker "PR Body" checks out even when the job log is non-empty so a
-        # multi-unit diff is routed from reviewUnits. Other checks, and a
-        # foreign repo, check out only when that log is empty.
+        # Safety invariant: Invoker PR Body checks may use non-empty logs for scope splitting; other checks and foreign repos check out only on empty logs.
         scope_units: tuple[str, ...] = ()
         scope_validation: Mapping[str, object] | None = None
         invoker_pr_body = check_name == "PR Body" and not self.is_foreign
