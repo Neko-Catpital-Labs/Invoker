@@ -160,7 +160,7 @@ describe('ClaudeSessionDriver', () => {
       JSON.stringify({
         type: 'assistant',
         message: {
-          model: 'claude-opus-5',
+          model: 'claude-sonnet-5-5',
           content: [{ type: 'text', text: 'ok' }],
           usage: { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 5600, cache_creation_input_tokens: 900 },
         },
@@ -171,7 +171,7 @@ describe('ClaudeSessionDriver', () => {
     const events = driver.extractUsage(jsonl);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      model: 'claude-opus-5',
+      model: 'claude-sonnet-5-5',
       inputTokens: 12,
       outputTokens: 34,
       cachedTokens: 5600,
