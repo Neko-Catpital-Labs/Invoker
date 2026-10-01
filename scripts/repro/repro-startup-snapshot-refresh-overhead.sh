@@ -75,13 +75,14 @@ BARE_REPO="$TMP_DIR/seed-remote.git"
 SEED_CLONE="$TMP_DIR/seed-clone"
 CONFIG_PATH="$TMP_DIR/config.json"
 REPORT_PATH="$TMP_DIR/report.json"
-# Helper.mjs must live inside packages/app so Node ESM resolution can find
-# @playwright/test via the app's node_modules. NODE_PATH does not work for ESM.
-HELPER_PATH="$REPO_ROOT/packages/app/.repro-startup-snapshot-probe.mjs"
+HELPER_PATH="$TMP_DIR/repro-startup-snapshot-probe.mjs"
 HELPER_LOG="$TMP_DIR/probe.log"
+USER_DATA_DIR="$TMP_DIR/electron-user-data"
+IPC_SOCKET_PATH="$TMP_DIR/ipc-transport.sock"
+ENV_PATH="$TMP_DIR/.env"
+LOG_PATH="$TMP_DIR/invoker.log"
 
 cleanup() {
-  rm -f "$HELPER_PATH"
   if [[ "$KEEP_TMP" = "1" ]]; then
     echo "repro: KEEP_TMP=1 -- leaving $TMP_DIR in place"
     return
@@ -90,7 +91,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$DB_DIR"
+mkdir -p "$DB_DIR" "$USER_DATA_DIR"
 
 if [[ ! -f "$REPO_ROOT/packages/ui/dist/index.html" ]]; then
   echo "repro: building @invoker/ui dist..."
@@ -130,7 +131,7 @@ JSON
 # entries so we can pin down which ui-perf events fired AFTER
 # preload_bootstrap_sync.
 cat > "$HELPER_PATH" <<'NODE'
-import { _electron as electron } from '@playwright/test';
+import { createRequire } from 'node:module';
 import { writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 
@@ -143,8 +144,14 @@ const workflowCount = Number(process.env.REPRO_WORKFLOW_COUNT ?? '5');
 const tasksPerWorkflow = Number(process.env.REPRO_TASKS_PER_WORKFLOW ?? '7');
 const settleMs = Number(process.env.REPRO_SETTLE_MS ?? '4000');
 const launchTimeoutMs = Number(process.env.REPRO_LAUNCH_TIMEOUT_MS ?? '60000');
+const userDataDir = process.env.REPRO_USER_DATA_DIR;
+const ipcSocketPath = process.env.REPRO_IPC_SOCKET_PATH;
+const envPath = process.env.REPRO_ENV_PATH;
+const logPath = process.env.REPRO_LOG_PATH;
 const mainEntry = path.join(repoRoot, 'packages', 'app', 'dist', 'main.js');
 const repoUrl = `file://${bareRepo}`;
+const appRequire = createRequire(path.join(repoRoot, 'packages', 'app', 'package.json'));
+const { _electron: electron } = appRequire('@playwright/test');
 
 function buildPlanYaml(index) {
   const lines = [
@@ -179,12 +186,28 @@ const linuxArgs = process.platform === 'linux'
 const launchEnv = {
   ...process.env,
   HOME: process.env.HOME,
+  // Preload requests a light bootstrap in NODE_ENV=test; this repro needs
+  // the production-style full startup snapshot to detect a redundant refresh.
+  NODE_ENV: 'development',
+  INVOKER_RUNTIME_KIND: 'source-development',
+  INVOKER_DEVELOPMENT_PROFILE: '1',
+  INVOKER_DEVELOPMENT_PROFILE_ACTIVE: '1',
+  INVOKER_SOURCE_ROOT: repoRoot,
+  INVOKER_PROFILE_ID: path.basename(path.dirname(dbDir)),
   INVOKER_DB_DIR: dbDir,
+  INVOKER_USER_DATA_DIR: userDataDir,
+  INVOKER_IPC_SOCKET: ipcSocketPath,
+  INVOKER_ENV_PATH: envPath,
+  INVOKER_LOG_PATH: logPath,
+  INVOKER_API_PORT: '0',
+  INVOKER_WEB_PORT: '0',
+  INVOKER_TEST_WORKFLOW_IDS: '1',
+  INVOKER_GUI_OWNER_MODE: 'gui',
+  INVOKER_E2E_ENABLE_COMPOSITOR: '1',
   INVOKER_REPO_CONFIG_PATH: configPath,
 };
 
-// chdir so @playwright/test (and the bundled electron) resolves from the
-// workspace it was installed into.
+// chdir so the Electron app sees the same cwd as normal app e2e tests.
 process.chdir(path.join(repoRoot, 'packages', 'app'));
 
 async function withElectron(label, fn) {
@@ -218,6 +241,16 @@ await withElectron('seed', async (app) => {
       await window.invoker.loadPlan(planText);
     }, yaml);
   }
+  await page.waitForFunction(
+    async ({ expectedWorkflows, expectedTasks }) => {
+      const workflows = await window.invoker.listWorkflows();
+      const raw = await window.invoker.getTasks();
+      const tasks = Array.isArray(raw) ? raw : raw.tasks;
+      return workflows.length >= expectedWorkflows && tasks.length >= expectedTasks;
+    },
+    { expectedWorkflows: workflowCount, expectedTasks: workflowCount * tasksPerWorkflow },
+    { timeout: launchTimeoutMs },
+  );
 });
 
 const observed = await withElectron('measure', async (app) => {
@@ -228,6 +261,8 @@ const observed = await withElectron('measure', async (app) => {
     null,
     { timeout: launchTimeoutMs },
   );
+  await page.getByTestId('sidebar-planning').dispatchEvent('click', { bubbles: true, cancelable: true });
+  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: launchTimeoutMs });
   await page
     .locator('[data-testid^="workflow-node-"]')
     .first()
@@ -296,6 +331,10 @@ run_helper() {
     REPRO_TASKS_PER_WORKFLOW="$TASKS_PER_WORKFLOW"
     REPRO_SETTLE_MS="$SETTLE_MS"
     REPRO_LAUNCH_TIMEOUT_MS="$LAUNCH_TIMEOUT_MS"
+    REPRO_USER_DATA_DIR="$USER_DATA_DIR"
+    REPRO_IPC_SOCKET_PATH="$IPC_SOCKET_PATH"
+    REPRO_ENV_PATH="$ENV_PATH"
+    REPRO_LOG_PATH="$LOG_PATH"
   )
 
   if [[ "$(uname -s)" == "Linux" ]] && command -v xvfb-run >/dev/null 2>&1; then
@@ -349,14 +388,17 @@ print(f"  startup_workflow_graph_visible.processElapsedMs: {show(graph.get('proc
 print(f"  useTasks_snapshot_replace events after bootstrap: {len(replaces)}")
 
 non_forced = []
+if not replaces:
+    print("  useTasks_snapshot_replace.requestDurationMs: <none>")
+    print("  useTasks_snapshot_replace.replaceDurationMs: <none>")
+    print("  useTasks_snapshot_replace.forceRefresh: <none>")
 for entry in replaces:
     forced = bool(entry.get("forceRefresh"))
-    label = "forced" if forced else "non-forced"
     print(
         "  - "
-        f"{label} "
-        f"requestDurationMs={show(entry.get('requestDurationMs'))} "
-        f"replaceDurationMs={show(entry.get('replaceDurationMs'))} "
+        f"useTasks_snapshot_replace.forceRefresh={str(forced).lower()} "
+        f"useTasks_snapshot_replace.requestDurationMs={show(entry.get('requestDurationMs'))} "
+        f"useTasks_snapshot_replace.replaceDurationMs={show(entry.get('replaceDurationMs'))} "
         f"taskCount={show(entry.get('taskCount'))} "
         f"workflowCount={show(entry.get('workflowCount'))} "
         f"jsonSizeBytes={show(entry.get('jsonSizeBytes'))}"
