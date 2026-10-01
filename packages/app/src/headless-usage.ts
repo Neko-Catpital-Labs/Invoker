@@ -20,7 +20,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query session <taskId>                              Print agent session messages
   query worker-actions [--workflow <id>] [--status S] [--decision act|skip]
                                                       List durable worker action rows (all workers)
-  query worker-decisions [--workflow <id>] [--decision act|skip] [--reason <substr>]
+  query worker-decisions [--workflow <id>] [--task <id>] [--decision act|skip] [--reason <substr>]
                                                       Show what each worker decided: submitted vs skipped, and why
   query ui-perf [--output F] [--reset]               Print live UI perf stats
   query choke [--output text|json|jsonl]             Print live choke metrics (Prometheus text by default)

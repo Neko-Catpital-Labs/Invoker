@@ -1037,6 +1037,7 @@ describe('WorkflowInspector', () => {
       await waitFor(() => expect(screen.getByText('Preparing review workspace')).toBeInTheDocument());
       expect(screen.getByText('Merge gate failed')).toBeInTheDocument();
       await waitFor(() => expect(screen.getByText('Queued auto-fix with agent')).toBeInTheDocument());
+      expect(screen.getByText('Attempts')).toBeInTheDocument();
       expect(screen.queryByText('Skipped auto-fix')).not.toBeInTheDocument();
       expect(screen.queryByText('debug detail')).not.toBeInTheDocument();
 

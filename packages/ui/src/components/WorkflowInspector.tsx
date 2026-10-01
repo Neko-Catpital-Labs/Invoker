@@ -459,10 +459,8 @@ export function WorkflowInspector({
   const visibleLogEntries = logEntries
     .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter]);
   const selectedWorkflowId = workflow?.id ?? task?.config.workflowId;
-  const timelineDecisionTitle = task ? 'Worker decisions' : 'Workflow decisions';
-  const timelineDecisionEmptyText = task
-    ? 'No worker decisions for this task yet.'
-    : 'No workflow-level worker decisions recorded yet.';
+  const timelineDecisionTitle = 'Workflow decisions';
+  const timelineDecisionEmptyText = 'No workflow-level worker decisions recorded yet.';
   const savePrompt = () => {
     if (task && onEditPrompt && editPromptValue !== (task.config.prompt ?? '')) {
       onEditPrompt(task.id, editPromptValue);
@@ -553,6 +551,14 @@ export function WorkflowInspector({
             onRetry={onFix ? (agentName) => onFix(task.id, agentName) : undefined}
           />
         )}
+        {task && selectedWorkflowId ? (
+          <WorkerDecisionsSection
+            workflowId={selectedWorkflowId}
+            taskId={task.id}
+            title="Attempts"
+            emptyText="No attempts recorded for this task yet."
+          />
+        ) : null}
         <section className={`rounded border p-3 ${statusBorder} bg-secondary/70`}>
           <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">{statusHeading}</h3>
           <div data-testid="workflow-inspector-status-label" className={`mt-1 inline-flex items-center gap-2 text-xs ${statusText}`}>
@@ -988,7 +994,7 @@ export function WorkflowInspector({
               <div className="space-y-3 border-t border-border px-3 py-2">
                 <p className="text-xs text-muted-foreground">
                   {task
-                    ? 'Task events first. Worker decisions below. This is the fastest way to see retries, skips, and AI fix attempts.'
+                    ? 'Task events. Attempts for this task are pinned above.'
                     : 'Workflow-level worker decisions. Select a task for the event-by-event task timeline.'}
                 </p>
                 {task ? (
@@ -1031,10 +1037,9 @@ export function WorkflowInspector({
                     )}
                   </div>
                 ) : null}
-                {selectedWorkflowId ? (
+                {selectedWorkflowId && !task ? (
                   <WorkerDecisionsSection
                     workflowId={selectedWorkflowId}
-                    taskId={task?.id}
                     title={timelineDecisionTitle}
                     emptyText={timelineDecisionEmptyText}
                   />
