@@ -183,12 +183,12 @@ describe('fix prompt transport for oversized prompts', () => {
       '/tmp',
       agent,
       undefined,
-      'anthropic/claude-opus-4',
+      'anthropic/claude-sonnet-5-5',
     );
 
     expect(buildFixCommand).toHaveBeenCalledWith(
       'small prompt',
-      { executionModel: 'anthropic/claude-opus-4' },
+      { executionModel: 'anthropic/claude-sonnet-5-5' },
     );
   });
 
@@ -220,12 +220,12 @@ describe('fix prompt transport for oversized prompts', () => {
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
       'omp',
       registry,
-      'anthropic/claude-opus-4',
+      'anthropic/claude-sonnet-5-5',
     );
 
     expect(buildFixCommand).toHaveBeenCalledWith(
       'small prompt',
-      { executionModel: 'anthropic/claude-opus-4' },
+      { executionModel: 'anthropic/claude-sonnet-5-5' },
     );
     expect(stdinScript).toContain('AGENT_CMD_FILE=$(mktemp)');
     expect(stdinScript).toContain('bash "$AGENT_CMD_FILE"');
