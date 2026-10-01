@@ -46,23 +46,12 @@ def _repair_task_completed(workflow_id: str, *, run_headless_fn=run_headless) ->
 
 
 def repair_task_crashed_on_infra(plan_name: str, *, run_headless_fn=run_headless) -> bool:
-    """True when plan_name's most recent Invoker workflow's `repair` task
-    crashed with the known SSH/OAuth infra signature -- a submission that
-    never gave the coding agent a chance to touch the PR at all.
-
-    A task that ultimately completed proves the agent did launch and finish,
-    even if an earlier SSH retry attempt logged the signature before self-
-    healing (e.g. credentials still propagating across the pool) -- checking
-    the signature alone without the final status flags that case as crashed
-    and triggers a redundant resubmission while the first attempt is still
-    finishing. See PR #9309's own bot-thread repair (2026-08-16) for a real
-    instance: the signature appeared 4 times, then the task completed.
-    """
     workflow_id = find_latest_workflow_id(plan_name, run_headless_fn=run_headless_fn)
     if workflow_id is None:
         return False
     completed = run_headless_fn('headless_query query task-output "$2"', f"{workflow_id}/repair")
     if completed.returncode != 0 or SSH_OAUTH_INFRA_SIGNATURE not in completed.stdout:
         return False
+    # Safety invariant: a completed repair task already launched the agent, so earlier SSH/OAuth retry output must not trigger another repair.
     task_completed = _repair_task_completed(workflow_id, run_headless_fn=run_headless_fn)
     return task_completed is not True
