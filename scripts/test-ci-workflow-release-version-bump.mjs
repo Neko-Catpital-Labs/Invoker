@@ -88,6 +88,10 @@ assert(
 
 const guardJob = extractJob(release, 'guard-version');
 assert(
+  /node scripts\/bump-release-version\.mjs --type patch/.test(guardJob),
+  'guard-version job must invoke bump-release-version.mjs --type patch',
+);
+assert(
   /node scripts\/bump-release-version\.mjs --type minor/.test(guardJob),
   'guard-version job must invoke bump-release-version.mjs --type minor',
 );
@@ -96,7 +100,7 @@ assert(
   'guard-version job must compute the required version from the previous release version',
 );
 assert(
-  !/git (commit|push)|bump-release-version\.mjs --type minor(?! --dry-run)/.test(guardJob),
+  !/git (commit|push)|bump-release-version\.mjs --type (?:patch|minor)(?! --dry-run)/.test(guardJob),
   'guard-version job must remain a read-only guard',
 );
 
@@ -110,4 +114,4 @@ if (process.exitCode) {
   process.exit(process.exitCode);
 }
 
-console.log('PASS: daily-release.yml bumps the patch version on a real cut, release.yml guards for a minor-only bump');
+console.log('PASS: daily-release.yml bumps the patch version on a real cut, release.yml guards for a patch or minor bump');
