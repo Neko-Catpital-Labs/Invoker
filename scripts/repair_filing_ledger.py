@@ -26,6 +26,17 @@ except ImportError:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Shorter than run_headless's own 30s default: an insert/release call here is
+# a best-effort dedup claim whose caller (mergify_admin_requeue_plan.py's
+# default_claim_repair_filing/default_release_repair_filing) already treats
+# any failure as "skip this filing tick, retry next time" -- no data is lost
+# on a fast timeout. Measured live against the production DO1 owner under
+# real task load (2026-08-29): a single insert call took the full existing
+# 30s before timing out. A cron tick needing this for several PRs in one
+# pass can rack up multiple 30s stalls and exceed the worker's own 240s tick
+# budget, which kills the whole tick (losing every other PR's triage that
+# cycle, not just this best-effort claim). Failing this specific call faster
+# bounds that cost without weakening anything else's reliability.
 REPAIR_FILING_LEDGER_TIMEOUT_SECONDS = 10
 
 
