@@ -618,10 +618,28 @@ export class RepoPool {
       );
   }
 
+  private isMissingObjectWorktreeSetupError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('Preparing worktree')) return false;
+    return message.includes('unable to read sha1 file')
+      || message.includes('Could not reset index file to revision')
+      || message.includes('fatal: bad object')
+      || message.includes('fatal: invalid object');
+  }
+
   private isRetryableWorktreeSetupError(err: unknown, worktreePath: string): boolean {
     return this.isAlreadyExistsWorktreeError(err, worktreePath)
       || this.isBranchCheckedOutAtWorktreeError(err, worktreePath)
-      || this.isTransientWorktreeSetupError(err, worktreePath);
+      || this.isTransientWorktreeSetupError(err, worktreePath)
+      || this.isMissingObjectWorktreeSetupError(err);
+  }
+
+  private async refreshCloneAfterMissingObjectSetupFailure(
+    clonePath: string,
+    startup?: ExecutorStartup,
+  ): Promise<void> {
+    startup?.check();
+    await this.execGit(['fetch', '--all', '--prune'], clonePath, startup);
   }
 
   private async runPreserveOrResetWithRecovery(
@@ -667,6 +685,11 @@ export class RepoPool {
       traceExecution(
         `[RepoPool] runPreserveOrResetWithRecovery: retrying after worktree setup failure branch=${branch} path=${worktreePath}`,
       );
+      if (this.isMissingObjectWorktreeSetupError(err)) {
+        bench('RepoPool.runPreserveOrResetWithRecovery.refreshCloneAfterMissingObject.before');
+        await this.refreshCloneAfterMissingObjectSetupFailure(clonePath, startup);
+        bench('RepoPool.runPreserveOrResetWithRecovery.refreshCloneAfterMissingObject.after');
+      }
       bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.before');
       await this.reconcileStaleWorktreePath(clonePath, worktreePath, startup);
       bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.after');
