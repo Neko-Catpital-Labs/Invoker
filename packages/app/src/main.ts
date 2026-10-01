@@ -121,6 +121,7 @@ import {
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
+import { acceptHeadlessRunAck } from './headless-run-ack.js';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
@@ -1414,23 +1415,6 @@ function startHeadlessMode(): void {
               return executor;
             };
 
-      const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
-        const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
-        const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
-        backupPlan(plan, undefined, logger);
-        const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
-        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-        const workflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
-        if (!workflowId) {
-          throw new Error(`Failed to resolve workflow id for delegated plan: ${payload.planPath}`);
-        }
-        const started = orchestrator.startExecution();
-        logger.info(`standalone started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
-        const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
-        return { workflowId, tasks };
-      };
-
-
       const executeStandaloneHeadlessResume = async (payload: HeadlessResumeMutationPayload): Promise<unknown> => {
         const { workflowId } = payload;
         const started = orchestrator.resumeWorkflow(workflowId);
@@ -2035,54 +2019,6 @@ function startHeadlessMode(): void {
         }
 
 
-        const executeStandaloneHeadlessRun = async (
-          payload: HeadlessRunMutationPayload,
-        ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> => {
-          const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
-          const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-          const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
-          const workflowIds: string[] = [];
-          let upstream: { workflowId: string; featureBranch: string } | undefined;
-
-          for (const parsedPlan of submission.plans) {
-            let plan = applyConfiguredPlanDefaults(parsedPlan);
-            if (upstream) {
-              plan = {
-                ...plan,
-                baseBranch: upstream.featureBranch,
-                externalDependencies: [
-                  ...(plan.externalDependencies ?? []),
-                  {
-                    workflowId: upstream.workflowId,
-                    taskId: '__merge__',
-                    requiredStatus: 'completed',
-                    gatePolicy: 'review_ready',
-                  } as const,
-                ],
-              };
-            }
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-            const workflowId = orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id))!;
-            existingWorkflowIds.add(workflowId);
-            workflowIds.push(workflowId);
-            upstream = { workflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
-          }
-
-          const workflowId = workflowIds[workflowIds.length - 1];
-          if (!workflowId) {
-            throw new Error('Loaded plan did not create a workflow.');
-          }
-          const started = orchestrator.startExecution();
-          logger.info(
-            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
-            { module: 'ipc-delegate' },
-          );
-          const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-          return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
-        };
-
-
         const executeStandaloneHeadlessResume = async (
           payload: HeadlessResumeMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
@@ -2100,7 +2036,11 @@ function startHeadlessMode(): void {
             `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=standalone`,
             { module: 'ipc-delegate' },
           );
-          const result = await executeStandaloneHeadlessRun({ planPath });
+          const result = acceptHeadlessRunAck(
+            await standaloneMutationActions.executeHeadlessRun({ planPath }),
+            'standalone',
+            logger,
+          );
           logger.info(
             `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${result.tasks.length} mode=standalone`,
             { module: 'ipc-delegate' },
@@ -3437,7 +3377,11 @@ startMainProcessBootstrap({
           `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=gui`,
           { module: 'ipc-delegate' },
         );
-        const result = await mutationActions.executeHeadlessRun({ planPath });
+        const result = acceptHeadlessRunAck(
+          await mutationActions.executeHeadlessRun({ planPath }),
+          'gui',
+          logger,
+        );
         logger.info(
           `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${result.tasks.length} mode=gui`,
           { module: 'ipc-delegate' },
