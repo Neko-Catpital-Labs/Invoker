@@ -3271,14 +3271,14 @@ describe('SQLiteAdapter', () => {
         config: {
           runnerKind: 'docker',
           dockerImage: 'node:20',
-          executionModel: 'claude-sonnet-4',
+          executionModel: 'claude-sonnet-5-5',
         },
       }));
 
       let [loaded] = adapter.loadTasks('wf-1');
       expect(loaded.config.runnerKind).toBe('docker');
       expect(loaded.config.dockerImage).toBe('node:20');
-      expect(loaded.config.executionModel).toBe('claude-sonnet-4');
+      expect(loaded.config.executionModel).toBe('claude-sonnet-5-5');
 
       adapter.updateTask('t1', {
         config: {
