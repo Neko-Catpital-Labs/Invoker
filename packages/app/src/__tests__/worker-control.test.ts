@@ -760,6 +760,20 @@ describe('listWorkerDecisions', () => {
     expect(res.actions[1]?.reason).toBe('worker-retry-budget-exhausted');
   });
 
+  it('passes taskId through and omits it when the request has none', () => {
+    const listWorkerActions = vi.fn(() => []);
+    listWorkerDecisions({ listWorkerActions } as never, { workflowId: 'wf-1', taskId: 'wf-1/task-a' });
+    expect(listWorkerActions).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+    }));
+
+    listWorkerActions.mockClear();
+    listWorkerDecisions({ listWorkerActions } as never, { workflowId: 'wf-1' });
+    const filters = listWorkerActions.mock.calls[0]?.[0] as { taskId?: string };
+    expect(filters.taskId).toBeUndefined();
+  });
+
   it('passes the decision filter through to the query', () => {
     const listWorkerActions = vi.fn(() => []);
     listWorkerDecisions({ listWorkerActions } as never, { decision: 'skip', workerKind: 'autofix' });
