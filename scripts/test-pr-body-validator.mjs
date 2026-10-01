@@ -1547,4 +1547,47 @@ try {
   rmSync(measuredCliDir, { recursive: true, force: true });
 }
 
+const withTestPlanRows = (rows) => validMinimal.replace('- [ ] `pnpm test`\n', `- [ ] \`pnpm test\`\n${rows}`);
+const notRunFirstPublished = '- Not run: an omp task launched with `anthropic/claude-sonnet-5-5`.\n';
+const notRunResults = [];
+for (const [name, body, expectRejected] of [
+  ['Not run row with no Blocker', withTestPlanRows(notRunFirstPublished), true],
+  ['checkbox Not run row with no Blocker', withTestPlanRows('- [ ] Not run: the live path.\n'), true],
+  ['Not run row with Blocker: followed by nothing', withTestPlanRows('- Not run: the live path. Blocker:\n'), true],
+  ['Not run row with Blocker: followed by punctuation only', withTestPlanRows('- Not run: the live path. Blocker: --\n'), true],
+  ['two Not run rows, only the second names a Blocker', withTestPlanRows('- Not run: path one.\n- Not run: path two. Blocker: no API key on this machine\n'), true],
+  ['Blocker two rows below the Not run row', withTestPlanRows('- Not run: path one.\n- [x] `true`\n- Blocker: no API key on this machine\n'), true],
+  ['Not run row with Blocker on the same line', withTestPlanRows('- Not run: X. Blocker: no API key on this machine\n'), false],
+  ['Not run row with Blocker on the next non-empty line', withTestPlanRows('- Not run: X.\n\n  Blocker: no API key on this machine\n'), false],
+  ['no Not run row', validMinimal, false],
+  ['the words not run inside a Test Plan sentence', withTestPlanRows('- [x] The slow suite was not run: the fast one covers it.\n'), false],
+  ['Not run: quoted inside a Test Plan code fence', withTestPlanRows('```\nNot run: quoted from another PR\n```\n'), false],
+  ['Not run: in prose outside the Test Plan', validMinimal.replace('- Do not add repro scripts or docs in this slice.', '- Do not add repro scripts or docs in this slice.\nNot run: the docs build, and that is not run here on purpose.'), false],
+]) {
+  const findings = (await validatePrBody(body)).filter((error) => error.includes('"Not run:" row'));
+  const rejected = findings.length > 0;
+  const ok = rejected === expectRejected;
+  notRunResults.push({ name, ok });
+  console.log(`${ok ? 'ok' : 'FAIL'} - not run: ${name} -> ${rejected ? 'rejected' : 'accepted'} (expected ${expectRejected ? 'rejected' : 'accepted'})`);
+}
+assert(
+  notRunResults.every((result) => result.ok),
+  `Not run blocker checks failed: ${notRunResults.filter((result) => !result.ok).map((result) => result.name).join('; ')}`,
+);
+
+const notRunCliDir = mkdtempSync(join(tmpdir(), 'pr-body-not-run-'));
+try {
+  const bareFile = join(notRunCliDir, 'bare.md');
+  writeFileSync(bareFile, withTestPlanRows(notRunFirstPublished));
+  const bareRun = runValidatorCli(bareFile);
+  assert(bareRun.status === 1, 'the CLI must fail a body whose Not run row names no Blocker');
+  assert(bareRun.stderr.includes('an omp task launched with'), 'the CLI must quote the Not run row that names no Blocker');
+  assert(bareRun.stderr.includes('Blocker: <what stops it>'), 'the CLI must tell the author to run the check or name what stops it');
+  const namedFile = join(notRunCliDir, 'named.md');
+  writeFileSync(namedFile, withTestPlanRows('- Not run: X. Blocker: no API key on this machine\n'));
+  assert(runValidatorCli(namedFile).status === 0, 'the CLI must pass a body whose Not run row names its Blocker');
+} finally {
+  rmSync(notRunCliDir, { recursive: true, force: true });
+}
+
 console.log('OK: PR body validator checks passed');
