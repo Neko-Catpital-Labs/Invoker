@@ -313,6 +313,55 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
   }
 }
 
+{
+  const diff = [
+    'diff --git a/scripts/thing.py b/scripts/thing.py',
+    '+++ b/scripts/thing.py',
+    '@@ -0,0 +1,2 @@',
+    '+# Safety invariant: do not take the lock twice.',
+    '+# then call the helper',
+    '',
+  ].join('\n');
+  const violations = collectAddedCommentViolations(diff);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+}
+
+{
+  const diff = [
+    'diff --git a/packages/core/src/thing.ts b/packages/core/src/thing.ts',
+    '+++ b/packages/core/src/thing.ts',
+    '@@ -0,0 +1,3 @@',
+    '+/*',
+    '+ * Safety invariant: never call this twice.',
+    '+ */',
+    '',
+  ].join('\n');
+  const violations = collectAddedCommentViolations(diff);
+  assert.equal(
+    violations.length,
+    1,
+    'a multi-line block is not blessed merely because one of its lines contains Safety invariant',
+  );
+  assert.equal(violations[0].line, 1);
+}
+
+{
+  const diff = [
+    'diff --git a/packages/core/src/thing.ts b/packages/core/src/thing.ts',
+    '+++ b/packages/core/src/thing.ts',
+    '@@ -0,0 +1 @@',
+    '+const value = true; /* Safety invariant: single-line form is allowed */',
+    '',
+  ].join('\n');
+  assert.equal(collectAddedCommentViolations(diff).length, 0);
+}
+
+{
+  const output = execFileSync(process.execPath, [scriptPath, '--file', 'scripts/codex-session-audit.py'], { encoding: 'utf8' });
+  assert.match(output, /Checked added source lines; no disallowed comments found\./);
+}
+
 // Temp git case: a diff larger than Node's 1MB execFileSync default still runs.
 // `git diff` streams every changed file back before any path filtering, so a
 // large lockfile update used to kill the checker with ENOBUFS.
