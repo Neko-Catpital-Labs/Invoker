@@ -440,6 +440,7 @@ describe('Side rail controls (component)', () => {
 
     key('Enter');
     expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
   });
 
   it('does not let region shortcuts steal focus while typing in search', async () => {

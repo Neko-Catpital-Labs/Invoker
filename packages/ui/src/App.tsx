@@ -1767,7 +1767,7 @@ export function App() {
         if (keyboardRegion === 'inspector') {
           event.preventDefault();
           focusKeyboardRegion(previousGraphRegion);
-        } else if (keyboardRegion === 'taskGraph' && selectedWorkflow && miniDagTasks.size > 0) {
+        } else if (keyboardRegion === 'taskGraph' && selectedWorkflowGraphAvailable) {
           event.preventDefault();
           setContextMenu(null);
           setWorkflowContextMenu(null);
@@ -1786,6 +1786,8 @@ export function App() {
             event.preventDefault();
             setContextMenu(null);
             setWorkflowContextMenu(null);
+            setSelectedTaskId(null);
+            setSelectedWorkflowId(workflowId);
             setWorkflowSelectionDismissed(false);
             focusKeyboardRegion('taskGraph');
             return;
@@ -1884,6 +1886,7 @@ export function App() {
     searchResults,
     selectRelativeNode,
     selectTaskById,
+    selectedWorkflowGraphAvailable,
     selectedTaskId,
     selectedWorkflow,
     selectedWorkflowId,
