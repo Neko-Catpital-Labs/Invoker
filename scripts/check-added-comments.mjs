@@ -28,7 +28,6 @@ const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
   'scripts/mergify_admin_requeue_repair_body.py',
   'scripts/pr_duplicate_close_executor.py',
   'scripts/pr_duplicate_close_plan.py',
-  'scripts/pr_worker_safe_push.py',
   'scripts/repair_filing_ledger.py',
   'scripts/slack-complaint-scout-discover.py',
 ]);
