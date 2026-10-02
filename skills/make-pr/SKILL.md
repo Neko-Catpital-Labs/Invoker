@@ -120,6 +120,7 @@ graph TD
 
 - [ ] exact command
 - [ ] exact command
+- Not run: <check>. Blocker: <what stops it>
 
 </details>
 
@@ -170,6 +171,8 @@ For Invoker UI/live-path claims, also use `skills/verify/SKILL.md` to pick the p
 Use visible markdown sections for review metadata. Do not hide `Review Claim`, `Review Lane`, `Review Unit`, `Safety Invariant`, or `Slice Rationale` inside `<details>` or other HTML disclosure blocks. Review metadata must render directly in the PR body.
 
 Test Plan and Revert Plan are the opposite: keep their `## Test Plan` / `## Revert Plan` headings visible, but their content must sit inside a collapsed `<details>` block with `<summary>Test Plan</summary>` / `<summary>Revert Plan</summary>`. `scripts/validate-pr-body.mjs` rejects a plan section whose content is not collapsed, and rejects the `open` attribute.
+
+A check you did not run gets its own Test Plan row: `- Not run: <check>. Blocker: <what stops it>`. Run the check instead whenever you can; the row is only for a check something stops you from running, and the blocker names that thing, such as a missing API key or a host you cannot reach. `scripts/validate-pr-body.mjs` rejects a Test Plan row that starts `Not run:` unless `Blocker:` followed by text sits on that line or on the next non-empty line. The check reads only that labelled row; it does not judge whether the blocker is real, so that stays with the author and the reviewer.
 
 CI validates the declared Review Lane and Review Unit against the actual changed files. Keep `behavior`, `refactor`, and `cleanup` slices separate from docs, policy, and proof files. Keep `proof` separate from product, docs, and policy files. Keep `policy` separate from product and proof files. Keep `docs` separate from product, policy, proof, and product-test files. The exact classification and review-unit boundaries live in `scripts/validate-pr-body.mjs` and `scripts/review-unit-rules.mjs`; split the PR when the local validator reports a mismatch.
 
@@ -316,6 +319,7 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - ensure the branch is pushed
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
+- give every Test Plan `Not run:` row a `Blocker:` naming what stops the check, or run the check and drop the row
 - ensure revert guidance is honest
 - keep Test Plan and Revert Plan content inside their collapsed `<details><summary>Test Plan</summary>` / `<summary>Revert Plan</summary>` blocks
 - do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
