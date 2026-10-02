@@ -14,7 +14,7 @@ class MiniPersistence implements OrchestratorPersistence {
   }
   listWorkflows() { return Array.from(this.workflows.values()); }
   loadTasks() { return []; }
-  saveTask(task: TaskState): void { this.tasks.set(task.id, task); }
+  saveTask(_workflowId: string, task: TaskState): void { this.tasks.set(task.id, task); }
   updateTask(): void {}
   logEvent(): void {}
   getAttempts(): Attempt[] { return []; }
@@ -44,6 +44,22 @@ function loadOneWorkflowId(): string {
   return orchestrator.getWorkflowIds()[0]!;
 }
 
+function loadReservedWorkflowId(): { workflowId: string; taskIds: string[] } {
+  const persistence = new MiniPersistence();
+  const orchestrator = new Orchestrator({
+    persistence,
+    messageBus: bus as never,
+    maxConcurrency: 1,
+  });
+  const plan: PlanDefinition = {
+    name: 'reserved-id',
+    onFinish: 'none',
+    tasks: [{ id: 't1', description: 't', command: 'true' }],
+  };
+  const workflowId = orchestrator.loadPlan(plan, { workflowId: 'wf-reserved-123' });
+  return { workflowId, taskIds: Array.from(persistence.tasks.keys()) };
+}
+
 describe('nextWorkflowId INVOKER_TEST_WORKFLOW_IDS gate', () => {
   const previousNodeEnv = process.env.NODE_ENV;
   const previousTestIds = process.env.INVOKER_TEST_WORKFLOW_IDS;
@@ -65,5 +81,13 @@ describe('nextWorkflowId INVOKER_TEST_WORKFLOW_IDS gate', () => {
     process.env.INVOKER_TEST_WORKFLOW_IDS = '1';
     process.env.NODE_ENV = 'production';
     expect(loadOneWorkflowId()).toMatch(/^wf-test-\d+$/);
+  });
+
+  it('uses a caller-reserved workflow id when supplied', () => {
+    const result = loadReservedWorkflowId();
+
+    expect(result.workflowId).toBe('wf-reserved-123');
+    expect(result.taskIds).toContain('wf-reserved-123/t1');
+    expect(result.taskIds).toContain('__merge__wf-reserved-123');
   });
 });
