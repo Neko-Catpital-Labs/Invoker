@@ -147,6 +147,9 @@ import {
 export interface HeadlessRunMutationPayload {
   planPath: string;
   traceId?: string;
+  waitForApproval?: boolean;
+  noTrack?: boolean;
+  forceSynchronousAck?: boolean;
 }
 
 export interface HeadlessResumeMutationPayload {
@@ -426,6 +429,13 @@ function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
     || ((task.status === 'pending' || (task.status as string) === 'queued') && task.execution.phase === 'launching');
+}
+
+let reservedHeadlessRunWorkflowCounter = 0;
+
+function reserveHeadlessRunWorkflowId(): string {
+  reservedHeadlessRunWorkflowCounter += 1;
+  return `wf-${Date.now()}-headless-${process.pid}-${reservedHeadlessRunWorkflowCounter}`;
 }
 
 export function createGuiMutationTaskActions(context: GuiMutationTaskActionsContext): GuiMutationTaskActions {
@@ -776,53 +786,71 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     return settled;
   }
 
-  function persistPlanSubmission(submission: PlanSubmissionBundle): string[] {
+  function rollbackPersistedPlanSubmission(workflowIds: readonly string[]): void {
+    for (const workflowId of [...workflowIds].reverse()) {
+      try {
+        if (persistence.loadWorkflow(workflowId)) {
+          orchestrator.deleteWorkflow(workflowId);
+        }
+      } catch (err) {
+        logger.error(
+          `headless.run rollback failed workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ipc-delegate', workflowId },
+        );
+      }
+    }
+  }
+
+  function persistPlanSubmission(submission: PlanSubmissionBundle, reservedWorkflowIds?: readonly string[]): string[] {
     const persistedWorkflowIds: string[] = [];
     let upstream: { workflowId: string; featureBranch: string } | undefined;
 
-    for (const parsedPlan of submission.plans) {
-      let plan = applyConfiguredPlanDefaults(parsedPlan);
-      if (upstream) {
-        plan = {
-          ...plan,
-          baseBranch: upstream.featureBranch,
-          externalDependencies: [
-            ...(plan.externalDependencies ?? []),
-            {
-              workflowId: upstream.workflowId,
-              taskId: '__merge__',
-              requiredStatus: 'completed',
-              gatePolicy: 'review_ready',
-            } as const,
-          ],
-        };
+    try {
+      for (const [planIndex, parsedPlan] of submission.plans.entries()) {
+        let plan = applyConfiguredPlanDefaults(parsedPlan);
+        if (upstream) {
+          plan = {
+            ...plan,
+            baseBranch: upstream.featureBranch,
+            externalDependencies: [
+              ...(plan.externalDependencies ?? []),
+              {
+                workflowId: upstream.workflowId,
+                taskId: '__merge__',
+                requiredStatus: 'completed',
+                gatePolicy: 'review_ready',
+              } as const,
+            ],
+          };
+        }
+        let loadedWorkflowId: string | undefined;
+        backupPlan(plan, undefined, logger);
+        loadedWorkflowId = orchestrator.loadPlan(plan, {
+          allowGraphMutation: invokerConfig.allowGraphMutation,
+          workflowId: reservedWorkflowIds?.[planIndex],
+        });
+        const workflow = persistence.loadWorkflow(loadedWorkflowId);
+        if (!workflow) {
+          throw new Error(
+            `Plan "${plan.name}" reported workflow "${loadedWorkflowId}" but no such workflow is readable from persistence.`,
+          );
+        }
+        persistedWorkflowIds.push(workflow.id);
+        upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
       }
-      backupPlan(plan, undefined, logger);
-      const loadedWorkflowId = orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.loadWorkflow(loadedWorkflowId);
-      if (!workflow) {
-        throw new Error(
-          `Plan "${plan.name}" reported workflow "${loadedWorkflowId}" but no such workflow is readable from persistence.`,
-        );
-      }
-      persistedWorkflowIds.push(workflow.id);
-      upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+    } catch (err) {
+      rollbackPersistedPlanSubmission(persistedWorkflowIds);
+      logger.error(
+        `headless.run intake failed plan="${submission.name}" persisted=${persistedWorkflowIds.length}: ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'ipc-delegate', planName: submission.name, persistedWorkflowIds },
+      );
+      throw err;
     }
 
     return persistedWorkflowIds;
   }
 
-  async function executeHeadlessRun(
-    payload: HeadlessRunMutationPayload,
-  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
-    const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-    const workflowIds = await serializeIntakePersist(() => persistPlanSubmission(submission));
-
-    const workflowId = workflowIds[workflowIds.length - 1];
-    if (!workflowId) {
-      throw new Error(`Plan "${submission.name}" did not create a workflow.`);
-    }
-    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+  function deferHeadlessRunLaunch(workflowIds: readonly string[], workflowId: string): void {
     setImmediate(() => {
       try {
         const started = orchestrator.startExecution();
@@ -837,6 +865,44 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         );
       }
     });
+  }
+
+  async function executeHeadlessRun(
+    payload: HeadlessRunMutationPayload,
+  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
+    const submission = await parsePlanSubmissionBundleFile(payload.planPath);
+    const deferAckUntilLaunch = payload.noTrack && !payload.forceSynchronousAck;
+    const reservedWorkflowIds = deferAckUntilLaunch
+      ? submission.plans.map(() => reserveHeadlessRunWorkflowId())
+      : undefined;
+    if (deferAckUntilLaunch) {
+      if (!reservedWorkflowIds) {
+        throw new Error(`Plan "${submission.name}" did not reserve workflows.`);
+      }
+      const workflowId = reservedWorkflowIds[reservedWorkflowIds.length - 1];
+      if (!workflowId) {
+        logger.error(
+          `headless.run intake failed plan="${submission.name}" workflow="<none>": no workflow id was reserved`,
+          { module: 'ipc-delegate', planName: submission.name, workflowId: '<none>' },
+        );
+        throw new Error(`Plan "${submission.name}" did not reserve a workflow.`);
+      }
+    }
+
+    const workflowIds = await serializeIntakePersist(() => persistPlanSubmission(submission, reservedWorkflowIds));
+
+    const workflowId = workflowIds[workflowIds.length - 1];
+    if (!workflowId) {
+      logger.error(
+        `headless.run intake failed plan="${submission.name}" workflow="<none>": no workflow was created`,
+        { module: 'ipc-delegate', planName: submission.name, workflowId: '<none>' },
+      );
+      throw new Error(`Plan "${submission.name}" did not create a workflow.`);
+    }
+    const tasks = deferAckUntilLaunch
+      ? []
+      : orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+    deferHeadlessRunLaunch(workflowIds, workflowId);
     scheduleRemoteRepoUrlProbes(workflowIds);
     return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
   }

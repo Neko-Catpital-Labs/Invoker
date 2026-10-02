@@ -233,7 +233,7 @@ type HandlerFixture = {
   taskHandles: Map<string, unknown>;
   handlerScans: { listWorkflows: number };
   actions: {
-    executeHeadlessRun: (payload: { planPath: string }) => Promise<{
+    executeHeadlessRun: (payload: { planPath: string; noTrack?: boolean; forceSynchronousAck?: boolean }) => Promise<{
       workflowId: string;
       tasks: unknown[];
       workflowIds: string[];
@@ -260,6 +260,30 @@ function writeIntakePlan(tmpDir: string, repoUrl: string, name: string): string 
     '  - id: root',
     `    description: ${name} root task`,
     '    command: "true"',
+    '',
+  ].join('\n'));
+  return planPath;
+}
+
+function writeStackPlanWithFailingSecondWorkflow(tmpDir: string, repoUrl: string): string {
+  const planPath = join(tmpDir, 'failing-stack.yaml');
+  writeFileSync(planPath, [
+    'name: Failing Intake Stack',
+    `repoUrl: ${repoUrl}`,
+    'workflows:',
+    '  - name: Failing Stack Parent',
+    '    tasks:',
+    '      - id: parent',
+    '        description: Parent task',
+    '        command: "true"',
+    '  - name: Failing Stack Child',
+    '    externalDependencies:',
+    '      - workflowId: wf-missing-upstream',
+    '        taskId: __merge__',
+    '    tasks:',
+    '      - id: child',
+    '        description: Child task',
+    '        command: "true"',
     '',
   ].join('\n'));
   return planPath;
@@ -411,6 +435,29 @@ describe('headless run intake concurrency contract (executeHeadlessRun handler)'
       fixture.handlerScans.listWorkflows,
       `intake must not scan the whole workflow table before acking; scans=${fixture.handlerScans.listWorkflows} intakes=${names.length}`,
     ).toBe(0);
+  });
+
+  it('noTrack acks only after the reserved workflow is persisted', async () => {
+    fixture = await createHandlerFixture(tempDirs);
+    const planPath = writeIntakePlan(fixture.tmpDir, fixture.repoUrl, 'No Track Persisted Ack');
+
+    const result = await fixture.actions.executeHeadlessRun({ planPath, noTrack: true });
+
+    expect(result.tasks).toEqual([]);
+    expect(result.workflowIds).toEqual([result.workflowId]);
+    expect(fixture.adapter.loadWorkflow(result.workflowId)?.name).toBe('No Track Persisted Ack');
+    expect(fixture.adapter.loadTasks(result.workflowId)).toHaveLength(2);
+  });
+
+  it('rolls back earlier stack workflows when a noTrack submission fails before ack', async () => {
+    fixture = await createHandlerFixture(tempDirs);
+    const planPath = writeStackPlanWithFailingSecondWorkflow(fixture.tmpDir, fixture.repoUrl);
+
+    await expect(
+      fixture.actions.executeHeadlessRun({ planPath, noTrack: true }),
+    ).rejects.toThrow(/missing cross-workflow prerequisites/);
+
+    expect(fixture.adapter.listWorkflows()).toEqual([]);
   });
 
   it('leaves another intake\'s in-flight task handles alone', async () => {
