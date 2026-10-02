@@ -53,11 +53,30 @@ thin_ipc_plan_arg() {
 start_thin_ipc_queue_drainer() {
   local pending_dir="$1"
   local lock_dir="$pending_dir/worker.lock"
+  local lock_pid_file="$lock_dir/pid"
   if ! mkdir "$lock_dir" 2>/dev/null; then
-    return 0
+    local lock_pid=""
+    if [ -f "$lock_pid_file" ]; then
+      lock_pid="$(cat "$lock_pid_file" 2>/dev/null || true)"
+    fi
+    case "$lock_pid" in
+      ''|*[!0-9]*)
+        ;;
+      *)
+        if kill -0 "$lock_pid" 2>/dev/null; then
+          return 0
+        fi
+        ;;
+    esac
+    rm -f "$lock_pid_file" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || return 0
+    if ! mkdir "$lock_dir" 2>/dev/null; then
+      return 0
+    fi
   fi
   (
-    trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+    printf '%s\n' "$BASHPID" >"$lock_pid_file"
+    trap 'rm -f "$lock_pid_file" 2>/dev/null || true; rmdir "$lock_dir" 2>/dev/null || true' EXIT
     while true; do
       PENDING_FILE="$(find "$pending_dir" -name '*.pending' -type f -print -quit 2>/dev/null || true)"
       [ -n "$PENDING_FILE" ] || break
