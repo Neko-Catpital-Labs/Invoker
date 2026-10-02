@@ -14,7 +14,7 @@ class MiniPersistence implements OrchestratorPersistence {
   }
   listWorkflows() { return Array.from(this.workflows.values()); }
   loadTasks() { return []; }
-  saveTask(task: TaskState): void { this.tasks.set(task.id, task); }
+  saveTask(_workflowId: string, task: TaskState): void { this.tasks.set(task.id, task); }
   updateTask(): void {}
   logEvent(): void {}
   getAttempts(): Attempt[] { return []; }
@@ -44,6 +44,26 @@ function loadOneWorkflowId(): string {
   return orchestrator.getWorkflowIds()[0]!;
 }
 
+function loadReservedWorkflowId(workflowId: string): { returnedWorkflowId: string; persistedWorkflowId: string; taskWorkflowId: string } {
+  const persistence = new MiniPersistence();
+  const orchestrator = new Orchestrator({
+    persistence,
+    messageBus: bus as never,
+    maxConcurrency: 1,
+  });
+  const plan: PlanDefinition = {
+    name: 'reserved-id-shape',
+    onFinish: 'none',
+    tasks: [{ id: 't1', description: 't', command: 'true' }],
+  };
+  const returnedWorkflowId = orchestrator.loadPlan(plan, { workflowId });
+  return {
+    returnedWorkflowId,
+    persistedWorkflowId: persistence.workflows.get(workflowId)?.id ?? '',
+    taskWorkflowId: Array.from(persistence.tasks.values())[0]?.config.workflowId ?? '',
+  };
+}
+
 describe('nextWorkflowId INVOKER_TEST_WORKFLOW_IDS gate', () => {
   const previousNodeEnv = process.env.NODE_ENV;
   const previousTestIds = process.env.INVOKER_TEST_WORKFLOW_IDS;
@@ -65,5 +85,13 @@ describe('nextWorkflowId INVOKER_TEST_WORKFLOW_IDS gate', () => {
     process.env.INVOKER_TEST_WORKFLOW_IDS = '1';
     process.env.NODE_ENV = 'production';
     expect(loadOneWorkflowId()).toMatch(/^wf-test-\d+$/);
+  });
+
+  it('fixed: caller-supplied workflow ids are persisted and used for scoped tasks', () => {
+    expect(loadReservedWorkflowId('wf-reserved-intake')).toEqual({
+      returnedWorkflowId: 'wf-reserved-intake',
+      persistedWorkflowId: 'wf-reserved-intake',
+      taskWorkflowId: 'wf-reserved-intake',
+    });
   });
 });

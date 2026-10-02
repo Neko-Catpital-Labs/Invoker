@@ -1484,8 +1484,8 @@ export class Orchestrator {
    * Parse a plan definition and create tasks with dependencies.
    * Persists workflow and tasks, publishes deltas via MessageBus.
    */
-  loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean; staged?: boolean }): string {
-    const workflowId = nextWorkflowId();
+  loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean; staged?: boolean; workflowId?: string }): string {
+    const workflowId = opts?.workflowId ?? nextWorkflowId();
     const localToScoped = buildPlanLocalToScopedIdMap(workflowId, plan.tasks);
     const workflowExternalDependencies = this.normalizePlanExternalDependencies([
       ...(plan.externalDependencies ?? []),
