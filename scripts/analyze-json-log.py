@@ -102,7 +102,7 @@ def main():
         for _, ts in matched:
             if not ts:
                 continue
-            buckets[ts[:16]] += 1  # YYYY-MM-DDTHH:MM
+            buckets[ts[:16]] += 1
         for minute in sorted(buckets):
             print(f"{minute}\t{buckets[minute]}")
 
