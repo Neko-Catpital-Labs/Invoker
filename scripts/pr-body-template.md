@@ -57,6 +57,9 @@ graph TD
 
 - [ ] `exact command`
 - [ ] `exact command`
+- Not run: <check>. Blocker: <what stops it>
+
+Keep a `Not run:` row only for a check you could not run, and name what stops it. Delete the row when every check ran.
 
 </details>
 
