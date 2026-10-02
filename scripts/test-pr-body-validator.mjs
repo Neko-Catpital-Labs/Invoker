@@ -1558,6 +1558,7 @@ for (const [name, body, expectRejected] of [
   ['two Not run rows, only the second names a Blocker', withTestPlanRows('- Not run: path one.\n- Not run: path two. Blocker: no API key on this machine\n'), true],
   ['Blocker two rows below the Not run row', withTestPlanRows('- Not run: path one.\n- [x] `true`\n- Blocker: no API key on this machine\n'), true],
   ['Not run row with Blocker on the same line', withTestPlanRows('- Not run: X. Blocker: no API key on this machine\n'), false],
+  ['Not run row with non-ASCII Blocker text', withTestPlanRows('- Not run: X. Blocker: 缺少密钥\n'), false],
   ['Not run row with Blocker on the next non-empty line', withTestPlanRows('- Not run: X.\n\n  Blocker: no API key on this machine\n'), false],
   ['no Not run row', validMinimal, false],
   ['the words not run inside a Test Plan sentence', withTestPlanRows('- [x] The slow suite was not run: the fast one covers it.\n'), false],

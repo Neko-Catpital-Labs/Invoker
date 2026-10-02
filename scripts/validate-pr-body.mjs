@@ -329,7 +329,7 @@ export function getMeasuredSectionFindings(body) {
 
 function getBlockerText(text) {
   const afterLabel = BLOCKER_LABEL.exec(text)?.[1] ?? '';
-  return /[A-Za-z0-9]/.test(afterLabel) ? afterLabel.trim() : '';
+  return /[\p{L}\p{N}]/u.test(afterLabel) ? afterLabel.trim() : '';
 }
 
 export function getNotRunRowFindings(body) {
