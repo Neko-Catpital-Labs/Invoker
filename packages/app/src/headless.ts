@@ -9,7 +9,7 @@
  * This file handles CLI parsing, TaskRunner lifecycle, and output formatting.
  */
 
-import type { BundledSkillsInstallMode } from '@invoker/contracts';
+import type { BundledSkillsInstallMode, BundledSkillsStatus } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
@@ -238,20 +238,10 @@ async function headlessRepairFiling(args: string[], deps: HeadlessDeps): Promise
   return output;
 }
 
-async function headlessInstallSkills(
+function writeSkillsInstallReport(
+  status: BundledSkillsStatus,
   mode: BundledSkillsInstallMode | undefined,
-  category: BundledSkillCategory | undefined,
-  deps: Pick<HeadlessDeps, 'installBundledSkills'>,
-): Promise<void> {
-  process.stderr.write(
-    'Deprecated: `invoker-ui --install-skills` will be removed in a future release. Run `invoker-cli setup` instead.\n',
-  );
-  if (!deps.installBundledSkills) {
-    throw new Error('Bundled AI helper installation is not available in this runtime.');
-  }
-  const status = category === undefined
-    ? deps.installBundledSkills(mode ?? 'install')
-    : deps.installBundledSkills(mode ?? 'install', category);
+): void {
   const verb = mode === 'uninstall' ? 'Uninstalled' : 'Installed';
   process.stdout.write(`${verb} ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
   for (const target of status.targets) {
@@ -269,6 +259,26 @@ async function headlessInstallSkills(
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
   }
+  if (status.lastInstallError) {
+    process.stderr.write(`MCP skipped: ${status.lastInstallError}\n`);
+  }
+}
+
+async function headlessInstallSkills(
+  mode: BundledSkillsInstallMode | undefined,
+  category: BundledSkillCategory | undefined,
+  deps: Pick<HeadlessDeps, 'installBundledSkills'>,
+): Promise<void> {
+  process.stderr.write(
+    'Deprecated: `invoker-ui --install-skills` will be removed in a future release. Run `invoker-cli setup` instead.\n',
+  );
+  if (!deps.installBundledSkills) {
+    throw new Error('Bundled AI helper installation is not available in this runtime.');
+  }
+  const status = category === undefined
+    ? deps.installBundledSkills(mode ?? 'install')
+    : deps.installBundledSkills(mode ?? 'install', category);
+  writeSkillsInstallReport(status, mode);
 }
 
 async function headlessAgentLogin(args: string[], deps: HeadlessDeps): Promise<AgentLoginCommandResult> {

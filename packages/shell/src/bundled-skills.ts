@@ -25,6 +25,8 @@ const INSTRUCTION_BEGIN = '<!-- invoker-execution -->';
 const INSTRUCTION_END = '<!-- /invoker-execution -->';
 const CURSOR_RULE_FILE = 'invoker-execution-precedence.mdc';
 const CLAUDE_HOOK_MARKER = 'invoker-execution/claude_prompt_submit';
+const INSTRUCTION_NAME = 'invoker-execution';
+const INSTALL_ERROR_JOIN = '; ';
 
 interface BundledSkillsManifest {
   bundledHash: string;
@@ -648,6 +650,32 @@ function installMcpTarget(target: McpTargetCandidate): void {
   installJsonMcpTarget(target, defaultConfig);
 }
 
+function caughtMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function joinInstallErrors(errors: string[]): string | undefined {
+  if (errors.length === 0) return undefined;
+  return errors.join(INSTALL_ERROR_JOIN);
+}
+
+function installAvailableMcpTargets(
+  mcpTargets: McpTargetCandidate[],
+): { recorded: NonNullable<BundledSkillsManifest['mcpTargets']>; errors: string[] } {
+  const recorded: NonNullable<BundledSkillsManifest['mcpTargets']> = {};
+  const errors: string[] = [];
+  for (const target of mcpTargets) {
+    if (!target.available) continue;
+    try {
+      installMcpTarget(target);
+      recorded[target.id] = { path: target.path, serverName: target.serverName };
+    } catch (error) {
+      errors.push(caughtMessage(error));
+    }
+  }
+  return { recorded, errors };
+}
+
 function uninstallJsonMcpTarget(target: McpTargetCandidate): void {
   if (!existsSync(target.path)) return;
   const config = readMutableJsonMcpConfig(target.path, {});
@@ -892,7 +920,7 @@ function resolveInstructionTargets(): HarnessInstructionConfigState[] {
       : target.id === 'codex'
         ? codexAgentsInstalled()
         : claudeHookInstalled();
-    return { ...target, installed, installedInstructionNames: installed ? ['invoker-execution'] : [] };
+    return { ...target, installed, installedInstructionNames: installed ? [INSTRUCTION_NAME] : [] };
   });
 }
 
@@ -905,16 +933,34 @@ function buildInstructionTargetStatus(
   const upToDate = target.installed
     && manifest?.instructionHash === instructionHash
     && manifestTarget?.path === target.path
-    && (manifestTarget.installedInstructionNames ?? []).includes('invoker-execution');
+    && (manifestTarget.installedInstructionNames ?? []).includes(INSTRUCTION_NAME);
   return { ...target, upToDate };
 }
 
-function installInstructionTargets(invokerHomeRoot: string): BundledSkillsManifest['instructionTargets'] {
-  return {
-    cursor: { path: installCursorRule(), installedInstructionNames: ['invoker-execution'] },
-    codex: { path: installCodexAgentsBlock(), installedInstructionNames: ['invoker-execution'] },
-    claude: { path: installClaudeHook(invokerHomeRoot), installedInstructionNames: ['invoker-execution'] },
-  };
+function recordInstructionInstall(
+  install: () => string,
+  errors: string[],
+): { path: string; installedInstructionNames: string[] } | undefined {
+  try {
+    return { path: install(), installedInstructionNames: [INSTRUCTION_NAME] };
+  } catch (error) {
+    errors.push(caughtMessage(error));
+    return undefined;
+  }
+}
+
+function installInstructionTargets(
+  invokerHomeRoot: string,
+  errors: string[],
+): BundledSkillsManifest['instructionTargets'] {
+  const recorded: NonNullable<BundledSkillsManifest['instructionTargets']> = {};
+  const cursor = recordInstructionInstall(installCursorRule, errors);
+  const codex = recordInstructionInstall(installCodexAgentsBlock, errors);
+  const claude = recordInstructionInstall(() => installClaudeHook(invokerHomeRoot), errors);
+  if (cursor) recorded.cursor = cursor;
+  if (codex) recorded.codex = codex;
+  if (claude) recorded.claude = claude;
+  return recorded;
 }
 
 function removeManagedSkillDirs(targetPath: string, names: string[]): void {
@@ -1016,7 +1062,6 @@ export function installBundledSkills(
   const mcpTargets = resolveManagedMcpTargets(isInstalled);
   const manifestTargets: BundledSkillsManifest['targets'] = {};
   const manifestCommandTargets: NonNullable<BundledSkillsManifest['commandTargets']> = {};
-  const manifestMcpTargets: NonNullable<BundledSkillsManifest['mcpTargets']> = {};
 
   for (const target of targets) {
     mkdirSync(target.path, { recursive: true });
@@ -1056,22 +1101,11 @@ export function installBundledSkills(
     };
   }
 
-  let lastInstallError: string | undefined;
-  for (const target of mcpTargets) {
-    if (!target.available) continue;
-    try {
-      installMcpTarget(target);
-      manifestMcpTargets[target.id] = {
-        path: target.path,
-        serverName: target.serverName,
-      };
-    } catch (error) {
-      lastInstallError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
+  const mcpInstall = installAvailableMcpTargets(mcpTargets);
+  const instructionErrors: string[] = [];
   const instructionHash = hashAlwaysOnFragments();
-  const manifestInstructionTargets = installInstructionTargets(invokerHomeRoot);
+  const manifestInstructionTargets = installInstructionTargets(invokerHomeRoot, instructionErrors);
+  const lastInstallError = joinInstallErrors([...mcpInstall.errors, ...instructionErrors]);
 
   const manifest: BundledSkillsManifest = {
     bundledHash,
@@ -1080,7 +1114,7 @@ export function installBundledSkills(
     lastInstallError,
     targets: manifestTargets,
     commandTargets: manifestCommandTargets,
-    mcpTargets: manifestMcpTargets,
+    mcpTargets: mcpInstall.recorded,
     instructionTargets: manifestInstructionTargets,
     instructionHash,
     sourceRepoRoot: context.isPackaged ? undefined : context.repoRoot,
@@ -1088,10 +1122,6 @@ export function installBundledSkills(
   };
 
   writeManifest(invokerHomeRoot, manifest);
-
-  if (lastInstallError) {
-    throw new Error(lastInstallError);
-  }
 
   const status = resolveBundledSkillsStatus(context);
   return {
