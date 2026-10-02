@@ -27,8 +27,6 @@ const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([
 ]);
 
 const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
-  'scripts/mergify_admin_requeue_workflow_fastpath.py',
-  'scripts/pr_duplicate_close_exec.py',
   'scripts/pr_duplicate_close_git_facts.py',
   'scripts/pr_duplicate_close_model.py',
   'scripts/pr_worker_safe_push.py',
@@ -489,6 +487,15 @@ function loadWorkingTreeFile(root, filePath) {
   }
 }
 
+function loadExplicitFileTarget(root, filePath) {
+  try {
+    return readFileSync(path.join(root, filePath), 'utf8');
+  } catch (error) {
+    console.error(`[comments] Failed to read --file target ${filePath}: ${error.message}`);
+    process.exit(1);
+  }
+}
+
 function markdownFenceMapResolver(loadContent) {
   const cache = new Map();
   return (filePath) => {
@@ -533,13 +540,7 @@ function fileSources(root, files) {
       process.exit(1);
     }
 
-    let content;
-    try {
-      content = readFileSync(path.join(root, relativePath), 'utf8');
-    } catch (error) {
-      console.error(`[comments] Failed to read --file target ${relativePath}: ${error.message}`);
-      process.exit(1);
-    }
+    const content = loadExplicitFileTarget(root, relativePath);
     return {
       name: `--file ${relativePath}`,
       text: buildFullFileDiffText(relativePath, content),
