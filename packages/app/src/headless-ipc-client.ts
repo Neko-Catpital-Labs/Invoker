@@ -217,6 +217,10 @@ export async function runHeadlessIpcClient(
 
   const parsed = parseThinIpcArgs(argv);
   if (parsed.kind === 'invalid') return fail(parsed.reason);
+  const runArgs: ThinIpcRunArgs = {
+    ...parsed.args,
+    planPath: resolve(parsed.args.planPath),
+  };
 
   const connectTimeoutMs = deps.connectTimeoutMs
     ?? positiveEnvMs(CONNECT_TIMEOUT_ENV, DEFAULT_CONNECT_TIMEOUT_MS);
@@ -230,11 +234,11 @@ export async function runHeadlessIpcClient(
     if (ownBus) await ownBus.ready();
     const owner = await waitForOwner(bus, connectTimeoutMs);
     if (owner.kind === 'unreachable') {
-      return fail(`no reachable owner for plan "${parsed.args.planPath}": ${owner.reason}`);
+      return fail(`no reachable owner for plan "${runArgs.planPath}": ${owner.reason}`);
     }
-    const outcome = await requestOwnerHeadlessRun(bus, parsed.args, runTimeoutMs);
+    const outcome = await requestOwnerHeadlessRun(bus, runArgs, runTimeoutMs);
     if (outcome.kind === 'rejected') {
-      return fail(`plan "${parsed.args.planPath}" was not submitted: ${outcome.reason}`);
+      return fail(`plan "${runArgs.planPath}" was not submitted: ${outcome.reason}`);
     }
     stdout(`Workflow ID: ${outcome.workflowId}\n`);
     if (outcome.workflowIds.length > 1) {
@@ -242,7 +246,7 @@ export async function runHeadlessIpcClient(
     }
     return 0;
   } catch (error) {
-    return fail(`plan "${parsed.args.planPath}" was not submitted: ${describeError(error)}`);
+    return fail(`plan "${runArgs.planPath}" was not submitted: ${describeError(error)}`);
   } finally {
     ownBus?.disconnect();
   }
