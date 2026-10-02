@@ -58,6 +58,7 @@ function runMiner(dir, cli, extraEnv = {}) {
       INVOKER_SESSION_MINE_STATE_DIR: join(dir, 'state'),
       INVOKER_SESSION_MINE_CLI: cli,
       INVOKER_DB_DIR: dir,
+      HOME: dir,
       CODEX_HOME: join(dir, 'codex'),
       CATSTACK_ROOT: '',
       ...extraEnv,
@@ -145,7 +146,8 @@ try {
     check('plan-omits-pool-by-default', plan.length > 0 && !/poolId:/.test(plan), 'expected no poolId line when none is configured');
     check('plan-keeps-required-header', /^name: /m.test(plan) && /onFinish: pull_request/.test(plan), 'expected the plan header to survive');
     check('plan-agent-never-opens-invoker-pr', !/open (a |an )?(non-merged )?(Invoker )?PR to (catstack or )?Invoker|open an Invoker PR|-> Invoker PR/i.test(plan), `expected the reflect task not to open its own Invoker PR while onFinish: pull_request also publishes, got:\n${plan}`);
-    check('plan-merge-gate-owns-invoker-publication', /For Invoker changes, do not push and do not open a PR: this workflow's merge gate owns Invoker publication/.test(plan), `expected the reflect task to leave Invoker publication to the merge gate, got:\n${plan}`);
+    check('plan-agent-never-edits-live-pr-metadata', /do not edit live PR metadata \(`gh pr edit`, title\/body changes, labels, comments, or review state\)/.test(plan), `expected the reflect task to forbid live PR metadata edits, got:\n${plan}`);
+    check('plan-merge-gate-owns-invoker-publication', /For Invoker changes, do not push, do not open a PR, and do not edit live PR metadata/.test(plan), `expected the reflect task to leave Invoker publication to the merge gate, got:\n${plan}`);
   }
 
   {
@@ -164,7 +166,7 @@ try {
     for (const f of failures) console.error(`FAIL ${f}`);
     process.exit(1);
   }
-  console.log(JSON.stringify({ ok: true, checks: 15 }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks: 16 }, null, 2));
 } finally {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 }
