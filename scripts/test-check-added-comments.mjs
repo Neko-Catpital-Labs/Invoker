@@ -247,6 +247,17 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
       () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/unchecked.txt'], { encoding: 'utf8' }),
       /not checked by comment policy/,
     );
+
+    assert.throws(
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/missing.py'], { encoding: 'utf8' }),
+      /Failed to read --file target scripts\/missing\.py/,
+    );
+
+    mkdirSync(path.join(root, 'scripts/unreadable.py'));
+    assert.throws(
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/unreadable.py'], { encoding: 'utf8' }),
+      /Failed to read --file target scripts\/unreadable\.py/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -457,23 +468,6 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 {
   const output = execFileSync(process.execPath, [scriptPath, '--file', 'scripts/codex-session-audit.py'], { encoding: 'utf8' });
   assert.match(output, /Checked added source lines; no disallowed comments found\./);
-}
-
-{
-  const root = mkdtempSync(path.join(tmpdir(), 'invoker-comment-check-file-missing-'));
-  try {
-    let error = null;
-    try {
-      execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/missing.py'], { encoding: 'utf8' });
-    } catch (caught) {
-      error = caught;
-    }
-
-    assert.equal(error?.status, 1);
-    assert.match(error.stderr.toString(), /Failed to read --file target scripts\/missing\.py/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
 }
 
 {
