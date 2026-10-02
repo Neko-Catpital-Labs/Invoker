@@ -247,6 +247,44 @@ describe('runSetup', () => {
     }
   });
 
+  it('prints a one-line MCP skip and still reports installed skills', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-skip-'));
+    const saved = { HOME: process.env.HOME };
+    const lines: string[] = [];
+    const fakeStatus = {
+      available: true,
+      promptRecommended: false,
+      managedPrefix: 'invoker-',
+      bundledSkillNames: ['plan-to-invoker'],
+      lastInstallError: 'Invalid MCP config at /Users/me/.cursor/mcp.json: expected a JSON object',
+      targets: [{ id: 'claude', name: 'Claude', path: '/x', available: true, installed: true, upToDate: true, installedSkillNames: [] }],
+      commandTargets: [],
+      mcpTargets: [{ id: 'claude', name: 'Claude', path: '/x/.claude.json', available: true, installed: true, upToDate: true, serverName: 'invoker' }],
+    };
+    try {
+      process.env.HOME = home;
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        resolveSkillsRepoRoot: () => '/fake/repo',
+        bundledSkillsInstall: () => fakeStatus,
+      }));
+
+      expect(code).toBe(0);
+      const output = lines.join('\n');
+      expect(output).toContain('Skills: installed 1 bundled skill(s) for Claude.');
+      expect(output).toContain('Skills MCP: registered invoker-cli mcp for Claude.');
+      expect(output).toContain('Skills MCP: skipped — Invalid MCP config at /Users/me/.cursor/mcp.json: expected a JSON object');
+      expect(output).not.toContain('at installBundledSkills');
+      expect(output).not.toContain('Skills: install skipped');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to skills bundled next to the running binary when not in a checkout', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-standalone-'));
     const saved = { HOME: process.env.HOME };
