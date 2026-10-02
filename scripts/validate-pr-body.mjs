@@ -42,6 +42,10 @@ const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
 const SUMMARY_WORD_LIMIT = 30;
 const MEASURED_HEADING = '## Measured';
 const MEASURED_ROW_LABELS = ['Base', 'Head'];
+const TEST_PLAN_HEADING = '## Test Plan';
+const NOT_RUN_ROW = /^\s*(?:[-*+]\s+)?(?:\[[ xX]\]\s+)?[*_]*Not run:/i;
+const BLOCKER_LABEL = /Blocker:(.*)$/i;
+const NOT_RUN_GUIDANCE = 'Either run the check and paste its result, or name what stops it with `Blocker: <what stops it>` on the same line or on the next non-empty line.';
 const MEASURED_GUIDANCE = 'Add a visible ## Measured section with a `Command:` line plus ### Base and ### Head rows that each hold that command\'s pasted output in a fenced block, or write `none: <reason>` when the slice has nothing to measure. Content inside <details> does not count.';
 const VALID_REVIEW_LANES = new Set(['behavior', 'refactor', 'proof', 'cleanup', 'policy', 'docs']);
 
@@ -264,8 +268,8 @@ function markBodyLines(text) {
   });
 }
 
-function getMeasuredSectionLines(lines) {
-  const start = lines.findIndex(({ line, fenced }) => !fenced && line.trim().toLowerCase() === MEASURED_HEADING.toLowerCase());
+function getHeadingSectionLines(lines, heading) {
+  const start = lines.findIndex(({ line, fenced }) => !fenced && line.trim().toLowerCase() === heading.toLowerCase());
   if (start === -1) return null;
   const rest = lines.slice(start + 1);
   const end = rest.findIndex(({ line, fenced }) => !fenced && /^##\s+/.test(line.trim()));
@@ -297,9 +301,9 @@ function parseMeasuredSection(sectionLines) {
 
 export function getMeasuredSectionFindings(body) {
   const lines = markBodyLines(body);
-  const visibleSection = getMeasuredSectionLines(lines.filter(({ collapsed }) => !collapsed));
+  const visibleSection = getHeadingSectionLines(lines.filter(({ collapsed }) => !collapsed), MEASURED_HEADING);
   if (!visibleSection) {
-    return [getMeasuredSectionLines(lines)
+    return [getHeadingSectionLines(lines, MEASURED_HEADING)
       ? `${MEASURED_HEADING} is collapsed inside <details>. ${MEASURED_GUIDANCE}`
       : `Missing ${MEASURED_HEADING} section. ${MEASURED_GUIDANCE}`];
   }
@@ -321,6 +325,25 @@ export function getMeasuredSectionFindings(body) {
     }
   }
   return findings;
+}
+
+function getBlockerText(text) {
+  const afterLabel = BLOCKER_LABEL.exec(text)?.[1] ?? '';
+  return /[\p{L}\p{N}]/u.test(afterLabel) ? afterLabel.trim() : '';
+}
+
+export function getNotRunRowFindings(body) {
+  const testPlanLines = (getHeadingSectionLines(markBodyLines(body), TEST_PLAN_HEADING) ?? [])
+    .filter(({ fenced }) => !fenced)
+    .map(({ line }) => line)
+    .filter((line) => line.trim() !== '');
+  const rowsWithoutBlocker = testPlanLines.filter((line, index) => {
+    if (!NOT_RUN_ROW.test(line)) return false;
+    if (getBlockerText(line)) return false;
+    const nextLine = testPlanLines[index + 1] ?? '';
+    return NOT_RUN_ROW.test(nextLine) || !getBlockerText(nextLine);
+  });
+  return rowsWithoutBlocker.map((row) => `${TEST_PLAN_HEADING} "Not run:" row names no blocker: "${row.trim()}". ${NOT_RUN_GUIDANCE}`);
 }
 
 export function classifyScopeKind(filePath) {
@@ -596,6 +619,8 @@ export async function validatePrBody(body, options = {}) {
     }
   }
 
+  errors.push(...getNotRunRowFindings(trimmed));
+
   if (options.requireMeasured) {
     errors.push(...getMeasuredSectionFindings(trimmed));
   }
@@ -669,6 +694,7 @@ function usage() {
 Validates the canonical PR schema:
   Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Test Plan and Revert Plan content must sit inside a collapsed <details><summary>Test Plan</summary> / <summary>Revert Plan</summary> block.
+  Not run: a Test Plan row starting \`Not run:\` must name what stops the check with \`Blocker: <what stops it>\` on that line or the next non-empty line.
   Optional: ## Architecture (must include ### Before and ### After when present)
   Measured: a visible ## Measured section needs a Command: line plus ### Base and ### Head rows with pasted output, or \`none: <reason>\`.
             A missing or incomplete section is a warning by default; pass --require-measured to make it a failure.
