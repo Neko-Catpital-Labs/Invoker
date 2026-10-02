@@ -2031,19 +2031,13 @@ function startHeadlessMode(): void {
 
         messageBus.onRequest('headless.run', async (req: unknown) => {
           noteStandaloneOwnerActivity();
-          const { planPath, traceId, waitForApproval, noTrack, forceSynchronousAck } = req as {
-            planPath: string;
-            traceId?: string;
-            waitForApproval?: boolean;
-            noTrack?: boolean;
-            forceSynchronousAck?: boolean;
-          };
+          const { planPath, traceId } = req as { planPath: string; traceId?: string };
           logger.info(
             `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=standalone`,
             { module: 'ipc-delegate' },
           );
           const result = acceptHeadlessRunAck(
-            await standaloneMutationActions.executeHeadlessRun({ planPath, waitForApproval, noTrack, forceSynchronousAck }),
+            await standaloneMutationActions.executeHeadlessRun({ planPath }),
             'standalone',
             logger,
           );
@@ -3378,19 +3372,13 @@ startMainProcessBootstrap({
           resetUiPerfStats,
         }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
-        const { planPath, traceId, waitForApproval, noTrack, forceSynchronousAck } = req as {
-          planPath: string;
-          traceId?: string;
-          waitForApproval?: boolean;
-          noTrack?: boolean;
-          forceSynchronousAck?: boolean;
-        };
+        const { planPath, traceId } = req as { planPath: string; traceId?: string };
         logger.info(
           `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=gui`,
           { module: 'ipc-delegate' },
         );
         const result = acceptHeadlessRunAck(
-          await mutationActions.executeHeadlessRun({ planPath, waitForApproval, noTrack, forceSynchronousAck }),
+          await mutationActions.executeHeadlessRun({ planPath }),
           'gui',
           logger,
         );
