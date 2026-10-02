@@ -32,15 +32,7 @@ except ImportError:
 
 
 def resolve_workflow_for_pr(pr_number: int, repo: str = DEFAULT_INVOKER_REPO) -> str | None:
-    # See cron-pr-lib.sh's resolve_workflow_for_pr comment: review-gate exits 0
-    # with `{}` for a genuine miss (no local workflow mapping). A non-zero exit
-    # means the lookup mechanism itself is broken, which must propagate as an
-    # exception rather than silently falling back to ad-hoc repair.
-    #
-    # Invoker only ever owns a workflow for a PR on its own repo -- a foreign
-    # repo's PR number can collide with an unrelated Invoker PR number, so
-    # skip the lookup entirely for any other repo instead of risking the
-    # fast-path reusing the wrong repo's workflow.
+    # Safety invariant: workflow lookup only runs for DEFAULT_INVOKER_REPO because PR numbers collide across repos.
     if repo != DEFAULT_INVOKER_REPO:
         return None
     review_gate_cmd = os.environ.get("INVOKER_PR_CRON_REVIEW_GATE_CMD")
@@ -63,6 +55,7 @@ def resolve_workflow_for_pr(pr_number: int, repo: str = DEFAULT_INVOKER_REPO) ->
     else:
         completed = _run_headless('headless_query query review-gate "$2" --output json', str(pr_number))
     if completed.returncode != 0:
+        # Safety invariant: non-zero lookup is infrastructure failure and must not fall back to ad-hoc repair.
         raise RuntimeError(
             f"resolve_workflow_for_pr failed for PR #{pr_number}: "
             f"{completed.stderr.strip() or completed.stdout.strip()}"
@@ -80,10 +73,6 @@ def resolve_workflow_for_pr(pr_number: int, repo: str = DEFAULT_INVOKER_REPO) ->
     return str(workflow_id) if workflow_id else None
 
 
-# Known accepted limitation: no debounce against re-submitting the fast-path
-# mutation on every cron tick while a previous submission converges.
-
-
 def submit_rebase_recreate(workflow_id: str) -> None:
     completed = _run_headless('headless_mutation --no-track rebase-recreate "$2"', workflow_id)
     if completed.returncode != 0:
@@ -93,16 +82,7 @@ def submit_rebase_recreate(workflow_id: str) -> None:
         )
 
 
-# Fast-path submissions are fire-and-forget: `--no-track` exit 0 means the
-# owner ACCEPTED the mutation, not that the repair ran. Unlike repairer.py's
-# ad-hoc repair plans (whose normalize task writes the `-settled` ledger row),
-# a rebase-recreate of an existing workflow has no task that settles the
-# ledger, so the planner could only infer the outcome by letting the 90-minute
-# repair_in_flight TTL expire. These helpers close that gap by observing the
-# workflow's actual terminal status and writing the settle row the plan
-# machinery already understands (PR #7484, 2026-08-05: an accepted-but-starved
-# recreate looked "handled" while its three predecessors had already failed).
-
+# Safety invariant: fast-path settlement observes terminal workflow status because --no-track only acknowledges submission.
 _FASTPATH_SETTLE_KINDS = ("conflict-repair", "rebase-onto-master", "repair-check")
 _TERMINAL_WORKFLOW_STATUSES = frozenset({"completed", "failed", "cancelled", "review_ready", "merged"})
 _SSH_INFRA_FAILURE_CLASSES = frozenset({
@@ -338,10 +318,7 @@ def settle_workflow_fastpath_rows(ledger, now: int) -> int:
         if existing is not None and int(existing.get("epoch", 0) or 0) >= int(row.get("epoch", 0) or 0):
             continue
         if not is_resolvable_workflow_id(workflow_id):
-            # Unresolvable is a third outcome, not "still running". Querying it
-            # costs a full headless round trip and can only ever answer "not
-            # found", so the row would be retried on every tick forever and the
-            # tick would keep spending its budget before reaching later repos.
+            # Safety invariant: unresolvable workflow IDs settle as infra non-acknowledgement instead of re-querying forever.
             print(
                 f"WARN: settle_workflow_fastpath_rows: PR #{pr} {kind} {key!r} stored an "
                 f"unresolvable workflowId {workflow_id!r}; settling it as an infra "
@@ -403,19 +380,7 @@ def list_workflows() -> list[dict] | None:
     return None
 
 
-# repairer.py's ad-hoc repair plans (repair-check, rebase-onto-master,
-# repair-bot-thread; plus legacy conflict-repair) settle via their own plan's
-# `safe-push` task, which only runs if the upstream `repair` task succeeds.
-# When `repair` itself fails, `safe-push` never runs and the `-settled` row is
-# never written -- the row repairer.py records before submission (see
-# AdminBypassRepairer) carries no meta.workflowId, so
-# settle_workflow_fastpath_rows's lookup can't find it either. Unlike a
-# fast-path rebase-recreate, these plan names are fully deterministic from
-# (pr, headSha, key) via the same *_plan_name() helpers used to build the plan,
-# so the matching workflow can be found by name instead of by a recorded id
-# (PR #9172: a failed repair-bot-thread attempt left `repair_in_flight`
-# believing a repair was still running for the rest of its 90-minute TTL, even
-# though the workflow had already failed).
+# Safety invariant: repairer plan rows without workflowId settle by deterministic plan name when failed repairs skip safe-push.
 _REPAIRER_PLAN_SETTLE_KINDS = ("repair-check", "conflict-repair", "rebase-onto-master", "repair-bot-thread")
 
 
@@ -541,13 +506,7 @@ def submit_repair_review_gate_ci(pr_number: int) -> None:
 
 
 def _close_pr_command_script(pr_number: int, repo: str, reason: str, expected_head_oid: str, kept_pr_number: int | None) -> str:
-    # Belt-and-suspenders: the classification (landed/duplicate) already happened
-    # in the scan loop, but this task may sit queued for a while before it runs,
-    # so it re-checks the one fact that could invalidate the decision (this PR's
-    # own state/headRefOid, and — for a duplicate close — that the PR being kept
-    # is still open) immediately before mutating. Distinct exit codes make a
-    # deliberate skip visible in the task's run history instead of reading as a
-    # generic failure.
+    # Safety invariant: duplicate-close commands re-read state and head before mutating because queued decisions can go stale.
     lines = [
         "set -euo pipefail",
         f"num={pr_number}",
@@ -618,8 +577,7 @@ def submit_close_pr(pr_number: int, repo: str, reason: str, expected_head_oid: s
 def _flag_probable_duplicate_command_script(
     pr_number: int, repo: str, evidence: str, expected_head_oid: str, merged_pr_number: int,
 ) -> str:
-    # Comment-only -- never closes. See plan_flag_probable_duplicates' own
-    # docstring for why a modify/modify conflict can't be auto-resolved.
+    # Safety invariant: probable duplicate plans only comment because modify/modify conflicts require human confirmation.
     lines = [
         "set -euo pipefail",
         f"num={pr_number}",
