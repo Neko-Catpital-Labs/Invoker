@@ -484,6 +484,15 @@ function loadWorkingTreeFile(root, filePath) {
   }
 }
 
+function loadExplicitFileTarget(root, filePath) {
+  try {
+    return readFileSync(path.join(root, filePath), 'utf8');
+  } catch (error) {
+    console.error(`[comments] Failed to read --file target ${filePath}: ${error.message}`);
+    process.exit(1);
+  }
+}
+
 function markdownFenceMapResolver(loadContent) {
   const cache = new Map();
   return (filePath) => {
@@ -526,7 +535,7 @@ function fileSource(root, filePath) {
     process.exit(1);
   }
 
-  const content = loadWorkingTreeFile(root, normalized);
+  const content = loadExplicitFileTarget(root, normalized);
   return {
     name: `file ${normalized}`,
     text: wholeFileDiff(normalized, content),

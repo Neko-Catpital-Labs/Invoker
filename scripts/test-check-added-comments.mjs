@@ -247,6 +247,17 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
       () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/pr_worker_safe_push.py'], { encoding: 'utf8' }),
       /not checked by comment policy/,
     );
+
+    assert.throws(
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/missing.py'], { encoding: 'utf8' }),
+      /Failed to read --file target scripts\/missing\.py/,
+    );
+
+    mkdirSync(path.join(root, 'scripts/unreadable.py'));
+    assert.throws(
+      () => execFileSync(process.execPath, [scriptPath, '--root', root, '--file', 'scripts/unreadable.py'], { encoding: 'utf8' }),
+      /Failed to read --file target scripts\/unreadable\.py/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
