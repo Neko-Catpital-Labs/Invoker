@@ -49,10 +49,7 @@ class GitFactsClient:
         return completed.returncode == 0
 
     def is_empty_diff(self, head_sha: str, upstream: str = "origin/master") -> bool:
-        # Deliberately a direct two-ref tree comparison (no merge-base
-        # subtraction): `<merge-base>..<head>` is just the PR's own diff,
-        # which is never empty for a real PR. What signals a squash-merge is
-        # upstream's *current tip* already matching head's tree exactly.
+        # Safety invariant: squash-merge detection compares upstream's current tip directly to head because the PR's own diff is never empty for a real PR.
         completed = self._run(["git", "diff", "--quiet", upstream, head_sha])
         return completed.returncode == 0
 
@@ -100,8 +97,7 @@ class GitFactsClient:
             "git", "merge-tree", "--write-tree", f"--merge-base={merge_base_sha}", upstream, head_sha,
         ])
         if plain.returncode == 0:
-            # Clean merge, no conflicts to resolve -- not this signal's job;
-            # is_ancestor/is_empty_diff already cover a genuinely clean case.
+            # Safety invariant: a clean merge stays outside rebase-equivalence because is_ancestor/is_empty_diff already cover genuinely clean cases.
             return False
         conflict_lines = [line for line in plain.stdout.splitlines() if line.startswith("CONFLICT")]
         if not conflict_lines or any("(add/add)" not in line for line in conflict_lines):
