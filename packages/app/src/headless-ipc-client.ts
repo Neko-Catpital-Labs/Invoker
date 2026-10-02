@@ -181,6 +181,7 @@ export async function requestOwnerHeadlessRun(
         traceId,
         waitForApproval: args.waitForApproval,
         noTrack: args.noTrack,
+        forceSynchronousAck: process.env.INVOKER_THIN_IPC_FORCE_SYNC_ACK === '1',
       }),
       timeout,
     ]);
