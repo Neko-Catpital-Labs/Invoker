@@ -17,9 +17,7 @@ class CandidatePr:
 
 @dataclass(frozen=True)
 class GitFacts:
-    # Always origin/master-relative (the "landed" signals). Same-diff
-    # duplicate comparison uses a separate, per-PR-base patch-id instead --
-    # see pr_duplicate_close_exec.py's _compute_patch_id.
+    # Safety invariant: Landed signals stay origin/master-relative; same-diff duplicate comparison uses a separate per-PR-base patch-id.
     merge_base_sha: str | None
     is_ancestor: bool
     is_empty_diff: bool
@@ -43,17 +41,21 @@ FLAG_DUPLICATE = "flag_duplicate"
 
 @dataclass(frozen=True)
 class CloseAction:
-    kind: str  # CLOSE_LANDED | CLOSE_DUPLICATE | FLAG_DUPLICATE
+    # Safety invariant: kind is one of CLOSE_LANDED, CLOSE_DUPLICATE, or FLAG_DUPLICATE.
+    kind: str
     pr_number: int
     expected_head_oid: str
-    reason: str  # one of the *_* signal constants above
-    evidence: str  # human-readable detail for the close comment
-    kept_pr_number: int | None = None  # set only for CLOSE_DUPLICATE
+    # Safety invariant: reason is one of the landed or duplicate signal constants above.
+    reason: str
+    evidence: str
+    # Safety invariant: kept_pr_number is set only for CLOSE_DUPLICATE.
+    kept_pr_number: int | None = None
 
 
 @dataclass(frozen=True)
 class DuplicateGroup:
-    reason: str  # DUPLICATE_SAME_BRANCH | DUPLICATE_SAME_DIFF
+    # Safety invariant: reason is one of DUPLICATE_SAME_BRANCH or DUPLICATE_SAME_DIFF.
+    reason: str
     kept_pr_number: int
     closed_pr_numbers: tuple[int, ...]
 
