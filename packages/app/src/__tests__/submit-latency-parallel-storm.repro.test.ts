@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -18,10 +19,12 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
 const RUN_SH = join(REPO_ROOT, 'run.sh');
 const HEADLESS_CLIENT = join(REPO_ROOT, 'packages', 'app', 'dist', 'headless-client.js');
+const ELECTRON_LAUNCHER = join(REPO_ROOT, 'scripts', 'electron.cjs');
+const APP_MAIN = join(REPO_ROOT, 'packages', 'app', 'dist', 'main.js');
 const INTAKE_COUNT = 50;
 const ACK_BUDGET_MS = 200;
 const CONTROLLED_REPRO_RUN = process.env.INVOKER_REPRO_EXPECT === 'bug' || process.env.INVOKER_REPRO_EXPECT === 'fixed';
-const BOOTSTRAP_TIMEOUT_MS = 60_000;
+const OWNER_READY_TIMEOUT_MS = 60_000;
 const CLIENT_TIMEOUT_MS = 30_000;
 const QUERY_TIMEOUT_MS = 30_000;
 
@@ -48,6 +51,8 @@ type Fixture = {
   configPath: string;
   repoUrl: string;
   ownerPid?: number;
+  ownerProcess?: ChildProcessWithoutNullStreams;
+  ownerLog?: string;
 };
 
 type StoredWorkflow = {
@@ -237,18 +242,45 @@ async function cleanup(fixture: Fixture): Promise<void> {
   }
 }
 
+async function waitForOwnerReady(fixture: Fixture): Promise<void> {
+  const startedAt = performance.now();
+  while (performance.now() - startedAt < OWNER_READY_TIMEOUT_MS) {
+    if (fixture.ownerLog?.includes('[headless] standalone owner ready')) return;
+    if (fixture.ownerProcess?.exitCode !== null) {
+      throw new Error(`owner exited before ready code=${fixture.ownerProcess.exitCode} signal=${fixture.ownerProcess.signalCode} log=${fixture.ownerLog ?? ''}`);
+    }
+    await new Promise((resolveTimer) => setTimeout(resolveTimer, 100));
+  }
+  throw new Error(`timed out waiting for owner ready log=${fixture.ownerLog ?? ''}`);
+}
+
 async function startThrowawayOwner(fixture: Fixture): Promise<void> {
-  const bootstrapName = 'Parallel Storm Bootstrap Blocker';
-  const bootstrapPlan = writePlan(fixture, bootstrapName);
-  const result = await runCommand(['--headless', '--no-track', 'run', bootstrapPlan], fixture, BOOTSTRAP_TIMEOUT_MS);
-  const workflowId = parseWorkflowId(result.stdout);
-  const ownerPid = readOwnerPid(fixture);
-  const measured = `bootstrap exit=${result.exitCode ?? 'signal:' + result.signal} timedOut=${result.timedOut} ack=${result.ackMs.toFixed(1)}ms workflowId=${workflowId ?? '<none>'} stdout=${JSON.stringify(result.stdout)} stderr=${JSON.stringify(result.stderr)}`;
-  expect(result.exitCode, measured).toBe(0);
-  expect(workflowId, measured).toMatch(/^wf-/);
-  expect(ownerPid, measured).not.toBeNull();
-  expect(ownerPidIsLive(ownerPid!), measured).toBe(true);
-  fixture.ownerPid = ownerPid!;
+  const args = [ELECTRON_LAUNCHER, APP_MAIN, '--headless', 'owner-serve'];
+  if (process.platform === 'linux') args.splice(1, 0, '--no-sandbox');
+  const owner = spawn(process.execPath, args, {
+    cwd: REPO_ROOT,
+    env: {
+      ...cleanEnv(fixture),
+      INVOKER_HEADLESS_STANDALONE: '1',
+      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: '60000',
+      INVOKER_E2E_HIDE_WINDOW: '1',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const ownerPid = owner.pid;
+  if (ownerPid === undefined) throw new Error('owner process should expose a pid');
+  fixture.ownerProcess = owner;
+  fixture.ownerPid = ownerPid;
+  fixture.ownerLog = '';
+  owner.stdout.setEncoding('utf8');
+  owner.stderr.setEncoding('utf8');
+  owner.stdout.on('data', (chunk) => { fixture.ownerLog += chunk; });
+  owner.stderr.on('data', (chunk) => { fixture.ownerLog += chunk; });
+  owner.on('exit', (code, signal) => {
+    fixture.ownerLog += `\n[owner exited code=${code} signal=${signal}]\n`;
+  });
+  await waitForOwnerReady(fixture);
+  expect(ownerPidIsLive(ownerPid), `owner pid ${ownerPid} should be live log=${fixture.ownerLog}`).toBe(true);
 }
 
 function percentile(values: number[], percent: number): number {
@@ -362,8 +394,9 @@ describe.skipIf(!CONTROLLED_REPRO_RUN)('headless run intake latency under a 50-c
         const hasDefect = p95 > ACK_BUDGET_MS
           || lostNames.length > 0
           || doubledNames.length > 0
-          || timedOutNames.length > 0;
-        expect(hasDefect, `expected current bug to breach the parallel intake budget or lose/duplicate work; ${measured}`).toBe(true);
+          || timedOutNames.length > 0
+          || nonZeroNames.length > 0;
+        expect(hasDefect, `expected current bug to breach the parallel intake budget, lose/duplicate work, time out, or exit non-zero; ${measured}`).toBe(true);
         return;
       }
 
