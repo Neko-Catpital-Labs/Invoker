@@ -41,6 +41,11 @@ must_contain "$SKILL_MD" "<summary>Test Plan</summary>" "make-pr skill must coll
 must_contain "$SKILL_MD" "<summary>Revert Plan</summary>" "make-pr skill must collapse Revert Plan content in a details block"
 must_contain "$SKILL_MD" "rejects a plan section whose content is not collapsed" "make-pr skill must state the validator enforces collapsed plan sections"
 
+must_contain "$SKILL_MD" "- Not run: <check>. Blocker: <what stops it>" "make-pr skill schema must show the Not run row with its Blocker"
+must_contain "$SKILL_MD" "rejects a Test Plan row that starts \`Not run:\` unless \`Blocker:\` followed by text sits on that line or on the next non-empty line" "make-pr skill must state the validator rejects a Not run row with no Blocker"
+must_contain "$SKILL_MD" "Run the check instead whenever you can" "make-pr skill must tell authors to run the check before writing a Not run row"
+must_contain "$PR_BODY_TEMPLATE" "- Not run: <check>. Blocker: <what stops it>" "PR body template must show the Not run row with its Blocker"
+
 must_contain "$SKILL_MD" "Every PR body carries a visible \`## Measured\` section" "make-pr skill must require a visible Measured section"
 must_contain "$SKILL_MD" "each with that command's pasted output in a fenced block" "make-pr skill must require pasted base and head output"
 must_contain "$SKILL_MD" "a pass count or a sentence about the result is not a measurement" "make-pr skill must reject pass counts as a measurement"
