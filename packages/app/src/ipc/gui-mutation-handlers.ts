@@ -778,29 +778,52 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     }
   }
 
+  let intakePersistQueue: Promise<unknown> = Promise.resolve();
+
+  function serializeIntakePersist<T>(persist: () => T): Promise<T> {
+    const settled = intakePersistQueue.then(persist, persist);
+    intakePersistQueue = settled.then(() => undefined, () => undefined);
+    return settled;
+  }
+
+  function rollbackPersistedPlanSubmission(workflowIds: readonly string[]): void {
+    for (const workflowId of [...workflowIds].reverse()) {
+      try {
+        if (persistence.loadWorkflow(workflowId)) {
+          orchestrator.deleteWorkflow(workflowId);
+        }
+      } catch (err) {
+        logger.error(
+          `headless.run rollback failed workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ipc-delegate', workflowId },
+        );
+      }
+    }
+  }
+
   function persistPlanSubmission(submission: PlanSubmissionBundle, reservedWorkflowIds?: readonly string[]): string[] {
     const persistedWorkflowIds: string[] = [];
     let upstream: { workflowId: string; featureBranch: string } | undefined;
 
-    for (const [planIndex, parsedPlan] of submission.plans.entries()) {
-      let plan = applyConfiguredPlanDefaults(parsedPlan);
-      if (upstream) {
-        plan = {
-          ...plan,
-          baseBranch: upstream.featureBranch,
-          externalDependencies: [
-            ...(plan.externalDependencies ?? []),
-            {
-              workflowId: upstream.workflowId,
-              taskId: '__merge__',
-              requiredStatus: 'completed',
-              gatePolicy: 'review_ready',
-            } as const,
-          ],
-        };
-      }
-      let loadedWorkflowId: string | undefined;
-      try {
+    try {
+      for (const [planIndex, parsedPlan] of submission.plans.entries()) {
+        let plan = applyConfiguredPlanDefaults(parsedPlan);
+        if (upstream) {
+          plan = {
+            ...plan,
+            baseBranch: upstream.featureBranch,
+            externalDependencies: [
+              ...(plan.externalDependencies ?? []),
+              {
+                workflowId: upstream.workflowId,
+                taskId: '__merge__',
+                requiredStatus: 'completed',
+                gatePolicy: 'review_ready',
+              } as const,
+            ],
+          };
+        }
+        let loadedWorkflowId: string | undefined;
         backupPlan(plan, undefined, logger);
         loadedWorkflowId = orchestrator.loadPlan(plan, {
           allowGraphMutation: invokerConfig.allowGraphMutation,
@@ -814,13 +837,14 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         }
         persistedWorkflowIds.push(workflow.id);
         upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-      } catch (err) {
-        logger.error(
-          `headless.run intake failed plan="${plan.name}" workflow="${loadedWorkflowId ?? '<none>'}": ${err instanceof Error ? err.message : String(err)}`,
-          { module: 'ipc-delegate', planName: plan.name, workflowId: loadedWorkflowId ?? '<none>' },
-        );
-        throw err;
       }
+    } catch (err) {
+      rollbackPersistedPlanSubmission(persistedWorkflowIds);
+      logger.error(
+        `headless.run intake failed plan="${submission.name}" persisted=${persistedWorkflowIds.length}: ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'ipc-delegate', planName: submission.name, persistedWorkflowIds },
+      );
+      throw err;
     }
 
     return persistedWorkflowIds;
@@ -847,8 +871,14 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     payload: HeadlessRunMutationPayload,
   ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
     const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-    if (payload.noTrack && !payload.forceSynchronousAck) {
-      const reservedWorkflowIds = submission.plans.map(() => reserveHeadlessRunWorkflowId());
+    const deferAckUntilLaunch = payload.noTrack && !payload.forceSynchronousAck;
+    const reservedWorkflowIds = deferAckUntilLaunch
+      ? submission.plans.map(() => reserveHeadlessRunWorkflowId())
+      : undefined;
+    if (deferAckUntilLaunch) {
+      if (!reservedWorkflowIds) {
+        throw new Error(`Plan "${submission.name}" did not reserve workflows.`);
+      }
       const workflowId = reservedWorkflowIds[reservedWorkflowIds.length - 1];
       if (!workflowId) {
         logger.error(
@@ -857,28 +887,9 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         );
         throw new Error(`Plan "${submission.name}" did not reserve a workflow.`);
       }
-      setImmediate(() => {
-        try {
-          const workflowIds = persistPlanSubmission(submission, reservedWorkflowIds);
-          deferHeadlessRunLaunch(workflowIds, workflowId);
-          scheduleRemoteRepoUrlProbes(workflowIds);
-        } catch (err) {
-          logger.error(
-            `headless.run deferred intake failed plan="${submission.name}" workflow="${workflowId}": ${err instanceof Error ? err.message : String(err)}`,
-            { module: 'ipc-delegate', planName: submission.name, workflowId },
-          );
-        }
-      });
-      return {
-        workflowId,
-        tasks: [],
-        workflowIds: reservedWorkflowIds,
-        workflowCount: reservedWorkflowIds.length,
-        planName: submission.name,
-      };
     }
 
-    const workflowIds = persistPlanSubmission(submission);
+    const workflowIds = await serializeIntakePersist(() => persistPlanSubmission(submission, reservedWorkflowIds));
 
     const workflowId = workflowIds[workflowIds.length - 1];
     if (!workflowId) {
@@ -888,7 +899,9 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       );
       throw new Error(`Plan "${submission.name}" did not create a workflow.`);
     }
-    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+    const tasks = deferAckUntilLaunch
+      ? []
+      : orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     deferHeadlessRunLaunch(workflowIds, workflowId);
     scheduleRemoteRepoUrlProbes(workflowIds);
     return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
