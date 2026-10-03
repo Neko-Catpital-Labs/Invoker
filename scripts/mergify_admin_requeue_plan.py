@@ -308,11 +308,69 @@ def repair_crash_reason(
     return None
 
 
-# Safety invariant: an unsettled known SSH/OAuth infra crash is subtracted from retry-cap count because the coding agent never touched the PR.
-# Safety invariant: infra, superseded, and capacity-deferred outcomes must not spend Mergify's code-repair attempt budget.
-CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"infra", "superseded", "capacity-deferred"})
+# Safety invariant: machine/runner (infra) failures spend tries so DO1 stops hammering;
+# only superseded and capacity-deferred skip the try budget. capacity-deferred stays pending.
+# A repair-attempts-reset row for the same unit discards earlier history after an explicit reset.
+CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"superseded", "capacity-deferred"})
+REPAIR_ATTEMPTS_RESET_KIND = "repair-attempts-reset"
 # Safety invariant: after an infra settle, infra-repair owns the unit for this TTL before Mergify may file another repair.
 INFRA_REPAIR_OWNERSHIP_TTL_SECONDS = 30 * 60
+
+
+def _unit_rows(ledger: Ledger, kind: str, pr_number: int, head_sha: str, key: str) -> list[dict]:
+    rows = [
+        row for row in ledger.rows
+        if row.get("kind") == kind
+        and int(row.get("pr", -1)) == pr_number
+        and str(row.get("headSha") or "") == head_sha
+        and row.get("key") == key
+    ]
+    rows.sort(key=lambda row: int(row.get("epoch", 0) or 0))
+    return rows
+
+
+def _reset_floor_epoch(ledger: Ledger, pr_number: int, head_sha: str, key: str) -> int:
+    resets = _unit_rows(ledger, REPAIR_ATTEMPTS_RESET_KIND, pr_number, head_sha, key)
+    if not resets:
+        return -1
+    return int(resets[-1].get("epoch", 0) or 0)
+
+
+def _settle_for_submit(
+    start: dict,
+    starts: list[dict],
+    settles: list[dict],
+) -> dict | None:
+    """Pair a START row with the settle in its epoch window (not the global latest)."""
+    start_epoch = int(start.get("epoch", 0) or 0)
+    idx = starts.index(start)
+    next_epoch = (
+        int(starts[idx + 1].get("epoch", 0) or 0)
+        if idx + 1 < len(starts)
+        else float("inf")
+    )
+    for settle in settles:
+        epoch = int(settle.get("epoch", 0) or 0)
+        if epoch < start_epoch:
+            continue
+        if epoch >= next_epoch:
+            break
+        return settle
+    return None
+
+
+def latest_settle_outcome(
+    ledger: Ledger,
+    submit_kind: str,
+    pr_number: int,
+    head_sha: str,
+    key: str,
+) -> str | None:
+    settled = ledger.latest(f"{submit_kind}-settled", pr_number, head_sha, key)
+    if settled is None:
+        return None
+    outcome = (settled.get("meta") or {}).get("outcomeClass")
+    return str(outcome) if outcome is not None else None
 
 
 def count_code_repair_attempts(
@@ -322,30 +380,27 @@ def count_code_repair_attempts(
     head_sha: str,
     key: str,
 ) -> int:
-    """Count attempts for the PR's current head that spend the code cap.
+    """Count attempts for the PR's current head that spend the try limit.
 
-    Settled attempts classified as `infra` or `superseded` are excluded.
-    Unsettled submits still count (in-flight is gated separately).
+    Each START pairs with the settle in its own epoch window. Finish kinds
+    `superseded` and `capacity-deferred` do not spend. `infra`, `code`,
+    missing kind, `unknown`, and `success` do spend. Unsettled submits spend.
+    START rows at or before a repair-attempts-reset for this unit are ignored.
 
-    A successful repair/rebase changes the PR head. It completed the unit of
-    work for the old head, so attempts on that old head must not consume the
-    retry budget for the new head.
+    A successful repair/rebase changes the PR head. Attempts on that old head
+    must not consume the retry budget for the new head.
     """
     settled_kind = f"{submit_kind}-settled"
+    floor = _reset_floor_epoch(ledger, pr_number, head_sha, key)
+    starts = [
+        row for row in _unit_rows(ledger, submit_kind, pr_number, head_sha, key)
+        if int(row.get("epoch", 0) or 0) > floor
+    ]
+    settles = _unit_rows(ledger, settled_kind, pr_number, head_sha, key)
     count = 0
-    for row in ledger.rows:
-        if row.get("kind") != submit_kind:
-            continue
-        if int(row.get("pr", -1)) != pr_number:
-            continue
-        if str(row.get("headSha") or "") != head_sha:
-            continue
-        if row.get("key") != key:
-            continue
-        head = str(row.get("headSha") or "")
-        epoch = int(row.get("epoch", 0) or 0)
-        settled = ledger.latest(settled_kind, pr_number, head, key)
-        if settled is not None and int(settled.get("epoch", 0) or 0) >= epoch:
+    for start in starts:
+        settled = _settle_for_submit(start, starts, settles)
+        if settled is not None:
             outcome = (settled.get("meta") or {}).get("outcomeClass")
             if outcome in CODE_REPAIR_CAP_EXCLUDED_OUTCOMES:
                 continue
@@ -440,11 +495,12 @@ def retry_decision(
     max_attempts: int,
     backoff_base_ms: int = 0,
 ) -> dict:
+    if latest_settle_outcome(ledger, submit_kind, pr_number, head_sha, key) == "superseded":
+        return {"action": "skip-superseded", "attempts": 0, "crashed_on_infra": False}
     count = count_code_repair_attempts(ledger, submit_kind, pr_number, head_sha, key)
     crashed_on_infra = repair_crash_reason(ledger, pr_number, head_sha, submit_kind, key, plan_name) is not None
     if crashed_on_infra:
-        if count > 0:
-            count -= 1
+        # Infra spends the try budget (already in count). Do not refile past the limit.
         if count >= max_attempts:
             return {"action": "needs-human", "attempts": count, "crashed_on_infra": True}
         return {"action": "file", "attempts": count, "crashed_on_infra": True}
@@ -582,7 +638,7 @@ def mergify_failed_check_actions(
             ledger, pr.number, pr.head_ref_oid, "repair-check", name,
             repair_check_plan_name(pr.number, name, pr.head_ref_oid), now, max_repair_attempts,
         )
-        if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, name) >= 1:
+        if decision["action"] == "skip-superseded":
             continue
         if decision["action"] == "needs-human":
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, detail), detail),)
@@ -1108,7 +1164,7 @@ def plan_direct_repairs(
                     ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
                     repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid), now, max_repair_attempts,
                 )
-                if count_infra_settles(ledger, "repair-check", pr.number, pr.head_ref_oid, blocker.key) >= 1:
+                if decision["action"] == "skip-superseded":
                     continue
                 if decision["action"] == "needs-human":
                     return cap_action(pr, blocker, blocker.detail)
@@ -1148,6 +1204,8 @@ def plan_bot_thread_repairs(
                 ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key,
                 repair_bot_thread_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
             )
+            if decision["action"] == "skip-superseded":
+                continue
             if decision["action"] == "needs-human":
                 return cap_action(pr, blocker, blocker.detail)
             if decision["action"] == "backoff":
@@ -1265,6 +1323,8 @@ def plan_invoker_rebase_onto_master(
         ledger, pr.number, pr.head_ref_oid, REBASE_ONTO_MASTER_LEDGER_KIND, key,
         rebase_onto_master_plan_name(pr.number, pr.head_ref_oid), now, max_repair_attempts,
     )
+    if decision["action"] == "skip-superseded":
+        return None
     if decision["action"] == "needs-human":
         return cap_action(
             pr,
