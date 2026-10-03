@@ -123,6 +123,7 @@ describe('buildCurrentActionGraphSnapshot', () => {
       maxConcurrency: 1,
     });
     const loadSnapshot = vi.spyOn(adapter, 'loadWorkflowTaskSnapshot');
+    const syncAllFromDb = vi.spyOn(orchestrator, 'syncAllFromDb');
     let now = 1000;
     const read = createCachedActionGraphSnapshotReader({
       getOrchestrator: () => orchestrator,
@@ -140,6 +141,7 @@ describe('buildCurrentActionGraphSnapshot', () => {
     now += 1001;
     const third = read();
     expect(third).not.toBe(first);
-    expect(loadSnapshot).toHaveBeenCalledTimes(1);
+    expect(third.nodes.some((node) => node.id === 'attempt:wf-cache/task')).toBe(true);
+    expect(syncAllFromDb).toHaveBeenCalledTimes(1);
   });
 });
