@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = join(dirname(new URL(import.meta.url).pathname), '..', '..', '..', '..');
-const skillsRoot = join(repoRoot, 'skills');
+const skillsRoot = join(repoRoot, 'corpus', 'skills');
 
 function bundledSkillNames(): string[] {
   return readdirSync(skillsRoot, { withFileTypes: true })
@@ -26,7 +26,11 @@ describe('bundled skill SKILL.md integrity', () => {
     expect(names.length).toBeGreaterThan(0);
   });
 
-  it.each(names)('skills/%s/SKILL.md opens with a YAML frontmatter block', (name) => {
+  it('includes workflow-chain-submit in the rehomed bundled skills', () => {
+    expect(names).toContain('workflow-chain-submit');
+  });
+
+  it.each(names)('corpus/skills/%s/SKILL.md opens with a YAML frontmatter block', (name) => {
     const content = readFileSync(join(skillsRoot, name, 'SKILL.md'), 'utf8');
     const lines = content.split('\n');
 

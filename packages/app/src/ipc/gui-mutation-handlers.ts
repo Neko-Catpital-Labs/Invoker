@@ -1322,7 +1322,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return Boolean(mainWindow && !mainWindow.isDestroyed());
   };
   const ownerMode = getOwnerMode();
-  const planDoctorScriptPath = join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
+  const planDoctorScriptPath = join(repoRoot, 'corpus', 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
   const workerRuntimeController = getWorkerRuntimeController();
   const readActionGraphSnapshot = createCachedActionGraphSnapshotReader({
     getOrchestrator: () => orchestrator,

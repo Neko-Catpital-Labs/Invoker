@@ -3,10 +3,11 @@ import { dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 const repoRoot = join(dirname(new URL(import.meta.url).pathname), '..', '..', '..', '..');
+const skillsRoot = join(repoRoot, 'corpus', 'skills');
 
 describe('plan-to-invoker skill contract', () => {
   it('requires MCP review before host-side submission', () => {
-    const skill = readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), 'utf8');
+    const skill = readFileSync(join(skillsRoot, 'plan-to-invoker', 'SKILL.md'), 'utf8');
 
     expect(skill).toContain('call `invoker_prepare_plan_review`');
     expect(skill).toContain('show its ordered steps plus `confirmationText`');
@@ -14,7 +15,7 @@ describe('plan-to-invoker skill contract', () => {
   });
 
   it('documents always-on install-skills helpers and the local override', () => {
-    const skill = readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), 'utf8');
+    const skill = readFileSync(join(skillsRoot, 'plan-to-invoker', 'SKILL.md'), 'utf8');
 
     expect(skill).toContain('always on via Cursor `~/.cursor/rules/invoker-execution-precedence.mdc`');
     expect(skill).toContain('a Codex AGENTS.md marked block');
@@ -30,7 +31,7 @@ describe('plan-to-invoker skill contract', () => {
   });
 
   it('treats reviewed implementation approval as GitHub publication authority', () => {
-    const skill = readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), 'utf8');
+    const skill = readFileSync(join(skillsRoot, 'plan-to-invoker', 'SKILL.md'), 'utf8');
 
     expect(skill).toContain('Generated implementation plans default to `onFinish: pull_request`');
     expect(skill).toContain('approval includes pushing the prepared branch and creating or updating the GitHub PR/stack');
@@ -41,8 +42,8 @@ describe('plan-to-invoker skill contract', () => {
 
   it('documents optional structured freshness authoring without rewriting task prose', () => {
     const instructions = [
-      readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), 'utf8'),
-      readFileSync(join(repoRoot, 'skills', 'plan-to-invoker', 'commands', 'invoker-plan-to-invoker.md'), 'utf8'),
+      readFileSync(join(skillsRoot, 'plan-to-invoker', 'SKILL.md'), 'utf8'),
+      readFileSync(join(skillsRoot, 'plan-to-invoker', 'commands', 'invoker-plan-to-invoker.md'), 'utf8'),
     ];
 
     for (const instruction of instructions) {
