@@ -6,19 +6,16 @@
 // in flight.
 import { execFileSync, execSync } from 'node:child_process';
 import {
-  closeSync,
   existsSync,
-  fsyncSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
-  rmSync,
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { shouldRetry, isStale } from './retry-ledger.mjs';
 import { insertRepairFiling, releaseRepairFiling } from './repair-filing-ledger.mjs';
@@ -177,7 +174,8 @@ export function isObservationStale(failure, nowMs, staleMs = STALE_OBSERVATION_M
 }
 
 const STATE_DIR = resolveStateDir(TARGET_REPO, { env: process.env });
-const STATE_FILE = join(STATE_DIR, 'state.json');
+export const STATE_JSON_BASENAME = 'state.json';
+export const STATE_DB_BASENAME = 'state.sqlite';
 const SWEEP_LOG_FILE = join(STATE_DIR, 'sweep-log.jsonl');
 const WORKFLOW_PATH = join(REPO_ROOT, '.github', 'workflows', WORKFLOW_FILE);
 /**
@@ -1610,39 +1608,132 @@ function corruptStateSuffix(now = new Date()) {
   return now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
-export function loadState() {
-  if (!existsSync(STATE_FILE)) return loadEmptyState();
+export function resolveStateDbPath(stateDir = STATE_DIR) {
+  return join(stateDir, STATE_DB_BASENAME);
+}
+
+export function resolveStateJsonPath(stateDir = STATE_DIR) {
+  return join(stateDir, STATE_JSON_BASENAME);
+}
+
+export function openStateDatabase(dbPath) {
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA busy_timeout = 5000');
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA synchronous = FULL');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS heads (
+      sha TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS active_failures (
+      failure_key TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL
+    );
+  `);
+  return db;
+}
+
+function readStateFromDatabase(db) {
+  const meta = Object.fromEntries(
+    db.prepare('SELECT key, value FROM meta').all().map((row) => [row.key, row.value]),
+  );
+  const heads = {};
+  for (const row of db.prepare('SELECT sha, payload FROM heads').all()) {
+    heads[row.sha] = JSON.parse(row.payload);
+  }
+  const activeFailures = {};
+  for (const row of db.prepare('SELECT failure_key, payload FROM active_failures').all()) {
+    activeFailures[row.failure_key] = JSON.parse(row.payload);
+  }
+  return {
+    schemaVersion: Number(meta.schema_version ?? STATE_SCHEMA_VERSION),
+    lastProcessedRunId: Number(meta.last_processed_run_id ?? 0),
+    heads,
+    activeFailures,
+  };
+}
+
+function writeStateToDatabase(db, state, { beforeCommit } = {}) {
+  const normalized = normalizeState(state);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const upsertMeta = db.prepare(
+      'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    );
+    upsertMeta.run('schema_version', String(normalized.schemaVersion));
+    upsertMeta.run('last_processed_run_id', String(normalized.lastProcessedRunId));
+    db.exec('DELETE FROM heads');
+    db.exec('DELETE FROM active_failures');
+    const insertHead = db.prepare('INSERT INTO heads(sha, payload) VALUES (?, ?)');
+    for (const [sha, payload] of Object.entries(normalized.heads)) {
+      insertHead.run(sha, JSON.stringify(payload));
+    }
+    const insertFailure = db.prepare('INSERT INTO active_failures(failure_key, payload) VALUES (?, ?)');
+    for (const [failureKey, payload] of Object.entries(normalized.activeFailures)) {
+      insertFailure.run(failureKey, JSON.stringify(payload));
+    }
+    if (typeof beforeCommit === 'function') beforeCommit(db, normalized);
+    db.exec('COMMIT');
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+    }
+    throw error;
+  }
+}
+
+export function loadState({ stateDir = STATE_DIR, openDatabase = openStateDatabase } = {}) {
+  const dbPath = resolveStateDbPath(stateDir);
+  const jsonPath = resolveStateJsonPath(stateDir);
+
+  if (existsSync(dbPath)) {
+    const db = openDatabase(dbPath);
+    try {
+      return normalizeState(readStateFromDatabase(db));
+    } finally {
+      db.close();
+    }
+  }
+
+  if (!existsSync(jsonPath)) return loadEmptyState();
+
   let state;
   try {
-    state = normalizeState(JSON.parse(readFileSync(STATE_FILE, 'utf8')));
+    state = normalizeState(JSON.parse(readFileSync(jsonPath, 'utf8')));
   } catch (error) {
-    const corruptPath = `${STATE_FILE}.corrupt-${corruptStateSuffix()}`;
-    renameSync(STATE_FILE, corruptPath);
+    const corruptPath = `${jsonPath}.corrupt-${corruptStateSuffix()}`;
+    renameSync(jsonPath, corruptPath);
     console.error(`ci-regression-watch: state file unreadable, moved to ${corruptPath}: ${error.message}`);
     return loadEmptyState();
   }
+
+  saveState(state, { stateDir, openDatabase });
+  const migratedPath = `${jsonPath}.migrated-${corruptStateSuffix()}`;
+  renameSync(jsonPath, migratedPath);
   return state;
 }
 
-function fsyncFile(path) {
-  const fd = openSync(path, 'r+');
+export function saveState(state, {
+  stateDir = STATE_DIR,
+  openDatabase = openStateDatabase,
+  beforeCommit,
+} = {}) {
+  const dbPath = resolveStateDbPath(stateDir);
+  mkdirSync(stateDir, { recursive: true });
+  const db = openDatabase(dbPath);
   try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-export function saveState(state, { stateFile = STATE_FILE, writeFile = writeFileSync } = {}) {
-  mkdirSync(dirname(stateFile), { recursive: true });
-  const tmpFile = `${stateFile}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    writeFile(tmpFile, JSON.stringify(normalizeState(state), null, 2));
-    fsyncFile(tmpFile);
-    renameSync(tmpFile, stateFile);
+    writeStateToDatabase(db, state, { beforeCommit });
   } catch (error) {
-    rmSync(tmpFile, { force: true });
-    throw new Error(`Failed to save CI regression watcher state to ${stateFile}: ${error.message}`, { cause: error });
+    throw new Error(`Failed to save CI regression watcher state to ${dbPath}: ${error.message}`, { cause: error });
+  } finally {
+    db.close();
   }
 }
 
