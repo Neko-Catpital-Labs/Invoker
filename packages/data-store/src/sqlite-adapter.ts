@@ -2275,12 +2275,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const maxChars = Math.max(0, Math.floor(payloadMaxChars));
     const rows = this.queryAll(
       `SELECT id, task_id, event_type, created_at,
-              CASE WHEN LENGTH(payload) > ? THEN SUBSTR(payload, 1, ?) ELSE payload END AS payload
+              SUBSTR(payload, 1, ?) AS payload
        FROM events
        WHERE task_id = ?
        ORDER BY id ${orderBy}
        LIMIT ?`,
-      [maxChars, maxChars, taskId, pageLimit],
+      [maxChars, taskId, pageLimit],
     );
     return rows.map((row: any) => this.rowToTaskEvent(row));
   }
