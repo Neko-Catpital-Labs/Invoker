@@ -1923,47 +1923,46 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
         self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
         self.assertTrue(p.repair_in_flight(ledger, 1, HEAD, "repair-check", "build", NOW + 1))
 
-    def test_three_infra_outcomes_do_not_cap_and_eventual_retry_files(self):
+    def test_infra_outcomes_spend_tries_and_cap_at_max(self):
+        ledger = self._ledger()
+        for i in range(3):
+            start_epoch = NOW - 300 + (i * 20)
+            ledger.record("repair-check", 1, HEAD, "build", epoch=start_epoch)
+            ledger.record(
+                "repair-check-settled", 1, HEAD, "build", epoch=start_epoch + 10,
+                meta={"outcomeClass": "infra", "workflowId": f"wf-infra-{i}", "workflowStatus": "failed"},
+            )
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 3)
+        snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")})
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        with unittest.mock.patch.object(p, "infra_repair_owns_unit", return_value=False):
+            with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
+                action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual(action.kind, "comment_blocked")
+
+    def test_one_infra_outcome_still_allows_another_try(self):
         ledger = self._ledger()
         ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 300)
         ledger.record(
             "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250,
             meta={"outcomeClass": "infra", "workflowId": "wf-infra-0", "workflowStatus": "failed"},
         )
-        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
-        self.assertEqual(p.count_infra_settles(ledger, "repair-check", 1, HEAD, "build"), 1)
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 1)
         snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")})
         facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
         with unittest.mock.patch.object(p, "infra_repair_owns_unit", return_value=False):
             with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
                 action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
-        self.assertIsNone(action)
+        self.assertEqual(action.kind, "repair_check")
+        self.assertEqual(action.key, "build")
 
-        ledger_new_head = self._ledger()
-        ledger_new_head.record("repair-check", 1, HEAD, "build", epoch=NOW - 300)
-        ledger_new_head.record(
-            "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250,
-            meta={"outcomeClass": "infra", "workflowId": "wf-infra-old", "workflowStatus": "failed"},
-        )
-        new_head = "b" * 40
-        snapshot_new = pr(
-            head_ref_oid=new_head,
-            labels=frozenset({"admin-bypass"}),
-            checks={"build": check("failure")},
-        )
-        facts_new, _ = self._facts(m.StackGroup("s", (snapshot_new,)), ledger=ledger_new_head)
-        with unittest.mock.patch.object(p, "infra_repair_owns_unit", return_value=False):
-            with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
-                action_new = p.plan_direct_repairs(facts_new, ledger_new_head, max_repair_attempts=3, now=NOW)
-        self.assertEqual(action_new.kind, "repair_check")
-        self.assertEqual(action_new.key, "build")
-
-    def test_stale_head_superseded_outcomes_do_not_spend_code_cap(self):
+    def test_stale_head_superseded_outcomes_do_not_spend_and_do_not_retry(self):
         ledger = self._ledger()
         for i in range(3):
-            ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 300 + i)
+            start_epoch = NOW - 300 + (i * 20)
+            ledger.record("repair-check", 1, HEAD, "build", epoch=start_epoch)
             ledger.record(
-                "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250 + i,
+                "repair-check-settled", 1, HEAD, "build", epoch=start_epoch + 10,
                 meta={"outcomeClass": "superseded", "workflowStatus": "failed"},
             )
         self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
@@ -1971,14 +1970,43 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
         facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
         with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
             action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
-        self.assertEqual(action.kind, "repair_check")
+        self.assertIsNone(action)
+
+    def test_paired_settle_keeps_infra_spend_when_later_capacity_deferred(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 300)
+        ledger.record(
+            "repair-check-settled", 1, HEAD, "build", epoch=NOW - 290,
+            meta={"outcomeClass": "infra", "workflowId": "wf-a", "workflowStatus": "failed"},
+        )
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 200)
+        ledger.record(
+            "repair-check-settled", 1, HEAD, "build", epoch=NOW - 100,
+            meta={"outcomeClass": "capacity-deferred", "workflowId": "wf-b"},
+        )
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 1)
+        self.assertTrue(p.repair_in_flight(ledger, 1, HEAD, "repair-check", "build", NOW))
+
+    def test_repair_attempts_reset_discards_earlier_history(self):
+        ledger = self._ledger()
+        for i in range(3):
+            start_epoch = NOW - 300 + (i * 20)
+            ledger.record("repair-check", 1, HEAD, "build", epoch=start_epoch)
+            ledger.record(
+                "repair-check-settled", 1, HEAD, "build", epoch=start_epoch + 10,
+                meta={"outcomeClass": "infra", "workflowId": f"wf-{i}", "workflowStatus": "failed"},
+            )
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 3)
+        ledger.record(p.REPAIR_ATTEMPTS_RESET_KIND, 1, HEAD, "build", epoch=NOW - 100)
+        self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 0)
 
     def test_unknown_code_failures_still_count_toward_max_repair_attempts(self):
         ledger = self._ledger()
         for i in range(3):
-            ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 300 + i)
+            start_epoch = NOW - 300 + (i * 20)
+            ledger.record("repair-check", 1, HEAD, "build", epoch=start_epoch)
             ledger.record(
-                "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250 + i,
+                "repair-check-settled", 1, HEAD, "build", epoch=start_epoch + 10,
                 meta={"outcomeClass": "code", "workflowStatus": "failed"},
             )
         self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 3)
@@ -2019,9 +2047,10 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
     def test_three_head_unchanged_settles_reach_comment_blocked(self):
         ledger = self._ledger()
         for i in range(3):
-            ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 300 + i)
+            start_epoch = NOW - 300 + (i * 20)
+            ledger.record("repair-check", 1, HEAD, "build", epoch=start_epoch)
             ledger.record(
-                "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250 + i,
+                "repair-check-settled", 1, HEAD, "build", epoch=start_epoch + 10,
                 meta={"outcomeClass": "code", "reason": "head-unchanged", "workflowStatus": "failed"},
             )
         self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 3)
@@ -2048,9 +2077,10 @@ class CodeRepairCapExcludesInfraAndSuperseded(PlannerTestCase):
     def test_three_push_failed_settles_reach_comment_blocked(self):
         ledger = self._ledger()
         for i in range(3):
-            ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 300 + i)
+            start_epoch = NOW - 300 + (i * 20)
+            ledger.record("repair-check", 1, HEAD, "build", epoch=start_epoch)
             ledger.record(
-                "repair-check-settled", 1, HEAD, "build", epoch=NOW - 250 + i,
+                "repair-check-settled", 1, HEAD, "build", epoch=start_epoch + 10,
                 meta={"outcomeClass": "code", "reason": "push-failed", "workflowStatus": "failed"},
             )
         self.assertEqual(p.count_code_repair_attempts(ledger, "repair-check", 1, HEAD, "build"), 3)
