@@ -31,6 +31,15 @@ function analyze(reviews, diffText = GUARDED_DIFF) {
   return analyzeGuardedBehaviorApproval({ diffText, headSha: HEAD, reviews });
 }
 
+function assertAppearsBefore(source, before, after, message) {
+  const beforeIndex = source.indexOf(before);
+  const afterIndex = source.indexOf(after);
+
+  assert.notEqual(beforeIndex, -1, `${message}: missing ${before}`);
+  assert.notEqual(afterIndex, -1, `${message}: missing ${after}`);
+  assert.ok(beforeIndex < afterIndex, message);
+}
+
 assert.deepEqual(analyze([], 'diff --git a/README.md b/README.md\n+ordinary\n'), {
   eligible: true,
   guarded: false,
@@ -57,20 +66,23 @@ assert.deepEqual(analyze([review({ state: 'APPROVED' })]), {
 
 const landStackSource = readFileSync(new URL('./land-stack.mjs', import.meta.url), 'utf8');
 const cronSource = readFileSync(new URL('./cron-pr-auto-label.sh', import.meta.url), 'utf8');
-assert.ok(
-  landStackSource.indexOf('checkGuardedBehaviorApprovalForPr')
-    < landStackSource.indexOf("labels[]=admin-bypass"),
+assertAppearsBefore(
+  landStackSource,
+  'checkGuardedBehaviorApprovalForPr',
+  "labels[]=admin-bypass",
   'land-stack must check guarded approval before its direct label add',
 );
-assert.ok(
-  cronSource.indexOf('guarded_bypass_is_eligible "$num"')
-    < cronSource.indexOf('--add-label admin-bypass'),
+assertAppearsBefore(
+  cronSource,
+  'guarded_bypass_is_eligible "$num"',
+  '--add-label admin-bypass',
   'cron must check guarded approval before generating its label task',
 );
 const bumpSource = readFileSync(new URL('./open-daily-release-bump-pr.sh', import.meta.url), 'utf8');
-assert.ok(
-  bumpSource.indexOf('guarded-behavior-approval.mjs')
-    < bumpSource.indexOf('--add-label admin-bypass'),
+assertAppearsBefore(
+  bumpSource,
+  'guarded-behavior-approval.mjs',
+  '--add-label admin-bypass',
   'daily release bump must check guarded approval before labeling admin-bypass',
 );
 
