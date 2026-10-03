@@ -20,7 +20,7 @@
     },
     "extraResources": [
       {
-        "from": "../../skills",
+        "from": "../../corpus/skills",
         "to": "skills"
       },
       {

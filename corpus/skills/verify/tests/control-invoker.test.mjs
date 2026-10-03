@@ -8,11 +8,11 @@ import { dirname } from 'node:path';
 import { resolveProve } from '../lib/prove.mjs';
 import { runCatalogCheck, REQUIRED_SIDEBAR_TESTIDS } from '../lib/catalog.mjs';
 import { runOwner } from '../lib/owner.mjs';
-import { resolveRepoRoot, featuresDir } from '../lib/repo.mjs';
+import { controlInvokerPath, resolveRepoRoot, featuresDir } from '../lib/repo.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolveRepoRoot(__dirname);
-const cli = join(repoRoot, 'skills/verify/control-invoker.mjs');
+const cli = controlInvokerPath(repoRoot);
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -24,6 +24,14 @@ function runCli(args) {
     encoding: 'utf8',
     env: process.env,
   });
+}
+
+// 0) compatibility entrypoint exists for existing CI guardrails
+{
+  const help = runCli(['--help']);
+  assert(help.status === 0, `root compatibility CLI --help failed: ${help.stderr}`);
+  assert(help.stdout.includes('control-invoker'), 'root compatibility CLI help missing command name');
+  console.log('OK root compatibility CLI --help');
 }
 
 // 1) prove --dry-run maps command-palette to the real Playwright spec

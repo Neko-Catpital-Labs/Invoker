@@ -69,7 +69,7 @@ Under `tests/`:
 - `stays_silent_example.md` — non-UI change that must not use control-invoker
 - `efficacy-router.test.mjs` — asserts known prompts map to the right prove command
 
-Run: `bash scripts/test-verify-skill.sh`
+Run: `bash corpus/skills/verify/scripts/test-skill.sh`
 
 ## Efficacy rubric and evaluation tracks
 

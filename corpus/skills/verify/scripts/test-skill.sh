@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-SKILL_MD="$REPO_ROOT/skills/verify/SKILL.md"
+REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+SKILL_DIR="$REPO_ROOT/corpus/skills/verify"
+SKILL_MD="$SKILL_DIR/SKILL.md"
 CLI="$REPO_ROOT/skills/verify/control-invoker.mjs"
 
 fail() {
@@ -28,14 +29,14 @@ must_contain "references/features/" "verify skill must point at the feature map"
 # Contract: CLI help and catalog check are runnable without Electron.
 node "$CLI" --help >/dev/null || fail "control-invoker --help failed"
 node "$CLI" catalog --check --json >/dev/null || fail "control-invoker catalog --check failed"
-node "$REPO_ROOT/skills/verify/tests/control-invoker.test.mjs" || fail "control-invoker unit tests failed"
-node "$REPO_ROOT/skills/verify/tests/efficacy-router.test.mjs" || fail "verify efficacy router tests failed"
+node "$SKILL_DIR/tests/control-invoker.test.mjs" || fail "control-invoker unit tests failed"
+node "$SKILL_DIR/tests/efficacy-router.test.mjs" || fail "verify efficacy router tests failed"
 
-[[ -f "$REPO_ROOT/skills/verify/tests/fires_example.md" ]] || fail "missing fires_example.md"
-[[ -f "$REPO_ROOT/skills/verify/tests/stays_silent_example.md" ]] || fail "missing stays_silent_example.md"
-grep -qF 'prove command-palette' "$REPO_ROOT/skills/verify/tests/fires_example.md" \
+[[ -f "$SKILL_DIR/tests/fires_example.md" ]] || fail "missing fires_example.md"
+[[ -f "$SKILL_DIR/tests/stays_silent_example.md" ]] || fail "missing stays_silent_example.md"
+grep -qF 'prove command-palette' "$SKILL_DIR/tests/fires_example.md" \
   || fail "fires_example.md must instruct prove command-palette"
-grep -qF 'does not apply' "$REPO_ROOT/skills/verify/tests/stays_silent_example.md" \
+grep -qF 'does not apply' "$SKILL_DIR/tests/stays_silent_example.md" \
   || fail "stays_silent_example.md must say verify does not apply"
 
 echo "OK: verify skill contract checks passed"
