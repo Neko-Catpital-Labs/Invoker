@@ -302,6 +302,10 @@ function extractCodexExecCommandFromArguments(args) {
 const GIT_C_FLAG_RE = /\bgit\s+-C\s+(\S+)/i;
 const WORKTREE_ADD_PATH_RE = /\bworktree\s+add\s+(?:--[a-z-]+\s+)*(\S+)/i;
 const GIT_COMMIT_RE = /\bgit(?:\s+-C\s+\S+)?\s+commit\b/i;
+const GIT_PUSH_RE = /\bgit(?:\s+-C\s+\S+)?\s+push\b/i;
+const GH_PR_EDIT_RE = /\bgh\s+pr\s+edit\b/i;
+const NO_PUSH_INSTRUCTION_RE = /\bdo not push\b|\bdon't push\b|\bno push\b|\bdo not open (?:a |an )?PR\b|\bdo not open (?:a |an )?pull request\b/i;
+const NO_PUSH_FINAL_RE = /\bI did not push\b|\bremote PR branch will still need\b|\bnot pushed\b/i;
 
 function normalizeFsPath(p) {
   if (typeof p !== 'string' || !p) return '';
@@ -346,12 +350,20 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
   const observedCommands = [];
   let sessionCwd = '';
   let workflowHint = '';
+  let sawGitCommit = false;
+  let sawGitPush = false;
+  let sawGhPrEdit = false;
+  let sawNoPushInstruction = false;
+  let sawNoPushFinal = false;
 
   const noteCommand = (cmd) => {
     const trimmed = String(cmd ?? '').trim();
     if (!trimmed) return;
     bashCounts.set(trimmed, (bashCounts.get(trimmed) ?? 0) + 1);
     observedCommands.push(trimmed);
+    if (GIT_COMMIT_RE.test(trimmed)) sawGitCommit = true;
+    if (GIT_PUSH_RE.test(trimmed)) sawGitPush = true;
+    if (GH_PR_EDIT_RE.test(trimmed)) sawGhPrEdit = true;
   };
 
   for (const line of lines) {
@@ -404,6 +416,10 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     }
     const msg = row.message ?? row;
     const role = msg.role ?? row.type;
+    for (const textBlock of collectTextBlocks(row, msg, row.payload ?? {})) {
+      if (NO_PUSH_INSTRUCTION_RE.test(textBlock)) sawNoPushInstruction = true;
+      if (NO_PUSH_FINAL_RE.test(textBlock)) sawNoPushFinal = true;
+    }
     if (!countedByFormat && (role === 'assistant' || row.type === 'assistant')) {
       assistantTurns += 1;
       const usage = msg.usage ?? row.usage ?? {};
@@ -471,6 +487,9 @@ export function analyzeClaudeJsonl(text, thresholds = DEFAULT_THRESHOLDS) {
     if (kind === 'worktree_add' && !sideCheckoutKind) sideCheckoutKind = kind;
   }
   if (sideCheckoutKind) reasons.push(`side_checkout=${sideCheckoutKind}`);
+  if (sawGhPrEdit && sawGitCommit && !sawGitPush && (sawNoPushInstruction || sawNoPushFinal)) {
+    reasons.push('live_pr_metadata_without_push=gh_pr_edit_after_local_commit');
+  }
 
   const structuralSummary = summarizeSessionStructure(text);
   return {
@@ -662,6 +681,33 @@ function selfTest() {
   const codexNeg = analyzeClaudeJsonl(codexClean);
   if (codexNeg.thrash) throw new Error('expected clean codex fixture to stay silent');
 
+  const livePrMetadataNoPush = [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'For Invoker changes, do not push and do not open a PR.' } }),
+    codexFunctionCallExecRow('git commit -m "local fix"'),
+    codexFunctionCallExecRow('gh pr edit 14185 --body-file /tmp/body.md'),
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'I did not push. The remote PR branch will still need these local commits pushed.' }],
+      },
+    }),
+  ].join('\n');
+  const livePrMetadataPos = analyzeClaudeJsonl(livePrMetadataNoPush);
+  if (!livePrMetadataPos.reasons.includes('live_pr_metadata_without_push=gh_pr_edit_after_local_commit')) {
+    throw new Error(`expected live PR metadata no-push reason, got ${JSON.stringify(livePrMetadataPos.reasons)}`);
+  }
+  const livePrMetadataClean = [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'Update this remote PR body.' } }),
+    codexFunctionCallExecRow('gh pr edit 14185 --body-file /tmp/body.md'),
+    codexFunctionCallExecRow('git push origin HEAD'),
+  ].join('\n');
+  const livePrMetadataNeg = analyzeClaudeJsonl(livePrMetadataClean);
+  if (livePrMetadataNeg.reasons.some((r) => r.startsWith('live_pr_metadata_without_push='))) {
+    throw new Error(`clean live PR metadata fixture must stay silent, got ${JSON.stringify(livePrMetadataNeg.reasons)}`);
+  }
+
   const productive = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-productive-long.jsonl'));
   const exploration = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'claude-repeated-exploration.jsonl'));
   const codexProductive = analyzeClaudeJsonlFile(join(FIXTURES_DIR, 'codex-typed-progress.jsonl'));
@@ -756,6 +802,8 @@ function selfTest() {
     codexJsReasons: codexJsPos.reasons,
     codexFnCallReasons: codexFnCallPos.reasons,
     codexNegativeThrash: codexNeg.thrash,
+    livePrMetadataReasons: livePrMetadataPos.reasons,
+    cleanLivePrMetadataReasons: livePrMetadataNeg.reasons,
     sideCheckoutReasons: sideCheckout.reasons,
     inCwdSideCheckout: inCwdCommit.reasons.some((r) => r.startsWith('side_checkout=')),
     productiveStructuralSummary: productive.structuralSummary,
