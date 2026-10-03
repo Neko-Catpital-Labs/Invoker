@@ -497,6 +497,14 @@ assert(
   'shared installer must prove passwordless sudo and use it noninteractively, the same way every caller previously did',
 );
 assert(
+  installerScript.includes('run_apt_get apt-get update')
+    && installerScript.includes('run_apt_get apt-get install')
+    && installerScript.includes('run_apt_get sudo -n apt-get update')
+    && installerScript.includes('run_apt_get sudo -n apt-get install')
+    && installerScript.includes('Unable to acquire the dpkg frontend lock'),
+  'shared installer must retry transient apt/dpkg lock failures before failing CI setup',
+);
+assert(
   installerScript.includes('Dir::State')
     && installerScript.includes('LD_LIBRARY_PATH=')
     && installerScript.includes('GITHUB_ENV'),
