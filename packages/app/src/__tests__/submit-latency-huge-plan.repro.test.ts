@@ -13,6 +13,7 @@ const SAMPLES = 3;
 const TASK_COUNTS = [10, 100, 500] as const;
 const testHome = mkdtempSync(join(tmpdir(), 'invoker-huge-plan-home-'));
 const tempDirs: string[] = [];
+const describeHighResource = process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? describe : describe.skip;
 
 vi.stubEnv('HOME', testHome);
 
@@ -62,7 +63,7 @@ function p50(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)]!;
 }
 
-describe('huge plan submission latency repro', () => {
+describeHighResource('huge plan submission latency repro', () => {
   it('measures owner intake acknowledgement and persistence write scale', async () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'invoker-huge-plan-bare-repo-'));
     tempDirs.push(repoDir);
