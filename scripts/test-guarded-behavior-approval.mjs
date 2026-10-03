@@ -67,6 +67,12 @@ assert.ok(
     < cronSource.indexOf('--add-label admin-bypass'),
   'cron must check guarded approval before generating its label task',
 );
+const bumpSource = readFileSync(new URL('./open-daily-release-bump-pr.sh', import.meta.url), 'utf8');
+assert.ok(
+  bumpSource.indexOf('guarded-behavior-approval.mjs')
+    < bumpSource.indexOf('--add-label admin-bypass'),
+  'daily release bump must check guarded approval before labeling admin-bypass',
+);
 
 const directLabelFiles = execFileSync('rg', [
   '-l',
@@ -81,6 +87,7 @@ const directLabelFiles = execFileSync('rg', [
 assert.deepEqual(directLabelFiles, [
   'scripts/cron-pr-auto-label.sh',
   'scripts/land-stack.mjs',
+  'scripts/open-daily-release-bump-pr.sh',
 ]);
 
 console.log('guarded-behavior approval policy tests passed');

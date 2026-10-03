@@ -808,6 +808,48 @@ jobs:
       - name: Run dispatch invariants
         run: pnpm --filter @invoker/app test --run src/__tests__/dispatch-capacity-invariants.test.ts
 
+  scheduled-chaos-overload:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: build-artifacts
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+    timeout-minutes: 180
+    name: scheduled / Chaos Overload Repros
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Run chaos overload scenarios
+        run: bash scripts/test-suites/optional/33-e2e-chaos-overload.sh
+
   nightly-regression:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
