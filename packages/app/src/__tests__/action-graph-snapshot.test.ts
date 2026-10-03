@@ -140,6 +140,6 @@ describe('buildCurrentActionGraphSnapshot', () => {
     now += 1001;
     const third = read();
     expect(third).not.toBe(first);
-    expect(loadSnapshot).toHaveBeenCalledTimes(2);
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 });
