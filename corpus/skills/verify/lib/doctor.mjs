@@ -1,6 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { featuresDir } from './repo.mjs';
 
 function fileMtimeMs(path) {
   try {
@@ -71,12 +72,12 @@ export function runDoctor(opts) {
   });
   if (!playwrightOk) ok = false;
 
-  const featuresRoot = join(repoRoot, 'skills/verify/references/features');
+  const featuresRoot = featuresDir(repoRoot);
   const featuresOk = existsSync(featuresRoot);
   checks.push({
     name: 'feature-map',
     ok: featuresOk,
-    detail: featuresOk ? featuresRoot : 'missing skills/verify/references/features',
+    detail: featuresOk ? featuresRoot : 'missing corpus/skills/verify/references/features',
   });
   if (!featuresOk) ok = false;
 

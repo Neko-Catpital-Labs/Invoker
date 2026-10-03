@@ -8,11 +8,11 @@ import { dirname } from 'node:path';
 import { resolveProve } from '../lib/prove.mjs';
 import { runCatalogCheck, REQUIRED_SIDEBAR_TESTIDS } from '../lib/catalog.mjs';
 import { runOwner } from '../lib/owner.mjs';
-import { resolveRepoRoot, featuresDir } from '../lib/repo.mjs';
+import { resolveRepoRoot, featuresDir, controlInvokerPath } from '../lib/repo.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolveRepoRoot(__dirname);
-const cli = join(repoRoot, 'skills/verify/control-invoker.mjs');
+const cli = controlInvokerPath(repoRoot);
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -25,6 +25,9 @@ function runCli(args) {
     env: process.env,
   });
 }
+
+assert(repoRoot.endsWith('/corpus') === false, `repo root resolved to corpus instead of repository: ${repoRoot}`);
+assert(cli === join(repoRoot, 'corpus/skills/verify/control-invoker.mjs'), `unexpected CLI path: ${cli}`);
 
 // 1) prove --dry-run maps command-palette to the real Playwright spec
 {
