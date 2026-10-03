@@ -74,7 +74,7 @@ function resolveBundledSkillsSourceRoot(context: BundledSkillsContext): string |
     return existsSync(packagedSkills) ? packagedSkills : null;
   }
 
-  const repoSkills = path.join(context.repoRoot, 'skills');
+  const repoSkills = path.join(context.repoRoot, 'corpus', 'skills');
   return existsSync(repoSkills) ? repoSkills : null;
 }
 
