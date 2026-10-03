@@ -57,8 +57,9 @@ describe('retryTask cascade pays a full active-workflow refresh even with no dow
 
           const createdAt = new Date();
           const isActive = i % 100 !== 0; // ~99% active, matching 676/687 real ratio
+          const tasks: TaskState[] = [];
           for (let t = 0; t < 4; t += 1) {
-            seedAdapter.saveTask(wfId, {
+            tasks.push({
               id: `${wfId}/t${t}`,
               description: realisticDescription,
               prompt: realisticPrompt,
@@ -70,6 +71,7 @@ describe('retryTask cascade pays a full active-workflow refresh even with no dow
               execution: isActive && t === 3 ? {} : { exitCode: 0 },
             } as TaskState);
           }
+          seedAdapter.saveTasks(wfId, tasks);
         }
       } finally {
         seedAdapter.close();
