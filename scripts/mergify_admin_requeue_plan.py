@@ -309,8 +309,6 @@ def repair_crash_reason(
 
 
 # Safety invariant: machine/runner (infra) failures spend tries so DO1 stops hammering;
-# only superseded and capacity-deferred skip the try budget. capacity-deferred stays pending.
-# A repair-attempts-reset row for the same unit discards earlier history after an explicit reset.
 CODE_REPAIR_CAP_EXCLUDED_OUTCOMES = frozenset({"superseded", "capacity-deferred"})
 REPAIR_ATTEMPTS_RESET_KIND = "repair-attempts-reset"
 # Safety invariant: after an infra settle, infra-repair owns the unit for this TTL before Mergify may file another repair.
