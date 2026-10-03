@@ -67,8 +67,8 @@ start_body = start_match.group("body")
 required_needles = [
     "const launchWorkspacePath = this.createLaunchWorkspace(task.id);",
     "handle.workspacePath = launchWorkspacePath;",
-    "void this.run(handle, task, launchWorkspacePath);",
-    "const result = await runMergeGateActionImpl(this.host, task);",
+    "void this.run(handle, task, launchWorkspacePath,",
+    "const result = await runMergeGateActionImpl(this.host, task,",
     "workspacePath: result.taskChanges.execution.workspacePath ?? launchWorkspacePath",
 ]
 missing = [needle for needle in required_needles if needle not in source]
