@@ -11,6 +11,7 @@ const WORKFLOW_COUNT = 50;
 const ADD_P95_BUDGET_MS = 200;
 const DRAIN_BUDGET_MS = 5_000;
 const KNOWN_DISPATCH_ERROR = 'known mutation storm dispatch failure';
+const describeHighResource = process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? describe : describe.skip;
 
 function percentile(values: number[], percent: number): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -57,7 +58,7 @@ async function waitForDrain(adapter: SQLiteAdapter, intentIds: number[]): Promis
   }
 }
 
-describe('submit latency under a workflow mutation queue storm (repro)', () => {
+describeHighResource('submit latency under a workflow mutation queue storm (repro)', () => {
   const adapters: SQLiteAdapter[] = [];
   const tempDirs: string[] = [];
   const originalHome = process.env.HOME;
