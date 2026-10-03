@@ -8,11 +8,11 @@ import { dirname } from 'node:path';
 import { resolveProve } from '../lib/prove.mjs';
 import { runCatalogCheck, REQUIRED_SIDEBAR_TESTIDS } from '../lib/catalog.mjs';
 import { runOwner } from '../lib/owner.mjs';
-import { resolveRepoRoot, featuresDir } from '../lib/repo.mjs';
+import { controlInvokerPath, resolveRepoRoot, featuresDir } from '../lib/repo.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolveRepoRoot(__dirname);
-const cli = join(repoRoot, 'skills/verify/control-invoker.mjs');
+const cli = controlInvokerPath(repoRoot);
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -28,6 +28,7 @@ function runCli(args) {
 
 // 1) prove --dry-run maps command-palette to the real Playwright spec
 {
+  assert(cli.includes('corpus/skills/verify/control-invoker.mjs'), `expected corpus skill CLI path, got: ${cli}`);
   const resolved = resolveProve(featuresDir(repoRoot), 'command-palette');
   assert(resolved.ok, `resolveProve failed: ${resolved.error}`);
   assert(

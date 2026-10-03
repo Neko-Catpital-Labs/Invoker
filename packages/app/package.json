@@ -20,8 +20,8 @@
     },
     "extraResources": [
       {
-        "from": "../../skills",
-        "to": "skills"
+        "from": "../../corpus/skills",
+        "to": "corpus/skills"
       },
       {
         "from": "../../release/embedded-cli/invoker-cli",

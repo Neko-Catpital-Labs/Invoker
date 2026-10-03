@@ -1343,7 +1343,7 @@ tasks:
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
-      planDoctorScriptPath: join(process.cwd(), '../../skills/plan-to-invoker/scripts/skill-doctor.sh'),
+      planDoctorScriptPath: join(process.cwd(), '../../corpus/skills/plan-to-invoker/scripts/skill-doctor.sh'),
     });
     if (!sent.ok) throw new Error(sent.error);
     expect(sent.draftPlanAvailable).toBe(false);

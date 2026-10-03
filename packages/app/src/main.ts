@@ -705,7 +705,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
-const planDoctorScriptPath = path.join(repoRoot, 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
+const planDoctorScriptPath = path.join(repoRoot, 'corpus', 'skills', 'plan-to-invoker', 'scripts', 'skill-doctor.sh');
 
 function loadInvokerEnvFiles(): void {
   const profileEnvPath = process.env.INVOKER_ENV_PATH ?? path.join(homedir(), '.invoker', '.env');
