@@ -25,6 +25,7 @@ describe('thrash detector signature submission plan', () => {
     expect(plan.tasks[0].prompt).toContain('signature/review-loop');
     expect(plan.tasks[0].prompt).toContain('wf-1/fix, wf-2/fix');
     expect(plan.tasks[0].prompt).toContain('123, 124');
+    expect(plan.tasks[0].prompt).toContain('Do not merge, land, approve, or bypass review.');
   });
 
   it('runs only the headless plan submission command and no direct review mutation', () => {
