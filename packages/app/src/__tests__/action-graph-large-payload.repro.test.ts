@@ -8,7 +8,9 @@ import { Orchestrator } from '@invoker/workflow-core';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import type { InvokerConfig } from '../config.js';
 
-describe('action graph snapshot with large payloads (ui-read-scale proof)', () => {
+const describeHighResource = process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? describe : describe.skip;
+
+describeHighResource('action graph snapshot with large payloads (ui-read-scale proof)', () => {
   let tmpDir: string | undefined;
   let adapter: SQLiteAdapter | undefined;
 
