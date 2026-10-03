@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -65,6 +65,16 @@ describe('thrash detector worker signature submission', () => {
       'run',
       expect.stringMatching(/review-gate-loop.*pt1h\.yaml$/),
     ]);
+
+    const planFile = commandRunner.mock.calls[0]?.[0].args[2];
+    expect(typeof planFile).toBe('string');
+    const planYaml = await readFile(planFile as string, 'utf8');
+    expect(planYaml).toContain('onFinish: pull_request');
+    expect(planYaml).toContain('mergeMode: external_review');
+    expect(planYaml).toContain('Recurring task ids: wf-a/fix, wf-b/fix');
+    expect(planYaml).toContain('Recurring PR ids: 101, 102');
+    expect(planYaml).toContain('- same review-gate failure repeated twice in the window');
+    expect(planYaml).toContain('Do not merge, land, approve, or bypass review.');
   });
 
   it('does not resubmit for the same signature within the same window', async () => {
