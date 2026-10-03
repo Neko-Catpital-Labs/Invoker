@@ -29,6 +29,7 @@ import {
   jobNameIsMapped,
   loadEmptyState,
   liveQueryHasNonTerminalWork,
+  loadState,
   loadWatchConfigFile,
   needsHumanRepairFilingKind,
   normalizeState,
@@ -40,7 +41,9 @@ import {
   repairFilingKind,
   resolveRepairFilingSubject,
   resolveJobFailureIdentities,
+  resolveStateDbPath,
   resolveStateDir,
+  resolveStateJsonPath,
   resolveTargetRepo,
   RECOVERY_COOLDOWN_MS,
   saveState,
@@ -1791,38 +1794,95 @@ describe('watch-target-repo config resolution', () => {
   });
 });
 
-describe('saveState', () => {
-  it('writes a parseable state file and leaves no temporary file behind', () => {
+describe('saveState / loadState sqlite', () => {
+  it('round-trips through state.sqlite and leaves no JSON behind', () => {
     const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-save-'));
     try {
-      const stateFile = join(dir, 'state.json');
       const state = loadEmptyState();
-      saveState(state, { stateFile });
+      state.lastProcessedRunId = 42;
+      state.heads.abc = {
+        sha: 'abc',
+        branch: 'master',
+        firstRunId: 1,
+        lastRunId: 1,
+        createdAt: '2026-10-01T00:00:00Z',
+        jobs: {},
+      };
+      const failure = makeFailure({ firstBadSha: 'abc' });
+      state.activeFailures[failureStorageKey(failure)] = failure;
 
-      assert.deepEqual(JSON.parse(readFileSync(stateFile, 'utf8')), normalizeState(state));
-      assert.deepEqual(readdirSync(dir), ['state.json']);
+      saveState(state, { stateDir: dir });
+      const loaded = loadState({ stateDir: dir });
+
+      assert.deepEqual(loaded, normalizeState(state));
+      assert.equal(existsSync(resolveStateDbPath(dir)), true);
+      assert.equal(existsSync(resolveStateJsonPath(dir)), false);
+      assert.equal(
+        readdirSync(dir).some((name) => name.endsWith('.tmp')),
+        false,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('keeps the previous state file intact and removes the temporary file when the write throws', () => {
+  it('keeps the previous sqlite commit when a write throws before COMMIT', () => {
     const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-save-'));
     try {
-      const stateFile = join(dir, 'state.json');
-      const previous = JSON.stringify(normalizeState(loadEmptyState()), null, 2);
-      writeFileSync(stateFile, previous);
-      const failingWrite = (path, data) => {
-        writeFileSync(path, data.slice(0, 5));
-        throw new Error('ENOSPC: no space left on device');
-      };
+      const previous = loadEmptyState();
+      previous.lastProcessedRunId = 7;
+      saveState(previous, { stateDir: dir });
 
+      const next = loadEmptyState();
+      next.lastProcessedRunId = 99;
       assert.throws(
-        () => saveState(loadEmptyState(), { stateFile, writeFile: failingWrite }),
-        (error) => error.message.includes(stateFile) && error.message.includes('ENOSPC'),
+        () => saveState(next, {
+          stateDir: dir,
+          beforeCommit: () => {
+            throw new Error('ENOSPC: no space left on device');
+          },
+        }),
+        (error) => error.message.includes(resolveStateDbPath(dir)) && error.message.includes('ENOSPC'),
       );
-      assert.equal(readFileSync(stateFile, 'utf8'), previous);
-      assert.deepEqual(readdirSync(dir), ['state.json']);
+
+      assert.deepEqual(loadState({ stateDir: dir }), normalizeState(previous));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates readable state.json once into state.sqlite', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-migrate-'));
+    try {
+      const state = loadEmptyState();
+      state.lastProcessedRunId = 123;
+      writeFileSync(resolveStateJsonPath(dir), JSON.stringify(state));
+
+      const loaded = loadState({ stateDir: dir });
+      assert.deepEqual(loaded, normalizeState(state));
+      assert.equal(existsSync(resolveStateDbPath(dir)), true);
+      assert.equal(existsSync(resolveStateJsonPath(dir)), false);
+      const migrated = readdirSync(dir).filter((name) => name.startsWith('state.json.migrated-'));
+      assert.equal(migrated.length, 1);
+      assert.deepEqual(loadState({ stateDir: dir }), normalizeState(state));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers existing state.sqlite over a leftover state.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-prefer-'));
+    try {
+      const sqliteState = loadEmptyState();
+      sqliteState.lastProcessedRunId = 50;
+      saveState(sqliteState, { stateDir: dir });
+
+      const jsonOnly = loadEmptyState();
+      jsonOnly.lastProcessedRunId = 999;
+      writeFileSync(resolveStateJsonPath(dir), JSON.stringify(jsonOnly));
+
+      assert.deepEqual(loadState({ stateDir: dir }), normalizeState(sqliteState));
+      assert.equal(existsSync(resolveStateJsonPath(dir)), true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1832,6 +1892,27 @@ describe('saveState', () => {
 describe('loadState corrupt file recovery', () => {
   it('moves an unreadable state file aside and returns empty state instead of crash-looping', () => {
     const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-corrupt-'));
+    try {
+      const stateFile = resolveStateJsonPath(dir);
+      writeFileSync(stateFile, '{"groups": {"x": "trunc');
+      const loaded = loadState({ stateDir: dir });
+
+      assert.deepEqual(loaded, normalizeState(loadEmptyState()));
+      assert.equal(existsSync(stateFile), false);
+      assert.equal(existsSync(resolveStateDbPath(dir)), false);
+      const corruptFiles = readdirSync(dir).filter((name) => name.startsWith('state.json.corrupt-'));
+      assert.equal(corruptFiles.length, 1);
+
+      saveState(loadEmptyState(), { stateDir: dir });
+      assert.equal(existsSync(resolveStateDbPath(dir)), true);
+      assert.equal(existsSync(resolveStateJsonPath(dir)), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('quarantines corrupt JSON via module STATE_DIR env for the subprocess entry path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-watch-corrupt-env-'));
     try {
       const stateFile = join(dir, 'state.json');
       writeFileSync(stateFile, '{"groups": {"x": "trunc');
