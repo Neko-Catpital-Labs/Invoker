@@ -12,7 +12,7 @@ src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 
 # The provisioning notice must be emitted BEFORE the merge action (the clone happens inside it).
 notice = src.find("Preparing gate workspace")
-action = src.find("await runMergeGateActionImpl(this.host, task)")
+action = src.find("runMergeGateActionImpl(this.host, task")
 if notice == -1:
     raise SystemExit("missing provisioning notice in merge gate run()")
 if action == -1 or notice > action:
