@@ -8,6 +8,7 @@ const SAMPLE_COUNT = 5;
 const BUDGET_MS = 200;
 const LARGE_WORKFLOW_COUNT = Number(process.env.INVOKER_REPRO_WORKFLOW_COUNT ?? '1000');
 const TASKS_PER_SEEDED_WORKFLOW = 5;
+const describeHighResource = process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? describe : describe.skip;
 
 type LoadedModules = {
   SQLiteAdapter: typeof import('@invoker/data-store').SQLiteAdapter;
@@ -216,7 +217,7 @@ async function measureIntakeAck(workflowCount: number): Promise<Measurement> {
   };
 }
 
-describe('headless plan intake latency under workflow table growth', () => {
+describeHighResource('headless plan intake latency under workflow table growth', () => {
   afterEach(async () => {
     if (fixture) {
       await fixture.adapter.close();
