@@ -307,7 +307,7 @@ tasks:
       Implementation details: |
         Clone https://github.com/EdbertChan/catstack.git. Follow engine/skills/reflect/SKILL.md against ${jsonlPath}.
         Skill/hook/methodology -> catstack PR. Invoker harness/prompt/product -> commit in this task's worktree only.
-        For Invoker changes, do not push and do not open a PR: this workflow's merge gate owns Invoker publication (onFinish: pull_request). Never merge.
+        For Invoker changes, do not push, do not open a PR, and do not edit live PR metadata (\`gh pr edit\`, title/body changes, labels, comments, or review state): this workflow's merge gate owns Invoker publication (onFinish: pull_request). Never merge.
       Pass condition: Exit 0 when acceptance criteria hold.
     dependencies:
       - repro-thrash
