@@ -8,6 +8,7 @@ import {
 } from './action-graph-diagnostics.js';
 
 const ACTION_GRAPH_PAYLOAD_MAX_CHARS = 2500;
+const ACTION_GRAPH_EVENT_LIMIT = 10;
 
 function needsActionGraphDetail(status: string): boolean {
   switch (status) {
@@ -32,9 +33,12 @@ export function buildCurrentActionGraphSnapshot(args: {
   persistence: SQLiteAdapter;
   invokerConfig: InvokerConfig;
 }): ActionGraphResponse {
-  args.orchestrator.syncAllFromDb();
-  const tasks = args.orchestrator.getAllTasks();
   const workflows = args.persistence.listWorkflows();
+  let tasks = args.orchestrator.getAllTasks();
+  if (tasks.length === 0 && workflows.length > 0) {
+    args.orchestrator.syncAllFromDb();
+    tasks = args.orchestrator.getAllTasks();
+  }
 
   const attemptsByTaskId = new Map<string, ReturnType<SQLiteAdapter['loadActionGraphAttempts']>>();
   const eventsByTaskId = new Map<string, ReturnType<SQLiteAdapter['getEvents']>>();
@@ -46,8 +50,8 @@ export function buildCurrentActionGraphSnapshot(args: {
     );
     eventsByTaskId.set(
       task.id,
-      args.persistence.getEventsSlim?.(task.id, 'desc', 20, ACTION_GRAPH_PAYLOAD_MAX_CHARS)
-        ?? args.persistence.getEvents(task.id, 'desc', 20),
+      args.persistence.getEventsSlim?.(task.id, 'desc', ACTION_GRAPH_EVENT_LIMIT, ACTION_GRAPH_PAYLOAD_MAX_CHARS)
+        ?? args.persistence.getEvents(task.id, 'desc', ACTION_GRAPH_EVENT_LIMIT),
     );
   }
 

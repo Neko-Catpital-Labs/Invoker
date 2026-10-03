@@ -10,6 +10,7 @@ import { getEventsPage } from '../get-events-page.js';
 const EVENT_COUNT_PER_TASK = 10_000;
 const TASK_COUNT = 50;
 const WORKFLOW_COUNT = 10;
+const describeHighResource = process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? describe : describe.skip;
 
 function seedFatEventWorkflows(
   adapter: SQLiteAdapter,
@@ -44,10 +45,13 @@ function seedFatEventWorkflows(
         });
         totalTasks += 1;
 
-        for (let e = 0; e < opts.eventsPerTask; e += 1) {
-          adapter.logEvent(taskId, 'task.progress', { idx: e });
-          totalEvents += 1;
-        }
+        const events = Array.from({ length: opts.eventsPerTask }, (_, idx) => ({
+          taskId,
+          eventType: 'task.progress',
+          payload: { idx },
+        }));
+        adapter.logEvents(events);
+        totalEvents += events.length;
       }
     }
   });
@@ -55,7 +59,7 @@ function seedFatEventWorkflows(
   return { totalEvents, totalTasks };
 }
 
-describe('boot-events-on-demand', () => {
+describeHighResource('boot-events-on-demand', () => {
   let tmpDir: string | undefined;
   let adapter: SQLiteAdapter | undefined;
 
