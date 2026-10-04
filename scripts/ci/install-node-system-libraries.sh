@@ -11,6 +11,8 @@ set -euo pipefail
 probe_soname="${CI_INSTALL_PROBE_SONAME:-}"
 fallback_package="${CI_INSTALL_FALLBACK_PACKAGE:-}"
 IFS=' ' read -r -a probe_commands <<< "${CI_INSTALL_PROBE_COMMANDS:-}"
+apt_lock_timeout_seconds="${CI_INSTALL_APT_LOCK_TIMEOUT_SECONDS:-120}"
+apt_lock_options=(-o "DPkg::Lock::Timeout=${apt_lock_timeout_seconds}")
 
 has_library() {
   if [ -z "$probe_soname" ]; then
@@ -40,16 +42,16 @@ if [ -n "${CI_INSTALL_NO_APT_ERROR:-}" ] && ! command -v apt-get >/dev/null 2>&1
 fi
 
 if [ "$(id -u)" -eq 0 ]; then
-  apt-get update
+  apt-get "${apt_lock_options[@]}" update
   # shellcheck disable=SC2086
-  apt-get install -y $CI_INSTALL_PACKAGES
+  apt-get "${apt_lock_options[@]}" install -y $CI_INSTALL_PACKAGES
   exit 0
 fi
 
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-  sudo -n apt-get update
+  sudo -n apt-get "${apt_lock_options[@]}" update
   # shellcheck disable=SC2086
-  sudo -n apt-get install -y $CI_INSTALL_PACKAGES
+  sudo -n apt-get "${apt_lock_options[@]}" install -y $CI_INSTALL_PACKAGES
   exit 0
 fi
 
@@ -59,6 +61,7 @@ if [ -n "$fallback_package" ] && [ "${#missing_commands[@]}" -eq 0 ]; then
   (
     cd "$fallback_dir"
     apt_options=(
+      "${apt_lock_options[@]}"
       -o "Dir::State=$fallback_dir/apt-state"
       -o "Dir::State::status=/var/lib/dpkg/status"
       -o "Dir::Cache=$fallback_dir/apt-cache"
