@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -504,6 +504,44 @@ export function isInvokerRepoUrl(repoUrl: string | undefined): boolean {
   if (!match) return false;
   const [, owner, repo] = match;
   return INVOKER_REPO_OWNER_RE.test(owner) && repo.toLowerCase() === 'invoker';
+}
+
+export type PublishMode = 'stack' | 'single';
+
+export const PUBLISH_MODE_DECLARATION_PATH = '.invoker/publish-mode';
+
+export function parsePublishMode(value: unknown, source: string): PublishMode | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`${source} must be "stack" or "single"`);
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  if (trimmed === 'stack' || trimmed === 'single') return trimmed;
+  throw new Error(`${source} must be "stack" or "single", got "${trimmed}"`);
+}
+
+export function readPublishModeDeclaration(repoDir: string | undefined): PublishMode | undefined {
+  if (!repoDir) return undefined;
+  const file = join(repoDir, PUBLISH_MODE_DECLARATION_PATH);
+  if (!existsSync(file)) return undefined;
+  let contents: string;
+  try {
+    contents = readFileSync(file, 'utf8');
+  } catch (error) {
+    throw new Error(
+      `${PUBLISH_MODE_DECLARATION_PATH} exists in ${repoDir} but could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return parsePublishMode(contents, `${PUBLISH_MODE_DECLARATION_PATH} in ${repoDir}`);
+}
+
+export function resolvePublishMode(args: {
+  repoUrl?: string;
+  declaredMode?: PublishMode;
+}): PublishMode {
+  if (args.declaredMode) return args.declaredMode;
+  return isInvokerRepoUrl(args.repoUrl) ? 'stack' : 'single';
 }
 
 export function buildMakePrStackPublishPrompt(args: {

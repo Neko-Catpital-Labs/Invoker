@@ -18,6 +18,7 @@ interface PlanOptions {
   secondClaim?: string;
   secondLane?: string;
   secondCommand?: string;
+  publishMode?: string;
 }
 
 function buildPlan(options: PlanOptions = {}): string {
@@ -28,6 +29,7 @@ function buildPlan(options: PlanOptions = {}): string {
     secondClaim = 'Second claim about docs',
     secondLane = 'docs',
     secondCommand,
+    publishMode,
   } = options;
   const secondTaskBody = secondCommand
     ? `    command: "${secondCommand}"`
@@ -37,6 +39,7 @@ function buildPlan(options: PlanOptions = {}): string {
     `onFinish: ${onFinish}`,
     `mergeMode: ${mergeMode}`,
     `repoUrl: ${repoUrl}`,
+    ...(publishMode === undefined ? [] : [`publishMode: ${publishMode}`]),
     'tasks:',
     '  - id: first',
     '    description: |',
@@ -88,5 +91,21 @@ describe('parsePlan review claim count', () => {
 
   it('accepts multi-claim plans that do not publish a PR', () => {
     expect(() => parsePlan(buildPlan({ onFinish: 'none', mergeMode: 'manual' }))).not.toThrow();
+  });
+
+  it('accepts multi-claim plans for a non-Invoker repo that declares stack publishing', () => {
+    expect(() => parsePlan(buildPlan({ publishMode: 'stack' }))).not.toThrow();
+  });
+
+  it('rejects multi-claim plans for an Invoker repo that declares single publishing', () => {
+    expect(() => parsePlan(buildPlan({
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      publishMode: 'single',
+    }))).toThrow(/carries 2 review claims/);
+  });
+
+  it('rejects a publishMode that is neither stack nor single', () => {
+    expect(() => parsePlan(buildPlan({ publishMode: 'stak' })))
+      .toThrow(/field "publishMode" must be "stack" or "single", got "stak"/);
   });
 });
