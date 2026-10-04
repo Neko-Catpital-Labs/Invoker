@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
 import { hasReservedTaskIdPrefix, isPathSafeId, normalizeWorkflowBaseBranch, parseTaskFreshnessSpec, planPublicationAuthorityViolation } from '@invoker/workflow-core';
-import { isInvokerRepoUrl, reviewClaimSlices } from '@invoker/execution-engine';
+import { parsePublishMode, resolvePublishMode, reviewClaimSlices } from '@invoker/execution-engine';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
@@ -116,6 +116,7 @@ export interface RawPlan {
   mergeMode?: string;
   reviewProvider?: string;
   repoUrl?: string;
+  publishMode?: string;
   scratch?: boolean;
   poolId?: string;
   intermediateRepoUrl?: string;
@@ -634,11 +635,19 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     };
   });
 
+  const declaredPublishMode = (() => {
+    try {
+      return parsePublishMode(raw.publishMode, `${ownerLabel} field "publishMode"`);
+    } catch (error) {
+      throw new PlanParseError(error instanceof Error ? error.message : String(error));
+    }
+  })();
+
   if (
     !scratch
     && mergeMode !== 'no_op'
     && (onFinish === 'pull_request' || mergeMode === 'external_review')
-    && !isInvokerRepoUrl(raw.repoUrl)
+    && resolvePublishMode({ repoUrl: raw.repoUrl, declaredMode: declaredPublishMode }) === 'single'
   ) {
     const claims = reviewClaimSlices(tasks.map((t) => ({ description: t.description, command: t.command })));
     if (claims.length > 1) {
@@ -696,6 +705,7 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
     baseBranch: workflow.baseBranch ?? stack.baseBranch,
     mergeMode: workflow.mergeMode ?? stack.mergeMode,
     reviewProvider: workflow.reviewProvider ?? stack.reviewProvider,
+    publishMode: workflow.publishMode ?? stack.publishMode,
     visualProof: workflow.visualProof ?? stack.visualProof,
     externalDependencies: externalDependencies.length > 0 ? externalDependencies : workflow.externalDependencies,
   };
