@@ -58,7 +58,7 @@ mapfile -t plans < <(find "$TMP/plans" -type f -name '*.yaml' | sort)
 [ "${#plans[@]}" -ge 2 ] || fail "expected at least 2 generated plans, got ${#plans[@]}" "$out"
 
 for plan in "${plans[@]}"; do
-  if output="$(PATH="$ORIGINAL_PATH" bash "$ROOT/skills/plan-to-invoker/scripts/validate-plan.sh" "$plan" 2>&1)"; then
+  if output="$(PATH="$ORIGINAL_PATH" bash "$ROOT/corpus/skills/plan-to-invoker/scripts/validate-plan.sh" "$plan" 2>&1)"; then
     printf '%s\n' "$output" | jq -e . >/dev/null 2>&1 \
       || fail "validator output was not valid JSON for $plan" "$output"
     continue

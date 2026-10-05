@@ -47,7 +47,7 @@ reviewGate:
       required: true
 EOF
 set +e
-out="$(bash skills/plan-to-invoker/scripts/validate-plan.sh "$plan" 2>&1)"
+out="$(bash corpus/skills/plan-to-invoker/scripts/validate-plan.sh "$plan" 2>&1)"
 exit_code=$?
 set -e
 if [[ $exit_code -eq 0 ]]; then

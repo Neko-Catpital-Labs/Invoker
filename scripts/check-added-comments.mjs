@@ -22,8 +22,8 @@ const MARKDOWN_FENCE_LANGUAGE_EXTENSIONS = new Map([
 ]);
 
 const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([
-  'skills/admin-bypass-sweep/SKILL.md',
-  'skills/plan-to-invoker/playbooks/verify-then-build.md',
+  'corpus/skills/admin-bypass-sweep/SKILL.md',
+  'corpus/skills/plan-to-invoker/playbooks/verify-then-build.md',
 ]);
 
 const PYTHON_FILES_GRANDFATHERED_BEFORE_PYTHON_COVERAGE_LANDED = new Set([
@@ -157,7 +157,7 @@ function isCheckedFile(filePath, { ignoreGrandfathered = false } = {}) {
 
 function isCheckedSkillMarkdownFile(filePath, { ignoreGrandfathered = false } = {}) {
   const normalized = filePath.split(path.sep).join('/');
-  if (!normalized.startsWith('skills/') || path.extname(normalized) !== '.md') {
+  if (!normalized.startsWith('corpus/skills/') || path.extname(normalized) !== '.md') {
     return false;
   }
   if (!ignoreGrandfathered && MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED.has(normalized)) {

@@ -254,8 +254,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
-    '+++ b/skills/foo/SKILL.md',
+    'diff --git a/corpus/skills/foo/SKILL.md b/corpus/skills/foo/SKILL.md',
+    '+++ b/corpus/skills/foo/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```js',
     '+const value = true; // explains the obvious',
@@ -269,8 +269,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
-    '+++ b/skills/foo/SKILL.md',
+    'diff --git a/corpus/skills/foo/SKILL.md b/corpus/skills/foo/SKILL.md',
+    '+++ b/corpus/skills/foo/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```bash',
     '+# Safety invariant: wait for GitHub to recompute mergeability before merging.',
@@ -282,8 +282,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
-    '+++ b/skills/foo/SKILL.md',
+    'diff --git a/corpus/skills/foo/SKILL.md b/corpus/skills/foo/SKILL.md',
+    '+++ b/corpus/skills/foo/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```bash',
     '+# mergeable can read UNKNOWN immediately after a base change',
@@ -297,8 +297,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/foo/SKILL.md b/skills/foo/SKILL.md',
-    '+++ b/skills/foo/SKILL.md',
+    'diff --git a/corpus/skills/foo/SKILL.md b/corpus/skills/foo/SKILL.md',
+    '+++ b/corpus/skills/foo/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```yaml',
     '+# this yaml comment is not a checked language, so it is not flagged',
@@ -310,8 +310,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/admin-bypass-sweep/SKILL.md b/skills/admin-bypass-sweep/SKILL.md',
-    '+++ b/skills/admin-bypass-sweep/SKILL.md',
+    'diff --git a/corpus/skills/admin-bypass-sweep/SKILL.md b/corpus/skills/admin-bypass-sweep/SKILL.md',
+    '+++ b/corpus/skills/admin-bypass-sweep/SKILL.md',
     '@@ -0,0 +1,3 @@',
     '+```js',
     '+const value = true; // explains the obvious',
@@ -327,8 +327,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/skills/plan-to-invoker/playbooks/verify-then-build.md b/skills/plan-to-invoker/playbooks/verify-then-build.md',
-    '+++ b/skills/plan-to-invoker/playbooks/verify-then-build.md',
+    'diff --git a/corpus/skills/plan-to-invoker/playbooks/verify-then-build.md b/corpus/skills/plan-to-invoker/playbooks/verify-then-build.md',
+    '+++ b/corpus/skills/plan-to-invoker/playbooks/verify-then-build.md',
     '@@ -0,0 +1,3 @@',
     '+```bash',
     '+invoker-ui --headless delete-all   # optional: avoid PlanConflictError',
@@ -344,7 +344,7 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
     '+++ b/docs/foo.md',
     '@@ -0,0 +1,3 @@',
     '+```js',
-    '+const value = true; // outside skills/, never checked',
+    '+const value = true; // outside corpus/skills/, never checked',
     '+```',
     '',
   ].join('\n');
@@ -357,13 +357,13 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
     execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: root, stdio: 'ignore' });
-    mkdirSync(path.join(root, 'skills/foo'), { recursive: true });
-    writeFileSync(path.join(root, 'skills/foo/SKILL.md'), '# Foo\n\nDo the thing.\n');
+    mkdirSync(path.join(root, 'corpus/skills/foo'), { recursive: true });
+    writeFileSync(path.join(root, 'corpus/skills/foo/SKILL.md'), '# Foo\n\nDo the thing.\n');
     execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root, stdio: 'ignore' });
 
     writeFileSync(
-      path.join(root, 'skills/foo/SKILL.md'),
+      path.join(root, 'corpus/skills/foo/SKILL.md'),
       ['# Foo', '', 'Do the thing.', '', '```js', 'const value = true; // explains the obvious', '```', ''].join('\n'),
     );
     assert.throws(
@@ -381,26 +381,26 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
     execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: root, stdio: 'ignore' });
-    mkdirSync(path.join(root, 'skills/foo'), { recursive: true });
+    mkdirSync(path.join(root, 'corpus/skills/foo'), { recursive: true });
     writeFileSync(
-      path.join(root, 'skills/foo/SKILL.md'),
+      path.join(root, 'corpus/skills/foo/SKILL.md'),
       ['# Admin', '', '```bash', '# Safety invariant: wait for GitHub to recompute mergeability before merging.', 'sleep 5', '```', ''].join('\n'),
     );
     const output = execFileSync(
       process.execPath,
-      [scriptPath, '--root', root, '--file', 'skills/foo/SKILL.md'],
+      [scriptPath, '--root', root, '--file', 'corpus/skills/foo/SKILL.md'],
       { encoding: 'utf8' },
     );
     assert.match(output, /Checked added source lines; no disallowed comments found\./);
 
     writeFileSync(
-      path.join(root, 'skills/foo/SKILL.md'),
+      path.join(root, 'corpus/skills/foo/SKILL.md'),
       ['# Admin', '', '```bash', '# explains the next command', 'sleep 5', '```', ''].join('\n'),
     );
     assert.throws(
       () => execFileSync(
         process.execPath,
-        [scriptPath, '--root', root, '--file', 'skills/foo/SKILL.md'],
+        [scriptPath, '--root', root, '--file', 'corpus/skills/foo/SKILL.md'],
         { encoding: 'utf8' },
       ),
       /newly-added comment/,
