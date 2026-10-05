@@ -3342,6 +3342,76 @@ test.describe('Visual proof capture', () => {
     await expect(dialog.getByText('Running workflows')).toBeVisible();
     await captureScreenshot(page, 'start-ready-recreate-failed-pending-and-running-dialog');
   });
+
+  test('pink-theme-dark-home — default home surface for the pink theme', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await expect(page.getByTestId('app-sidebar')).toBeVisible();
+    await captureScreenshot(page, 'pink-theme-dark-home');
+  });
+
+  test('pink-theme-command-palette — palette open over the app backdrop', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await expect(page.getByTestId('app-sidebar')).toBeVisible();
+
+    await page.keyboard.press('Meta+K');
+    await expect(page.getByTestId('command-palette')).toHaveAttribute('data-state', 'open');
+    await captureScreenshot(page, 'pink-theme-command-palette');
+  });
+
+  test('pink-theme-terminal — embedded terminal pane in the drawer', async ({ page, testDir }) => {
+    await loadPlan(page, TEST_PLAN);
+
+    const workspacePath = path.join(testDir, 'pink-theme-terminal-workspace');
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now, workspacePath },
+        },
+      },
+    ]);
+
+    await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
+
+    const taskCard = page.locator('[title$="task-alpha"]').first();
+    await expect(taskCard).toBeVisible({ timeout: 10000 });
+    await taskCard.dispatchEvent('dblclick');
+
+    await expect(page.getByTestId('terminal-drawer-body')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid^="terminal-pane-"]').first()).toBeVisible();
+
+    await captureScreenshot(page, 'pink-theme-terminal');
+  });
+
+  test('pink-theme-inspector-text — crash preserved inspector copy', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'failed',
+          execution: { crashPreservedAt: new Date('2026-03-04T05:06:07.000Z') },
+        },
+      },
+    ]);
+
+    await page
+      .getByTestId('selected-workflow-mini-dag')
+      .locator('.react-flow__node[data-testid$="task-alpha"]')
+      .click({ force: true });
+    await expect(page.getByTestId('workflow-inspector-shell')).toBeVisible();
+
+    const crashPanel = page.getByTestId('inspector-crash-preserved');
+    await expect(crashPanel).toBeVisible();
+    await expect(crashPanel.getByRole('button', { name: 'Restart Task' })).toBeVisible();
+
+    await captureScreenshot(page, 'pink-theme-inspector-text');
+  });
 });
 
 test.describe('Unknown terminal status visual proof', () => {
