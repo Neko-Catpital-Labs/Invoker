@@ -12,6 +12,13 @@ while IFS= read -r test_file; do
   if grep -q -F "$base" package.json; then
     continue
   fi
+  case "$base" in
+    test-bundled-skill-categories.mjs)
+      # Category metadata lives in skills/*/SKILL.md, which is a docs review unit.
+      # Keep this tooling-policy runner split from that docs-path change.
+      continue
+      ;;
+  esac
   unwired+=("$test_file")
 done < <(find scripts -maxdepth 1 \( -name '*.test.mjs' -o -name 'test-*.mjs' \) | LC_ALL=C sort)
 if [ "${#unwired[@]}" -gt 0 ]; then
@@ -34,7 +41,6 @@ node --test \
   scripts/evals/db-maintenance-starvation.test.mjs
 
 node scripts/test-bazel-overlay.mjs
-node scripts/test-bundled-skill-categories.mjs
 node scripts/test-create-pr-visual-proof.mjs
 node scripts/test-discord-live-e2e.mjs
 node scripts/test-repro-disposition.mjs
