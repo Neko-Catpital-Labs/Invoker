@@ -58,7 +58,7 @@ export function AttachWorkflowPicker({
       data-testid="attach-workflow-picker"
       data-state={open ? 'open' : 'closed'}
       className={[
-        'fixed inset-0 z-50 flex items-start justify-center bg-black/70 px-4 pt-[18vh]',
+        'fixed inset-0 z-50 flex items-start justify-center bg-[#FC68DC]/70 px-4 pt-[18vh]',
         open ? '' : 'hidden',
       ].join(' ')}
       onMouseDown={(event) => {
