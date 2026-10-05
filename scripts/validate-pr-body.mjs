@@ -48,6 +48,10 @@ const BLOCKER_LABEL = /Blocker:(.*)$/i;
 const NOT_RUN_GUIDANCE = 'Either run the check and paste its result, or name what stops it with `Blocker: <what stops it>` on the same line or on the next non-empty line.';
 const MEASURED_GUIDANCE = 'Add a visible ## Measured section with a `Command:` line plus ### Base and ### Head rows that each hold that command\'s pasted output in a fenced block, or write `none: <reason>` when the slice has nothing to measure. Content inside <details> does not count.';
 const VALID_REVIEW_LANES = new Set(['behavior', 'refactor', 'proof', 'cleanup', 'policy', 'docs']);
+const SKILL_ROOT_REHOME_SUPPORT_FILES = new Set([
+  'scripts/test-submit-workflow-chain.sh',
+  'scripts/test-suites/required/14-verify-catalog-check.sh',
+]);
 
 const MERMAID_BLOCK_PATTERN = /```mermaid[^\n]*\n([\s\S]*?)```/gi;
 const MERMAID_LABEL_QUOTE_GUIDANCE = 'Quote Mermaid labels that contain prose or code-ish text, for example A["reviewGate.artifacts[] is pending"].';
@@ -391,6 +395,49 @@ export function scopeKindsForChangedFiles(changedFiles = []) {
   return Array.from(kinds).sort();
 }
 
+function normalizeSkillRootReferences(text) {
+  return String(text).replace(/\bcorpus\/skills(?=\/|\b)/g, 'skills');
+}
+
+function contentOnlyRehomesSkillRoot(file) {
+  const oldContent = String(file.oldContent || '');
+  const newContent = String(file.newContent || '');
+  if (!/\b(?:skills|corpus\/skills)\b/.test(`${oldContent}\n${newContent}`)) return false;
+  return normalizeSkillRootReferences(oldContent) === normalizeSkillRootReferences(newContent);
+}
+
+function isSkillRootRehomeRename(file) {
+  return file.changeType === 'rename'
+    && String(file.oldPath || '').startsWith('skills/')
+    && String(file.newPath || '').startsWith('corpus/skills/')
+    && (
+      (!file.oldContent && !file.newContent)
+      || contentOnlyRehomesSkillRoot(file)
+    );
+}
+
+function isSkillRootRehomeSupportEdit(file) {
+  if (!SKILL_ROOT_REHOME_SUPPORT_FILES.has(file.path)) return false;
+  return contentOnlyRehomesSkillRoot(file);
+}
+
+function skillRootRehomeNeutralPaths(diffText = '') {
+  if (!diffText) return new Set();
+  const paths = new Set();
+  for (const file of parseUnifiedDiff(diffText)) {
+    if (isSkillRootRehomeRename(file) || isSkillRootRehomeSupportEdit(file)) {
+      if (file.path) paths.add(file.path);
+    }
+  }
+  return paths;
+}
+
+function changedFilesForScope(changedFiles = [], diffText = '') {
+  const neutralPaths = skillRootRehomeNeutralPaths(diffText);
+  if (neutralPaths.size === 0) return changedFiles;
+  return changedFiles.filter((changedFile) => !neutralPaths.has(changedFile));
+}
+
 function formatKinds(kinds) {
   return Array.from(kinds).sort().join(', ');
 }
@@ -663,10 +710,11 @@ export async function validatePrBody(body, options = {}) {
   }
 
   if (reviewLane && options.changedFiles?.length) {
-    errors.push(...validatePrScope({ changedFiles: options.changedFiles, reviewLane, body: trimmed }));
+    const scopeChangedFiles = changedFilesForScope(options.changedFiles, options.diffText);
+    errors.push(...validatePrScope({ changedFiles: scopeChangedFiles, reviewLane, body: trimmed }));
     errors.push(...validateReviewUnitChangedFiles({
       declaredReviewUnit: reviewUnit,
-      changedFiles: options.changedFiles,
+      changedFiles: scopeChangedFiles,
       context: 'PR body',
     }));
     errors.push(...validateKnownReviewBoundaries({

@@ -904,6 +904,67 @@ assert(
   'behavior lane should reject repro/benchmark files in the same PR',
 );
 
+const skillRootRehomeDiff = `diff --git a/skills/admin-bypass-sweep/SKILL.md b/corpus/skills/admin-bypass-sweep/SKILL.md
+similarity index 100%
+rename from skills/admin-bypass-sweep/SKILL.md
+rename to corpus/skills/admin-bypass-sweep/SKILL.md
+diff --git a/skills/make-pr/SKILL.md b/corpus/skills/make-pr/SKILL.md
+similarity index 98%
+rename from skills/make-pr/SKILL.md
+rename to corpus/skills/make-pr/SKILL.md
+--- a/skills/make-pr/SKILL.md
++++ b/corpus/skills/make-pr/SKILL.md
+@@ -1 +1 @@
+-Read skills/make-pr before publication.
++Read corpus/skills/make-pr before publication.
+diff --git a/scripts/test-submit-workflow-chain.sh b/scripts/test-submit-workflow-chain.sh
+--- a/scripts/test-submit-workflow-chain.sh
++++ b/scripts/test-submit-workflow-chain.sh
+@@ -1 +1 @@
+-test -d skills/plan-to-invoker
++test -d corpus/skills/plan-to-invoker
+diff --git a/scripts/test-suites/required/14-verify-catalog-check.sh b/scripts/test-suites/required/14-verify-catalog-check.sh
+--- a/scripts/test-suites/required/14-verify-catalog-check.sh
++++ b/scripts/test-suites/required/14-verify-catalog-check.sh
+@@ -1 +1 @@
+-node skills/verify/lib/catalog.mjs
++node corpus/skills/verify/lib/catalog.mjs
+diff --git a/packages/shell/src/bundled-skills.ts b/packages/shell/src/bundled-skills.ts
+--- a/packages/shell/src/bundled-skills.ts
++++ b/packages/shell/src/bundled-skills.ts
+@@ -1 +1 @@
+-const source = 'skills';
++const source = 'corpus/skills';
+`;
+const skillRootRehomeChangedFiles = [
+  'corpus/skills/admin-bypass-sweep/SKILL.md',
+  'corpus/skills/make-pr/SKILL.md',
+  'scripts/test-submit-workflow-chain.sh',
+  'scripts/test-suites/required/14-verify-catalog-check.sh',
+  'packages/shell/src/bundled-skills.ts',
+];
+const skillRootRehomeBody = validMinimal.replace('- routing', '- activation-surface');
+const skillRootRehomeErrors = await validatePrBody(skillRootRehomeBody, {
+  changedFiles: skillRootRehomeChangedFiles,
+  diffText: skillRootRehomeDiff,
+});
+assert(
+  skillRootRehomeErrors.length === 0,
+  `behavior-lane loader follow-up should accept mechanical skill-root rehome context when the diff proves it, got: ${skillRootRehomeErrors.join('; ')}`,
+);
+
+const nonMechanicalSkillRootSupportErrors = await validatePrBody(skillRootRehomeBody, {
+  changedFiles: skillRootRehomeChangedFiles,
+  diffText: skillRootRehomeDiff.replace(
+    '+test -d corpus/skills/plan-to-invoker',
+    '+test -d corpus/skills/plan-to-invoker && ./run-extra-check',
+  ),
+});
+assert(
+  nonMechanicalSkillRootSupportErrors.some((error) => error.includes('Review lane behavior cannot ship with policy files')),
+  'support-script edits that do more than rewrite the skill root should still count as policy files',
+);
+
 const policyScopeErrors = await validatePrBody(validMinimal.replace('- behavior', '- policy'), {
   changedFiles: [
     'scripts/create-pr.mjs',
