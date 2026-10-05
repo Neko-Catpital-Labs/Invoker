@@ -7,5 +7,6 @@ node scripts/agentic-context-score.mjs --self-test
 bash scripts/test-scrub-handoff-artifacts.sh
 bash scripts/test-plan-handoff-scrub-gate.sh
 bash scripts/test-plan-to-invoker-skill.sh
+bash scripts/run-root-script-tests.sh
 export INVOKER_WORKSPACE_TEST_CONCURRENCY=1
 exec bash scripts/workspace-test.sh
