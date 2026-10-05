@@ -8,9 +8,9 @@ weighted contract in `rubric.md`, with the condition hidden from the judge.
 ## Check and plan
 
 ```bash
-python3 scripts/run_skill_evals.py validate --cases evals/verify/cases.jsonl
+python3 scripts/run_skill_evals.py validate --cases workspace/evals/verify/cases.jsonl
 python3 scripts/run_skill_evals.py plan \
-  --cases evals/verify/cases.jsonl --trials 3 --include-comparator
+  --cases workspace/evals/verify/cases.jsonl --trials 3 --include-comparator
 ```
 
 Keep prompts identical across conditions. Do not reveal the condition name,
@@ -22,14 +22,14 @@ comparisons.
 
 ```bash
 python3 scripts/run_skill_evals.py run \
-  --cases evals/verify/cases.jsonl --runner claude --condition baseline \
+  --cases workspace/evals/verify/cases.jsonl --runner claude --condition baseline \
   --trials 3 --budget-usd 12.50 \
-  --output evals/verify/results/responses.jsonl
+  --output workspace/evals/verify/results/responses.jsonl
 
 python3 scripts/run_skill_evals.py run \
-  --cases evals/verify/cases.jsonl --runner claude --condition candidate \
+  --cases workspace/evals/verify/cases.jsonl --runner claude --condition candidate \
   --condition-skill skills/verify/SKILL.md --trials 3 --budget-usd 12.50 \
-  --output evals/verify/results/responses.jsonl
+  --output workspace/evals/verify/results/responses.jsonl
 ```
 
 The LLM run is local/dispatch only in v1 and is advisory; it is not
@@ -42,7 +42,7 @@ Write one blind score object per response with `case_id`, `trial`, `condition`,
 the five dimension scores, `blocker`, and `notes`, then run:
 
 ```bash
-python3 scripts/run_skill_evals.py score evals/verify/results/scores.jsonl
+python3 scripts/run_skill_evals.py score workspace/evals/verify/results/scores.jsonl
 ```
 
 Record exact CLI and model versions with published results. Do not call LLM

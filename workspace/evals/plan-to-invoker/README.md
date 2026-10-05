@@ -34,7 +34,7 @@ python3 scripts/run_skill_evals.py run \
   --condition baseline \
   --trials 3 \
   --budget-usd 12.50 \
-  --output evals/plan-to-invoker/results/responses.jsonl
+  --output workspace/evals/plan-to-invoker/results/responses.jsonl
 
 python3 scripts/run_skill_evals.py run \
   --runner claude \
@@ -42,7 +42,7 @@ python3 scripts/run_skill_evals.py run \
   --condition-skill skills/plan-to-invoker/SKILL.md \
   --trials 3 \
   --budget-usd 12.50 \
-  --output evals/plan-to-invoker/results/responses.jsonl
+  --output workspace/evals/plan-to-invoker/results/responses.jsonl
 ```
 
 The default Claude runner reports dollar cost and receives the remaining condition budget on
@@ -74,7 +74,7 @@ Blind the `condition` field before judging. Write one JSON object per response w
 Then apply the release gate:
 
 ```bash
-python3 scripts/run_skill_evals.py score evals/plan-to-invoker/results/scores.jsonl
+python3 scripts/run_skill_evals.py score workspace/evals/plan-to-invoker/results/scores.jsonl
 ```
 
 Record the exact CLI and model versions with published results. Do not compare conditions
