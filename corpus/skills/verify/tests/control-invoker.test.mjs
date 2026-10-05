@@ -12,7 +12,7 @@ import { resolveRepoRoot, featuresDir } from '../lib/repo.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolveRepoRoot(__dirname);
-const cli = join(repoRoot, 'skills/verify/control-invoker.mjs');
+const cli = join(repoRoot, 'corpus/skills/verify/control-invoker.mjs');
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
