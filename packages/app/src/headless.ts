@@ -12,6 +12,7 @@
 import type { BundledSkillsInstallMode, BundledSkillsStatus } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
+import { HARNESS_REGISTRATION_HINT } from '@invoker/shell/bundled-skills';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -258,6 +259,9 @@ function writeSkillsInstallReport(
   }
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
+  }
+  if (mode !== 'uninstall') {
+    process.stdout.write(`${HARNESS_REGISTRATION_HINT}\n`);
   }
   if (status.lastInstallError) {
     process.stderr.write(`MCP skipped: ${status.lastInstallError}\n`);

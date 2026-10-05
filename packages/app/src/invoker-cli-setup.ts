@@ -89,9 +89,9 @@ function summarizeCliInstall(result: CliInstallResult): string {
 }
 
 function summarizeHelpers(status: BundledSkillsStatus): string {
-  const targets = [...status.targets, ...status.commandTargets, ...status.mcpTargets];
+  const targets = [...status.targets, ...status.commandTargets];
   const installed = targets.filter((target) => target.installed && target.upToDate).length;
-  const summary = `Installed ${status.bundledSkillNames.length} bundled helper set(s) across ${installed}/${targets.length} available target(s).`;
+  const summary = `Installed ${status.bundledSkillNames.length} bundled helper set(s) under Invoker home (${installed}/${targets.length} target(s)). Harness MCP stays opt-in.`;
   if (!status.lastInstallError) return summary;
   return `${summary} MCP skipped: ${status.lastInstallError}`;
 }

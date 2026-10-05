@@ -53,18 +53,14 @@ describe('installBundledSkills pruning', () => {
       const context = installContext(resourcesRoot, invokerHomeRoot);
       installBundledSkills(context);
 
-      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
-        mkdirSync(join(fakeHome, target, 'user-created'), { recursive: true });
-      }
+      mkdirSync(join(invokerHomeRoot, 'skills', 'user-created'), { recursive: true });
       rmSync(join(resourcesRoot, 'skills', 'dropped'), { recursive: true, force: true });
       installBundledSkills(context);
 
-      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
-        const targetRoot = join(fakeHome, target);
-        expect(existsSync(join(targetRoot, 'invoker-kept'))).toBe(true);
-        expect(existsSync(join(targetRoot, 'invoker-dropped'))).toBe(false);
-        expect(existsSync(join(targetRoot, 'user-created'))).toBe(true);
-      }
+      const targetRoot = join(invokerHomeRoot, 'skills');
+      expect(existsSync(join(targetRoot, 'invoker-kept'))).toBe(true);
+      expect(existsSync(join(targetRoot, 'invoker-dropped'))).toBe(false);
+      expect(existsSync(join(targetRoot, 'user-created'))).toBe(true);
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
@@ -85,10 +81,8 @@ describe('installBundledSkills pruning', () => {
       installBundledSkills(context);
       installBundledSkills(context, 'install', 'core');
 
-      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
-        expect(existsSync(join(fakeHome, target, 'invoker-core-skill'))).toBe(true);
-        expect(existsSync(join(fakeHome, target, 'invoker-optimization-skill'))).toBe(true);
-      }
+      expect(existsSync(join(invokerHomeRoot, 'skills', 'invoker-core-skill'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'skills', 'invoker-optimization-skill'))).toBe(true);
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
