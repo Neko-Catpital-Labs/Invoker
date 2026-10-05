@@ -5213,7 +5213,7 @@ export function App() {
           aria-modal="true"
           aria-label="Search workflows and tasks"
           data-testid="keyboard-search-overlay"
-          className="fixed inset-0 z-40 flex items-start justify-center bg-black/45 px-4 pt-[12vh]"
+          className="fixed inset-0 z-40 flex items-start justify-center bg-[#FC68DC]/45 px-4 pt-[12vh]"
           onClick={() => setSearchOpen(false)}
         >
           <div
@@ -5265,7 +5265,7 @@ export function App() {
           aria-modal="true"
           aria-labelledby="start-ready-preview-title"
           data-testid="start-ready-preview-dialog"
-          className="fixed inset-0 z-40 flex items-start justify-center bg-black/45 px-4 pt-[16vh]"
+          className="fixed inset-0 z-40 flex items-start justify-center bg-[#FC68DC]/45 px-4 pt-[16vh]"
           onClick={() => setStartReadyPreview(null)}
         >
           <div
