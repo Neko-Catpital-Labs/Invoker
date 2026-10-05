@@ -50,6 +50,7 @@ node scripts/test-guarded-behavior-approval.mjs
 node scripts/test-jailbreak-admin-bypass-land.mjs
 node scripts/test-land-stack.mjs
 node scripts/test-migrate-default-execution-harness.mjs
+node scripts/test-pr-body-policy-skill-docs-mix.mjs
 node scripts/test-pr-body-validator.mjs
 node scripts/test-pr-diff-atomicity-multiline-assertion.mjs
 node scripts/test-worker-session-mine-efficiency.mjs
