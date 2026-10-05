@@ -31,6 +31,11 @@ PROOF_TOOLING_POLICY_UNIT_ERROR = (
 )
 NON_TRUNK_PREREQ_ERROR = "automatic tooling-policy split is only supported for base master"
 NON_TRUNK_MANUAL_SPLIT_ERROR = "worker cannot auto-split this PR on a non-trunk base; human stack split required"
+EMPTY_CHERRY_PICK_MARKERS = ("The previous cherry-pick is now empty", "nothing to commit")
+
+
+class EmptyRepairPrerequisiteError(RuntimeError):
+    pass
 
 
 def git_output(cwd: Path, *args: str) -> str:
@@ -39,6 +44,11 @@ def git_output(cwd: Path, *args: str) -> str:
 
 def git_lines(cwd: Path, *args: str) -> tuple[str, ...]:
     return tuple(line.strip() for line in git_output(cwd, *args).splitlines() if line.strip())
+
+
+def is_empty_cherry_pick_failure(exc: subprocess.CalledProcessError) -> bool:
+    combined = "\n".join(str(part) for part in (exc.stdout, exc.stderr) if part)
+    return any(marker in combined for marker in EMPTY_CHERRY_PICK_MARKERS)
 
 
 def hard_reset_work_root(cwd: Path, target: str) -> None:
@@ -354,8 +364,22 @@ def create_repair_prerequisite(
     body = prerequisite_body(pr_number, check_name)
     git_output(cwd, "checkout", "-B", branch_name, f"origin/{TRUNK}")
     git_output(cwd, "reset", "--hard", f"origin/{TRUNK}")
+    applied_commits = 0
     for commit in repair_commits:
-        git_output(cwd, "cherry-pick", commit)
+        try:
+            git_output(cwd, "cherry-pick", commit)
+        except subprocess.CalledProcessError as exc:
+            if is_empty_cherry_pick_failure(exc):
+                git_output(cwd, "cherry-pick", "--skip")
+                continue
+            try:
+                git_output(cwd, "cherry-pick", "--abort")
+            except subprocess.CalledProcessError:
+                pass
+            raise
+        applied_commits += 1
+    if applied_commits == 0:
+        raise EmptyRepairPrerequisiteError("all repair prerequisite cherry-picks were empty")
     validation = validate_current_pr_body(cwd, body, TRUNK)
     if not validation.get("valid"):
         errors = [str(error) for error in validation.get("errors", [])]

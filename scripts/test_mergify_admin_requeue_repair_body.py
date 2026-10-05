@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from scripts import mergify_admin_requeue_repair_body as repair_body
@@ -120,6 +121,152 @@ class RebaseOntoBaseTests(unittest.TestCase):
         # Working tree must be left clean, not mid-rebase.
         status = git(self.repo, "status", "--porcelain")
         self.assertEqual(status, "")
+
+
+class _FakeGh:
+    def __init__(self) -> None:
+        self.created: list[tuple[str, str, str, str, str]] = []
+        self.labels: list[tuple[str, int, str]] = []
+
+    def create_pr(self, repo: str, title: str, body: str, branch: str, base: str) -> dict[str, int]:
+        self.created.append((repo, title, body, branch, base))
+        return {"number": 123}
+
+    def edit_label(self, repo: str, number: int, *, add: str) -> None:
+        self.labels.append((repo, number, add))
+
+
+class _FakeLedger:
+    def __init__(self) -> None:
+        self.records: list[tuple[object, ...]] = []
+
+    def record(self, *args: object, **kwargs: object) -> None:
+        self.records.append((*args, kwargs))
+
+
+class _FakeLogger:
+    def __init__(self) -> None:
+        self.traces: list[tuple[str, dict[str, object]]] = []
+
+    def trace(self, event: str, **kwargs: object) -> None:
+        self.traces.append((event, kwargs))
+
+
+class CreateRepairPrerequisiteCherryPickTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.remote = self.root / "remote.git"
+        self.repo = self.root / "repo"
+        git(self.root, "init", "--bare", str(self.remote))
+        git(self.root, "clone", str(self.remote), str(self.repo))
+        git(self.repo, "config", "user.email", "worker@example.invalid")
+        git(self.repo, "config", "user.name", "Worker Test")
+        git(self.repo, "checkout", "-B", "master")
+        self._write("shared.txt", "base\n")
+        git(self.repo, "add", "shared.txt")
+        git(self.repo, "commit", "-m", "base")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/master")
+        self.start_head = git(self.repo, "rev-parse", "HEAD")
+        self.gh = _FakeGh()
+        self.ledger = _FakeLedger()
+        self.logger = _FakeLogger()
+
+    def _write(self, name: str, content: str) -> None:
+        (self.repo / name).write_text(content, encoding="utf-8")
+
+    def _commit_file(self, message: str, name: str, content: str) -> str:
+        self._write(name, content)
+        git(self.repo, "add", name)
+        git(self.repo, "commit", "-m", message)
+        return git(self.repo, "rev-parse", "HEAD")
+
+    def _create_prerequisite(self, repair_commits: list[str]) -> dict[str, object]:
+        with mock.patch.object(
+            repair_body,
+            "validate_current_pr_body",
+            return_value={"valid": True, "errors": []},
+        ):
+            return repair_body.create_repair_prerequisite(
+                self.gh,
+                self.ledger,
+                self.logger,
+                "Neko-Catpital-Labs/Invoker",
+                self.repo,
+                42,
+                "f" * 40,
+                "required-check",
+                self.start_head,
+                repair_commits,
+                123456,
+            )
+
+    def _git_path(self, name: str) -> Path:
+        value = git(self.repo, "rev-parse", "--git-path", name)
+        path = Path(value)
+        return path if path.is_absolute() else self.repo / path
+
+    def test_empty_pick_among_real_commits_is_skipped_and_branch_is_created(self) -> None:
+        git(self.repo, "checkout", "-B", "repair-source", "master")
+        empty_pick = self._commit_file("duplicate repair content", "already-on-master.txt", "already\n")
+        real_one = self._commit_file("real repair one", "real-one.txt", "one\n")
+        real_two = self._commit_file("real repair two", "real-two.txt", "two\n")
+
+        git(self.repo, "checkout", "master")
+        self._commit_file("master already has duplicate repair", "already-on-master.txt", "already\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/master")
+
+        result = self._create_prerequisite([empty_pick, real_one, real_two])
+
+        branch = str(result["branch"])
+        self.assertIsNotNone(safe_push.remote_branch_sha(branch, remote="origin", cwd=self.repo))
+        self.assertEqual((self.repo / "real-one.txt").read_text(encoding="utf-8"), "one\n")
+        self.assertEqual((self.repo / "real-two.txt").read_text(encoding="utf-8"), "two\n")
+        self.assertEqual(git(self.repo, "rev-list", "--count", f"origin/master..{branch}"), "2")
+        self.assertEqual(
+            git(self.repo, "log", "--format=%s", "--reverse", f"origin/master..{branch}").splitlines(),
+            ["real repair one", "real repair two"],
+        )
+        self.assertFalse(self._git_path("CHERRY_PICK_HEAD").exists())
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_every_empty_pick_raises_named_error_without_pushing_empty_branch(self) -> None:
+        git(self.repo, "checkout", "-B", "repair-source", "master")
+        empty_one = self._commit_file("duplicate repair one", "already-one.txt", "one\n")
+        empty_two = self._commit_file("duplicate repair two", "already-two.txt", "two\n")
+
+        git(self.repo, "checkout", "master")
+        self._commit_file("master already has repair one", "already-one.txt", "one\n")
+        self._commit_file("master already has repair two", "already-two.txt", "two\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/master")
+
+        branch = repair_body.prerequisite_branch_name(42, self.start_head)
+        expected_error = getattr(repair_body, "EmptyRepairPrerequisiteError", RuntimeError)
+        with self.assertRaises(expected_error):
+            self._create_prerequisite([empty_one, empty_two])
+
+        self.assertIsNot(expected_error, RuntimeError)
+        self.assertIsNone(safe_push.remote_branch_sha(branch, remote="origin", cwd=self.repo))
+        self.assertFalse(self._git_path("CHERRY_PICK_HEAD").exists())
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_conflict_aborts_and_propagates_original_cherry_pick_exception(self) -> None:
+        git(self.repo, "checkout", "-B", "repair-source", "master")
+        conflict_commit = self._commit_file("conflicting repair", "shared.txt", "repair\n")
+
+        git(self.repo, "checkout", "master")
+        self._commit_file("conflicting trunk change", "shared.txt", "trunk\n")
+        git(self.repo, "push", "origin", "HEAD:refs/heads/master")
+
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            self._create_prerequisite([conflict_commit])
+
+        self.assertEqual(caught.exception.cmd[:2], ["git", "cherry-pick"])
+        combined = "\n".join(part for part in (caught.exception.stdout, caught.exception.stderr) if part)
+        self.assertIn("CONFLICT", combined)
+        self.assertFalse(self._git_path("CHERRY_PICK_HEAD").exists())
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
 
 
 PR_10742_LIVE_VALIDATION = {
