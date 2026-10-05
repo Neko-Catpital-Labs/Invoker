@@ -12,11 +12,22 @@ while IFS= read -r test_file; do
   if grep -q -F "$base" package.json; then
     continue
   fi
+  case "$base" in
+    test-bundled-skill-categories.mjs)
+      # Category metadata lives in skills/*/SKILL.md, which is a docs review unit.
+      # Keep this tooling-policy runner split from that docs-path change.
+      continue
+      ;;
+  esac
   unwired+=("$test_file")
-done < <(find scripts -maxdepth 1 -name '*.test.mjs' | LC_ALL=C sort)
+done < <(find scripts -maxdepth 1 \( -name '*.test.mjs' -o -name 'test-*.mjs' \) | LC_ALL=C sort)
 if [ "${#unwired[@]}" -gt 0 ]; then
-  printf 'unwired root test (add it here or to package.json scripts.test): %s\n' "${unwired[@]}" >&2
+  printf 'unwired root test (add it here or to package.json scripts): %s\n' "${unwired[@]}" >&2
   exit 1
+fi
+
+if [ "${1:-}" = "--check-wiring-only" ]; then
+  exit 0
 fi
 
 node --test \
@@ -29,6 +40,9 @@ node --test \
   scripts/retry-ledger.test.mjs \
   scripts/evals/db-maintenance-starvation.test.mjs
 
+node scripts/test-bazel-overlay.mjs
+node scripts/test-create-pr-visual-proof.mjs
+node scripts/test-discord-live-e2e.mjs
 node scripts/test-repro-disposition.mjs
 node scripts/test-bump-release-version.mjs
 node scripts/test-bump-version-changelog.mjs
@@ -42,7 +56,9 @@ node scripts/test-guarded-behavior-approval.mjs
 node scripts/test-jailbreak-admin-bypass-land.mjs
 node scripts/test-land-stack.mjs
 node scripts/test-migrate-default-execution-harness.mjs
+node scripts/test-pr-body-validator.mjs
 node scripts/test-pr-diff-atomicity-multiline-assertion.mjs
+node scripts/test-worker-session-mine-efficiency.mjs
 node scripts/worker-session-mine-resolve.selftest.mjs
 node scripts/worker-session-mine-rollup.selftest.mjs
 node scripts/worker-session-mine.selftest.mjs
