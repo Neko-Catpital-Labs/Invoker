@@ -827,6 +827,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install Node runtime and native build dependencies
+        shell: bash
+        env:
+          CI_INSTALL_PACKAGES: libatomic1 build-essential python3
+          CI_INSTALL_PROBE_SONAME: libatomic.so.1
+          CI_INSTALL_PROBE_COMMANDS: make g++ python3
+          CI_INSTALL_NO_APT_ERROR: scheduled-chaos-overload requires libatomic1, build-essential, and python3, but apt-get is unavailable.
+          CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'scheduled-chaos-overload requires libatomic1, build-essential, and python3; run as root or provide passwordless sudo for apt-get.'
+          CI_INSTALL_FALLBACK_PACKAGE: libatomic1
+        run: bash scripts/ci/install-node-system-libraries.sh
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
