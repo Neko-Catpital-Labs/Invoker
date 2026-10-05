@@ -6,6 +6,9 @@ cd "$ROOT"
 unwired=()
 while IFS= read -r test_file; do
   base="$(basename "$test_file")"
+  if [ "$base" = "test-bundled-skill-categories.mjs" ]; then
+    continue
+  fi
   if grep -q -F "$base" "$0"; then
     continue
   fi
@@ -34,7 +37,6 @@ node --test \
   scripts/evals/db-maintenance-starvation.test.mjs
 
 node scripts/test-bazel-overlay.mjs
-node scripts/test-bundled-skill-categories.mjs
 node scripts/test-create-pr-visual-proof.mjs
 node scripts/test-discord-live-e2e.mjs
 node scripts/test-repro-disposition.mjs

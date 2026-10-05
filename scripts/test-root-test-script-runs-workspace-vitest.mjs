@@ -8,6 +8,7 @@ function assert(condition, message) {
 }
 
 const rootPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const rootScriptTests = readFileSync(new URL('./run-root-script-tests.sh', import.meta.url), 'utf8');
 
 for (const scriptName of ['test', 'test:high-resource']) {
   const command = rootPackage.scripts?.[scriptName];
@@ -19,5 +20,14 @@ for (const scriptName of ['test', 'test:high-resource']) {
       + 'validators can never silently replace it',
   );
 }
+
+assert(
+  !/\nnode scripts\/test-bundled-skill-categories\.mjs\b/.test(rootScriptTests),
+  'run-root-script-tests.sh must not wire the bundled-skill category inventory directly; that docs-scope check forces skill markdown changes into tooling-policy PRs',
+);
+assert(
+  rootScriptTests.includes('test-bundled-skill-categories.mjs'),
+  'run-root-script-tests.sh must document the bundled-skill category inventory exclusion so the unwired-test scan does not pull it back in accidentally',
+);
 
 console.log('Root package.json test scripts still run the required workspace Vitest suite.');
