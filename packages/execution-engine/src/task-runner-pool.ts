@@ -810,6 +810,7 @@ export function selectExecutor(
       const worktree = new WorktreeExecutor({
         worktreeBaseDir: resolve(invokerHome, 'worktrees'),
         cacheDir: resolve(invokerHome, 'repos'),
+        invokerHome,
         maxWorktrees: host.maxWorktreesPerRepo,
         agentRegistry: host.executionAgentRegistry,
         provisionCommand: selectedWorktreeTarget?.provisionCommand,
