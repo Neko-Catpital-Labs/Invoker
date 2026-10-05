@@ -1074,6 +1074,39 @@ class PlanStackActions(PlannerTestCase):
         second = self._plan(snapshot, ledger)
         self.assertEqual((second[0].kind, second[0].key), ("comment_blocked", "capped"))
 
+    def test_requeue_cap_counts_distinct_mergify_comments_on_the_same_head(self):
+        ledger = self._ledger()
+        ledger.record("requeue", 1, HEAD, "comment-a")
+        ledger.record("requeue", 1, HEAD, "comment-b")
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", comment_id="comment-c"),
+        )
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual(actions[0].kind, "escalate_requeue_stuck")
+
+    def test_one_prior_requeue_on_another_comment_still_requeues(self):
+        ledger = self._ledger()
+        ledger.record("requeue", 1, HEAD, "comment-a")
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", comment_id="comment-b"),
+        )
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-after-dequeue"))
+
+    def test_requeue_escalation_recorded_under_another_comment_stops_the_next_dequeue(self):
+        ledger = self._ledger()
+        ledger.record("requeue", 1, HEAD, "comment-a")
+        ledger.record("requeue", 1, HEAD, "comment-b")
+        ledger.record("requeue-escalation", 1, HEAD, "comment-a")
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", comment_id="comment-c"),
+        )
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
+
     def test_queue_only_missing_head_check_repairs_from_mergify_failure(self):
         snapshot = pr(
             checks={},
