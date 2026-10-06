@@ -379,7 +379,7 @@ def run_cycle(
                 continue
             elif action.kind == "escalate_requeue_stuck":
                 try:
-                    attempts = ledger.count("requeue", action.pr_number, pr.head_ref_oid, action.key)
+                    attempts = ledger.count_for_head("requeue", action.pr_number, pr.head_ref_oid)
                     outcome = repairer.escalate_stuck_requeue(pr, action.key, attempts, now)
                     if outcome.status == "submitted":
                         print_repair_acknowledged(action, args.json)
@@ -753,7 +753,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--author", help="Limit scan to one author. Default: all authors.")
     parser.add_argument("--state-file", default=str(Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"), help="Ledger JSONL path.")
     parser.add_argument("--pr", type=int, action="append", default=[], help="Limit to a PR; repeatable.")
-    parser.add_argument("--max-requeue-attempts", type=int, default=2, help="Default: 2 per PR/head/dequeue event.")
+    parser.add_argument("--max-requeue-attempts", type=int, default=2, help="Default: 2 per PR and head. A new Mergify comment does not reset the count.")
     parser.add_argument("--max-repair-attempts", type=int, default=3, help="Default: 3 per PR/head/blocker.")
     parser.add_argument("--json", action="store_true", help="Emit one JSON object per decision/action.")
     args = parser.parse_args(argv)

@@ -201,6 +201,16 @@ class StatusIsReadOnlyTest(unittest.TestCase):
 
 
 class StatusFlagWiringTest(unittest.TestCase):
+    def test_requeue_cap_help_is_per_head(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as raised:
+                requeue.parse_args(["--help"])
+        self.assertEqual(raised.exception.code, 0)
+        text = buf.getvalue()
+        self.assertIn("2 per PR and head", text)
+        self.assertNotIn("dequeue event", text)
+
     def test_status_is_a_mode_and_defaults_off(self):
         args = requeue.parse_args(["--once"])
         self.assertFalse(args.status)
