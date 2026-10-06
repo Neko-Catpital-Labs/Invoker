@@ -1497,9 +1497,9 @@ def plan_bottom_progress(
         requeue_key = latest.comment_id or "manual"
     elif "dequeued" in bottom.labels:
         requeue_reason = "eligible-after-dequeued-label"
-    attempts = ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key)
+    attempts = ledger.count_for_head("requeue", bottom.number, bottom.head_ref_oid)
     if attempts >= max_requeue_attempts:
-        if ledger.count("requeue-escalation", bottom.number, bottom.head_ref_oid, requeue_key) == 0:
+        if ledger.count_for_head("requeue-escalation", bottom.number, bottom.head_ref_oid) == 0:
             return Action(
                 "escalate_requeue_stuck",
                 bottom.number,
