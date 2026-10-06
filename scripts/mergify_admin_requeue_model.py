@@ -186,6 +186,16 @@ class Ledger:
             and (repo is None or row.get("repo") == repo)
         )
 
+    def count_for_head(self, kind: str, pr: int, head_sha: str, *, repo: str | None = None) -> int:
+        # Safety invariant: a new Mergify comment id must not reset a per-head cap.
+        return sum(
+            1 for row in self.rows
+            if row.get("kind") == kind
+            and int(row.get("pr", -1)) == pr
+            and row.get("headSha") == head_sha
+            and (repo is None or row.get("repo") == repo)
+        )
+
     def latest(self, kind: str, pr: int, head_sha: str, key: str, *, repo: str | None = None) -> dict[str, object] | None:
         latest_row: dict[str, object] | None = None
         latest_epoch = float("-inf")
