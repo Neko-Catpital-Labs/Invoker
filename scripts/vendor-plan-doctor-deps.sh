@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vendors the plan-doctor's private dependency into
-# skills/plan-to-invoker/scripts/vendor/, so lint-review-units.mjs works from
+# corpus/skills/plan-to-invoker/scripts/vendor/, so lint-review-units.mjs works from
 # ANY copy of the skills/ directory alone -- including a distributed
 # invoker-cli / invoker-slack release tarball (scripts/archive-cli-binary.sh,
 # scripts/archive-slack-binary.sh), which ship skills/ with no packages/, no
@@ -21,7 +21,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VENDOR_DIR="skills/plan-to-invoker/scripts/vendor"
+VENDOR_DIR="corpus/skills/plan-to-invoker/scripts/vendor"
 
 cp scripts/review-unit-rules.mjs "$VENDOR_DIR/review-unit-rules.mjs"
 

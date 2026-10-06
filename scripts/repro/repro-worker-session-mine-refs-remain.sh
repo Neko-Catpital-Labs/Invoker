@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Proof: no scoped repository path still mentions the deleted worker-session-mine
-# skill directory. The sibling slice proves that skill folder under skills/ is
-# gone; this one proves absence of *references* to its path under skills/,
+# skill directory. The sibling slice proves that skill folder under corpus/skills/ is
+# gone; this one proves absence of *references* to its path under corpus/skills/,
 # scripts/, and docs/, which is a distinct property from absence of the
 # directory itself.
 #
@@ -15,12 +15,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-token="skills/""worker-session-mine"
+token="corpus/skills/""worker-session-mine"
 
-if matches="$(git grep -n "$token" -- skills scripts docs)"; then
-  echo "[repro] FAILED: the deleted skill path is still referenced under skills/, scripts/, or docs/:" >&2
+if matches="$(git grep -n "$token" -- corpus/skills scripts docs)"; then
+  echo "[repro] FAILED: the deleted skill path is still referenced under corpus/skills/, scripts/, or docs/:" >&2
   echo "$matches" | sed 's/^/  /' >&2
   exit 1
 fi
 
-echo "[repro] passed: no reference to the deleted skill path remains under skills/, scripts/, or docs/"
+echo "[repro] passed: no reference to the deleted skill path remains under corpus/skills/, scripts/, or docs/"

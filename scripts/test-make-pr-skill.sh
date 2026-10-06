@@ -3,8 +3,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_MD="$REPO_ROOT/skills/make-pr/SKILL.md"
-REVIEW_COMPRESSION_MD="$REPO_ROOT/skills/review-compression/SKILL.md"
+SKILL_MD="$REPO_ROOT/corpus/skills/make-pr/SKILL.md"
+REVIEW_COMPRESSION_MD="$REPO_ROOT/corpus/skills/review-compression/SKILL.md"
 PR_BODY_TEMPLATE="$REPO_ROOT/scripts/pr-body-template.md"
 
 # Tiny shell helpers only. This test does not parse GitHub payloads.
@@ -60,7 +60,7 @@ must_contain "$REVIEW_COMPRESSION_MD" "Evidence before change" "review-compressi
 must_contain "$SKILL_MD" "created, updated, rewritten, split, or republished" "make-pr trigger must include update/split/republication requests"
 must_contain "$SKILL_MD" "When an existing PR changes after its body or proof was written" "make-pr must require rerun after PR diff changes"
 must_contain "$SKILL_MD" "rerun this skill from the current diff before updating the PR" "make-pr must re-author from the current diff"
-must_contain "$SKILL_MD" 'rerun `skills/visual-proof/SKILL.md`' "make-pr must rerun visual proof for changed UI diffs"
+must_contain "$SKILL_MD" 'rerun `corpus/skills/visual-proof/SKILL.md`' "make-pr must rerun visual proof for changed UI diffs"
 must_contain "$SKILL_MD" "Do not reuse earlier proof media after UI behavior changes" "make-pr must forbid stale screenshot or video proof"
 must_contain "$SKILL_MD" "This script handles local image path upload/injection" "make-pr must route media upload through create-pr"
 must_contain "$SKILL_MD" "add or update a focused skill contract test for the exact issue being fixed" "make-pr must require focused tests for skill policy changes"
@@ -176,7 +176,7 @@ must_contain "$SKILL_MD" 'ensure the `## Summary` section still describes the cu
 must_contain "$SKILL_MD" "actually open that exact media yourself" "make-pr skill must require actually opening visual proof media before claiming it"
 must_contain "$SKILL_MD" "Do not trust an automated DOM/test assertion as a substitute for looking" "make-pr skill must reject automated assertions as a substitute for looking at proof"
 must_contain "$SKILL_MD" 'rejects a Visual Proof section that has media but no `Manually inspected:` line' "make-pr skill must document the Manually inspected validator gate"
-must_contain "$SKILL_MD" "skills/prove-it/SKILL.md" "make-pr skill must reference the shared prove-it evidence rule"
+must_contain "$SKILL_MD" "corpus/skills/prove-it/SKILL.md" "make-pr skill must reference the shared prove-it evidence rule"
 must_contain "$SKILL_MD" "Manually inspected: state exactly what you saw when you opened the image or video yourself" "make-pr skill schema must include the Manually inspected template line"
 
 # Proof-lane assertions must test the exact claim, not an easier proxy signal.

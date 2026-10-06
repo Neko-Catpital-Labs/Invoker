@@ -60,7 +60,7 @@ function slugify(text) {
 }
 
 const PATH_IN_PROSE_RE =
-  /\b((?:packages|scripts|skills|docs|plans|packages\/[\w.-]+\/src)\/[\w./@+-]+\.[a-zA-Z0-9]+|CLAUDE\.md|AGENTS\.md|README\.md)\b/;
+  /\b((?:packages|scripts|corpus\/skills|docs|plans|packages\/[\w.-]+\/src)\/[\w./@+-]+\.[a-zA-Z0-9]+|CLAUDE\.md|AGENTS\.md|README\.md)\b/;
 
 function inferFixFile(title, description) {
   const body = `${title}\n${description ?? ''}`;
@@ -313,7 +313,7 @@ function renderBugfixPlan(fields, workDir, sandbox = false) {
   mkdirSync(outDir, { recursive: true });
   const slug = slugify(fields.bugSummary);
   const result = runCmd('bash', [
-    join(REPO_ROOT, 'skills/plan-to-invoker/scripts/render-formula.sh'),
+    join(REPO_ROOT, 'corpus/skills/plan-to-invoker/scripts/render-formula.sh'),
     'bugfix',
     '--var', `repo_url=${fields.repoUrl}`,
     '--var', `base_branch=${env('INVOKER_LINEAR_BASE_BRANCH', 'master')}`,
@@ -359,7 +359,7 @@ function runPlannerCmd(plannerCmd, issue, fields, workDir) {
 
 function runCompleteness(planPath) {
   const result = runCmd('bash', [
-    join(REPO_ROOT, 'skills/plan-to-invoker/scripts/check-planning-completeness.sh'),
+    join(REPO_ROOT, 'corpus/skills/plan-to-invoker/scripts/check-planning-completeness.sh'),
     planPath,
   ]);
   let parsed = null;

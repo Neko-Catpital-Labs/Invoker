@@ -10,7 +10,7 @@
 # For every plan after the first, include "__UPSTREAM_WORKFLOW_ID__" where the
 # previous workflow ID should be injected.
 #
-# Example snippet in each template (matches skills/plan-to-invoker):
+# Example snippet in each template (matches corpus/skills/plan-to-invoker):
 #   externalDependencies:
 #     - workflowId: "__UPSTREAM_WORKFLOW_ID__"
 #       taskId: "__merge__"

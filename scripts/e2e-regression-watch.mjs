@@ -1463,11 +1463,11 @@ export function fileBugfixPlan(failure, opts = {}) {
   const outDir = join(opts.outRoot ?? join(REPO_ROOT, 'plans', 'rendered'), vars.job_slug);
   const varArgs = Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}=${v}`]);
   const run = opts.runCommand ?? runCommand;
-  run('bash', [join(REPO_ROOT, 'skills/plan-to-invoker/scripts/render-formula.sh'), 'ci-regression-watch', ...varArgs, '--out', outDir]);
+  run('bash', [join(REPO_ROOT, 'corpus/skills/plan-to-invoker/scripts/render-formula.sh'), 'ci-regression-watch', ...varArgs, '--out', outDir]);
   const planPath = join(outDir, 'ci-regression-watch.yaml');
   const enableReflect = opts.enableReflect ?? isCiRegressionReflectEnabled(opts.env);
   if (enableReflect && existsSync(planPath)) appendOptionalReflectTask(planPath, vars);
-  run('bash', [join(REPO_ROOT, 'skills/plan-to-invoker/scripts/skill-doctor.sh'), planPath]);
+  run('bash', [join(REPO_ROOT, 'corpus/skills/plan-to-invoker/scripts/skill-doctor.sh'), planPath]);
   if (!opts.dryRun) run('bash', [join(REPO_ROOT, 'submit-plan.sh'), planPath, '--no-track']);
   return { planPath, vars, submitted: !opts.dryRun, reflectEnabled: Boolean(enableReflect) };
 }

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const EVAL_DIR = join(ROOT, 'evals', 'repair-cost');
+const EVAL_DIR = join(ROOT, 'workspace', 'evals', 'repair-cost');
 const FIXTURES = join(EVAL_DIR, 'fixtures');
 const STATUS_SH = join(EVAL_DIR, 'status.sh');
 
@@ -34,7 +34,7 @@ export function buildSplitPrompt(failureClass, statusLine) {
   return [
     `Repair the ${failureClass} failure.`,
     'Poll status only via:',
-    `  bash evals/repair-cost/status.sh ${failureClass}`,
+    `  bash workspace/evals/repair-cost/status.sh ${failureClass}`,
     'Do not read raw logs, gh output, or verify-command transcripts.',
     'Current status:',
     statusLine,
@@ -47,7 +47,7 @@ export function buildCombinedStatusPrompt(statusByClass) {
   return [
     'Coordinate these failure classes. Each class keeps its own claim and agent.',
     'Poll status only via:',
-    '  bash evals/repair-cost/status.sh <merge-conflict|test-failure>',
+    '  bash workspace/evals/repair-cost/status.sh <merge-conflict|test-failure>',
     'Do not read raw logs, gh output, or verify-command transcripts.',
     'Statuses:',
     ...lines,

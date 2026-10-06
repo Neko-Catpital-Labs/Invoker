@@ -141,9 +141,9 @@ test_installs_make_pr_skill_outside_inherited_home() {
   tmp="$(mktemp -d)"
   repo="$tmp/repo"
   home="$tmp/home"
-  mkdir -p "$repo/skills/make-pr/scripts" "$home"
-  printf '# make-pr\n' > "$repo/skills/make-pr/SKILL.md"
-  printf 'echo nested\n' > "$repo/skills/make-pr/scripts/helper.sh"
+  mkdir -p "$repo/corpus/skills/make-pr/scripts" "$home"
+  printf '# make-pr\n' > "$repo/corpus/skills/make-pr/SKILL.md"
+  printf 'echo nested\n' > "$repo/corpus/skills/make-pr/scripts/helper.sh"
 
   agent_home="$(
     INVOKER_E2E_REPO_ROOT="$repo"
