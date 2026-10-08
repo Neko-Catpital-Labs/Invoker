@@ -12,8 +12,8 @@ fi
 N="${INVOKER_REPAIR_COST_EVAL_N:-5}"
 MODEL="${INVOKER_REPAIR_COST_EVAL_MODEL:-gpt-5.4}"
 STATUS_BAND_FACTOR="$(node -e 'import("./scripts/repair-cost-eval.mjs").then(m => console.log(m.STATUS_BAND_FACTOR))')"
-RESULTS_DIR="$ROOT/evals/repair-cost/results"
-TINY_REPO="$ROOT/evals/repair-cost/fixtures/tiny-repo"
+RESULTS_DIR="$ROOT/workspace/evals/repair-cost/results"
+TINY_REPO="$ROOT/workspace/evals/repair-cost/fixtures/tiny-repo"
 MARKER_PREFIX="repair-cost-eval-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$RESULTS_DIR" "$TINY_REPO"
 
@@ -88,11 +88,11 @@ build_split_prompt() {
   local class="$1"
   local marker="$2"
   local status
-  status="$(bash evals/repair-cost/status.sh "$class")"
+  status="$(bash workspace/evals/repair-cost/status.sh "$class")"
   cat <<EOF
 MARKER=${marker}
 Repair the ${class} failure in this tiny fixture repo.
-Poll status only via: bash ${ROOT}/evals/repair-cost/status.sh ${class}
+Poll status only via: bash ${ROOT}/workspace/evals/repair-cost/status.sh ${class}
 Do not read raw logs, gh output, or verify-command transcripts.
 Current status:
 ${status}
@@ -103,12 +103,12 @@ EOF
 build_combined_status_prompt() {
   local marker="$1"
   local s1 s2
-  s1="$(bash evals/repair-cost/status.sh merge-conflict)"
-  s2="$(bash evals/repair-cost/status.sh test-failure)"
+  s1="$(bash workspace/evals/repair-cost/status.sh merge-conflict)"
+  s2="$(bash workspace/evals/repair-cost/status.sh test-failure)"
   cat <<EOF
 MARKER=${marker}
 Coordinate these failure classes. Each class keeps its own claim and agent.
-Poll status only via: bash ${ROOT}/evals/repair-cost/status.sh <merge-conflict|test-failure>
+Poll status only via: bash ${ROOT}/workspace/evals/repair-cost/status.sh <merge-conflict|test-failure>
 Do not read raw logs, gh output, or verify-command transcripts.
 Statuses:
 ${s1}

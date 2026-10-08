@@ -344,7 +344,7 @@ export function classifyScopeKind(filePath) {
   }
   if (path.startsWith('scripts/repro/')) return 'proof';
   if (path.startsWith('packages/app/e2e/visual-proof/')) return 'product-test';
-  if (path.startsWith('skills/') || path.startsWith('docs/') || path.endsWith('.md')) return 'docs';
+  if (path.startsWith('corpus/skills/') || path.startsWith('docs/') || path.endsWith('.md')) return 'docs';
   if (path.startsWith('scripts/') || path.startsWith('.github/')) return 'policy';
   if (
     path.includes('/e2e/')
@@ -633,7 +633,7 @@ export async function validatePrBody(body, options = {}) {
     );
   } else if (options.requiresVisualProof && !hasManualInspectionNote(trimmed)) {
     errors.push(
-      'UI-impacting changes require a "Manually inspected:" line in ## Visual Proof stating exactly what you personally saw when you opened the screenshot or video yourself — a captured file is not proof that anyone looked at it. See skills/prove-it/SKILL.md.',
+      'UI-impacting changes require a "Manually inspected:" line in ## Visual Proof stating exactly what you personally saw when you opened the screenshot or video yourself — a captured file is not proof that anyone looked at it. See corpus/skills/prove-it/SKILL.md.',
     );
   }
 

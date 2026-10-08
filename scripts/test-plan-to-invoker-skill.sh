@@ -4,12 +4,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
+SKILL_DIR="$REPO_ROOT/corpus/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
-REVIEW_COMPRESSION_SKILL="$REPO_ROOT/skills/review-compression/SKILL.md"
-MAKE_PR_SKILL="$REPO_ROOT/skills/make-pr/SKILL.md"
+REVIEW_COMPRESSION_SKILL="$REPO_ROOT/corpus/skills/review-compression/SKILL.md"
+MAKE_PR_SKILL="$REPO_ROOT/corpus/skills/make-pr/SKILL.md"
 SAFETY_INVARIANT_RULE="$REPO_ROOT/.cursor/rules/plan-safety-invariant.mdc"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
@@ -182,7 +182,7 @@ must_contain "$SKILL_MD" "Slack \`plan:\` and agent threads use a separate, orch
 must_contain "$SKILL_MD" "orchestrator-owned Slack plan submission path" "SKILL must document the separate Slack submission owner"
 must_contain "$SKILL_MD" "Do not invoke the CLI or MCP handoff tools from those threads." "SKILL must forbid Slack-thread CLI and MCP submission"
 must_contain "$SKILL_MD" "First produce a Markdown planning artifact at \`plans/invoker-handoff.md\`." "SKILL handoff mode must require a Markdown plan"
-must_contain "$SKILL_MD" "In an Invoker source checkout, still run \`bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>\` before the final submission step." "SKILL handoff mode must keep checkout-local skill-doctor validation"
+must_contain "$SKILL_MD" "In an Invoker source checkout, still run \`bash corpus/skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>\` before the final submission step." "SKILL handoff mode must keep checkout-local skill-doctor validation"
 must_contain "$SKILL_MD" "Prefer the MCP review/submission flow when available: call \`invoker_prepare_plan_review\`, show its ordered steps plus \`confirmationText\`, then call \`invoker_submit_plan\` only after approval unless the review result carries \`confirmationMode: auto_submit\`." "SKILL handoff mode must keep review before submission"
 must_contain "$SKILL_MD" "Outside an Invoker source checkout, \`invoker_prepare_plan_review\` is the canonical review surface and \`invoker_validate_plan\` remains an optional diagnostic, not the approval gate." "SKILL handoff mode must keep outside-checkout review separate from diagnostics"
 must_contain "$SKILL_MD" "Convert the approved Markdown plan to \`plans/invoker-handoff.yaml\`." "SKILL handoff mode must require YAML conversion"
@@ -191,11 +191,11 @@ must_contain "$SKILL_MD" 'Generated implementation plans default to `onFinish: p
 must_contain "$SKILL_MD" "arm \`invoker-cli wait <workflowId>\`" "SKILL handoff mode must park on invoker-cli wait after submit"
 must_contain "$SKILL_MD" "do **not** abandon the session" "SKILL handoff mode must not abandon the session after submit"
 must_contain "$SKILL_MD" 'Before branch or PR/stack publication implied by `onFinish: pull_request` or `onFinish: merge`' "SKILL handoff mode must apply publication procedure to the reviewed outcome"
-must_contain "$SKILL_MD" "skills/make-pr/SKILL.md" "SKILL handoff mode must trigger the PR skill for PR work"
+must_contain "$SKILL_MD" "corpus/skills/make-pr/SKILL.md" "SKILL handoff mode must trigger the PR skill for PR work"
 must_contain "$SKILL_MD" "skill://make-pr/SKILL.md" "SKILL handoff mode must include skill URI fallback for PR work"
 must_contain "$SKILL_MD" 'This is the publication procedure, not a second authorization gate.' "SKILL handoff mode must not require redundant publication authorization"
 must_contain "$SKILL_MD" "multiple review slices" "SKILL handoff mode must define review-compression trigger scope"
-must_contain "$SKILL_MD" "skills/review-compression/SKILL.md" "SKILL handoff mode must trigger review compression for stack work"
+must_contain "$SKILL_MD" "corpus/skills/review-compression/SKILL.md" "SKILL handoff mode must trigger review compression for stack work"
 must_contain "$SKILL_MD" "skill://review-compression/SKILL.md" "SKILL handoff mode must include skill URI fallback for review compression"
 must_contain "$SKILL_MD" "before writing workflow YAML" "SKILL handoff mode must require review compression before workflow YAML"
 must_contain "$SKILL_MD" 'Present plan and submit on confirmation. That confirmation authorizes the reviewed `onFinish` outcome; implementation plans default to GitHub publication through `onFinish: pull_request` without a second approval prompt.' "SKILL intended flow must authorize the reviewed publication outcome"
@@ -239,12 +239,12 @@ must_contain "$REMOTE_MCP_REF" "BatchMode=yes" "Remote MCP reference must docume
 must_contain "$REMOTE_MCP_REF" 'invoker-cli' "Remote MCP reference must keep invoker-cli mcp as the remote command"
 must_contain "$REMOTE_MCP_REF" "do not" "Remote MCP reference must keep failed-probe non-clobber guidance"
 
-must_contain "$SKILL_MD" 'Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface' "SKILL must record the primary doctor gate"
+must_contain "$SKILL_MD" 'Use `corpus/skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface' "SKILL must record the primary doctor gate"
 must_contain "$SKILL_MD" "Schema-only validation or ad hoc individual script checks are not sufficient as the review gate" "SKILL must reject incomplete primary gates"
 must_contain "$SKILL_MD" "Individual validator scripts remain fallback diagnostics only" "SKILL must preserve fallback diagnostics"
 must_contain "$SKILL_MD" "lint-review-units.mjs" "SKILL must document review-unit lint enforcement"
 
-DOCTOR_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/skill-doctor.sh"
+DOCTOR_SCRIPT="$REPO_ROOT/corpus/skills/plan-to-invoker/scripts/skill-doctor.sh"
 DOCTOR_HELP="$(bash "$DOCTOR_SCRIPT" --help)"
 must_output_contain "$DOCTOR_HELP" "skill-doctor.sh: Deterministic orchestrator for plan validation scripts" "skill-doctor --help must expose the deterministic command contract"
 must_output_contain "$DOCTOR_HELP" "Usage: bash skill-doctor.sh [OPTIONS] <plan-file>" "skill-doctor --help must expose usage"
@@ -269,9 +269,9 @@ must_output_contain "$DOCTOR_HELP" "Output: JSON summary of all checks with pass
 STANDALONE_INSTALL_DIR="$(mktemp -d)"
 STANDALONE_INVOKER_HOME="$(mktemp -d)"
 trap 'rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"' EXIT
-cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.sh "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.mjs "$STANDALONE_INSTALL_DIR/"
+cp "$REPO_ROOT"/corpus/skills/plan-to-invoker/scripts/*.sh "$REPO_ROOT"/corpus/skills/plan-to-invoker/scripts/*.mjs "$STANDALONE_INSTALL_DIR/"
 mkdir -p "$STANDALONE_INSTALL_DIR/vendor"
-cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/vendor/*.mjs "$STANDALONE_INSTALL_DIR/vendor/"
+cp "$REPO_ROOT"/corpus/skills/plan-to-invoker/scripts/vendor/*.mjs "$STANDALONE_INSTALL_DIR/vendor/"
 STANDALONE_DOCTOR="$STANDALONE_INSTALL_DIR/skill-doctor.sh"
 STANDALONE_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
 
@@ -326,7 +326,7 @@ trap - EXIT
 
 echo "OK: skill-doctor works from a machine-level standalone install (outside any git checkout)"
 
-# Regression: the vendored copy under skills/plan-to-invoker/scripts/vendor/
+# Regression: the vendored copy under corpus/skills/plan-to-invoker/scripts/vendor/
 # must stay byte-identical to its source, so `resolveReviewUnitRulesModulePath`
 # never silently serves stale logic.
 VENDOR_DIR="$SKILL_DIR/scripts/vendor"
@@ -433,7 +433,7 @@ must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level cover
 must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-context prompt framing for implementation tasks"
 
 # Submit — pilot one head before fan-out, show the plan, one Recommended option
-CHAT_SUBMIT_SKILL="$REPO_ROOT/skills/chat-submit/SKILL.md"
+CHAT_SUBMIT_SKILL="$REPO_ROOT/corpus/skills/chat-submit/SKILL.md"
 must_contain "$SKILL_MD" "Pilot one head before fan-out" "SKILL handoff mode must pilot one head before submitting the rest of a chain"
 must_contain "$SKILL_MD" 'submit ONE head workflow first' "SKILL handoff mode must submit one head first for N>1 template-derived workflows"
 must_contain "$SKILL_MD" 'reaches `running` with an agent session' "SKILL handoff mode must gate fan-out on a running implement task with an agent session"
@@ -462,8 +462,8 @@ must_contain "$TASK_PATTERNS" "must include every test that asserts the old valu
 must_contain "$TASK_PATTERNS" "must not carry a hedged verb in the prompt" "Task patterns must forbid extend-or-create on a create path"
 must_contain "$TASK_PATTERNS" "Never put an anchor word on a task line that names a path or backticked symbol the task creates" "Task patterns must document the owner freshness anchor trap"
 must_contain "$TASK_PATTERNS" "ANCHOR_CLAUSE_PATTERN" "Task patterns must name the owner preflight pattern"
-must_contain "$TASK_PATTERNS" "skills/plan-to-invoker/scripts/freshness-check.mjs" "Task patterns must reference the freshness pre-submit check"
-must_contain "$TASK_PATTERNS" "skills/plan-to-invoker/scripts/unit-triggers.mjs" "Task patterns must reference the unit-triggers pre-submit check"
+must_contain "$TASK_PATTERNS" "corpus/skills/plan-to-invoker/scripts/freshness-check.mjs" "Task patterns must reference the freshness pre-submit check"
+must_contain "$TASK_PATTERNS" "corpus/skills/plan-to-invoker/scripts/unit-triggers.mjs" "Task patterns must reference the unit-triggers pre-submit check"
 must_contain "$SKILL_MD" "step-presubmit-traps" "SKILL step map must include the pre-submit trap step"
 must_contain "$SKILL_MD" "scripts/freshness-check.mjs --ref origin/<baseBranch>" "SKILL step map must run freshness-check against the plan's base ref"
 must_contain "$SKILL_MD" "scripts/unit-triggers.mjs <plan-file>" "SKILL step map must run unit-triggers"
@@ -527,7 +527,7 @@ fi
 # Run validator regression tests
 echo ""
 echo "Running plan validator regression tests..."
-VALIDATOR_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-validate-plan.sh"
+VALIDATOR_TEST_SCRIPT="$REPO_ROOT/corpus/skills/plan-to-invoker/scripts/test-validate-plan.sh"
 if [[ -f "$VALIDATOR_TEST_SCRIPT" ]]; then
   if ! bash "$VALIDATOR_TEST_SCRIPT"; then
     fail "Plan validator regression tests failed"
@@ -539,7 +539,7 @@ fi
 # Run fixture tests
 echo ""
 echo "Running plan-to-invoker fixture tests..."
-FIXTURES_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-fixtures.sh"
+FIXTURES_TEST_SCRIPT="$REPO_ROOT/corpus/skills/plan-to-invoker/scripts/test-fixtures.sh"
 if [[ -f "$FIXTURES_TEST_SCRIPT" ]]; then
   if ! bash "$FIXTURES_TEST_SCRIPT"; then
     fail "Plan-to-invoker fixture tests failed"
@@ -550,7 +550,7 @@ fi
 
 echo ""
 echo "Running policy coverage regression tests..."
-POLICY_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-policy-coverage.sh"
+POLICY_TEST_SCRIPT="$REPO_ROOT/corpus/skills/plan-to-invoker/scripts/test-policy-coverage.sh"
 if [[ -f "$POLICY_TEST_SCRIPT" ]]; then
   if ! bash "$POLICY_TEST_SCRIPT"; then
     fail "Policy coverage regression tests failed"

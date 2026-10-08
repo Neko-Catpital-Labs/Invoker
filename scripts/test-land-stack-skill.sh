@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_MD="$REPO_ROOT/skills/land-stack/SKILL.md"
+SKILL_MD="$REPO_ROOT/corpus/skills/land-stack/SKILL.md"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -67,7 +67,7 @@ must_contain "re-run the exact \`gh pr view\`/queue query in that same turn" \
   "land-stack must require a fresh status query before reporting PR state"
 must_contain "\"Merging\" is not \"merged\"" \
   "land-stack must distinguish an in-progress merge from a completed one"
-must_contain "skills/prove-it/SKILL.md" \
+must_contain "corpus/skills/prove-it/SKILL.md" \
   "land-stack must reference the shared prove-it evidence rule"
 
 echo "OK: land-stack skill contract checks passed"

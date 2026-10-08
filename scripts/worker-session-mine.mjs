@@ -275,7 +275,7 @@ function buildFollowUpPlan({ sessionId, jsonlPath, report, hash, agentName }) {
   return `name: "${name}"
 description: |
   Follow-up reflect/fix for thrashy worker session ${sessionId} (${agentName}).
-  Original repair is untouched. Never merge. Never vendor skills/reflect/.
+  Original repair is untouched. Never merge. Never vendor corpus/skills/reflect/.
 onFinish: pull_request
 mergeMode: external_review
 baseBranch: master
@@ -296,14 +296,14 @@ tasks:
       Reflect via catstack and route each Accepted finding by root cause: catstack gets its own PR; Invoker changes are committed here for the merge gate to publish.
       Review claim: Accepted findings land exactly once, as a catstack PR or an Invoker commit published by this workflow's merge gate, for session ${hash}.
       Review lane: behavior
-      Safety invariant: Never vendor skills/reflect/ into Invoker; never merge; original workflow untouched.
+      Safety invariant: Never vendor corpus/skills/reflect/ into Invoker; never merge; original workflow untouched.
       Acceptance criteria:
       - Summary says no durable finding, lists catstack PR URL(s), or names the Invoker commit(s) left for the merge gate.
-      - test ! -e skills/reflect
+      - test ! -e corpus/skills/reflect
     maxTurns: 30
     prompt: |
       Goal: Reflect on thrashy Invoker worker session ${sessionId} (agent=${agentName}) and land each Accepted finding exactly once, unmerged.
-      Safety invariant: Never vendor skills/reflect/; never merge; do not touch the original repair workflow.
+      Safety invariant: Never vendor corpus/skills/reflect/; never merge; do not touch the original repair workflow.
       Implementation details: |
         Clone https://github.com/EdbertChan/catstack.git. Follow engine/skills/reflect/SKILL.md against ${jsonlPath}.
         Skill/hook/methodology -> catstack PR. Invoker harness/prompt/product -> commit in this task's worktree only.

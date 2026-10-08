@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
-SKILL_FILE="$REPO_ROOT/skills/invoker-setup/SKILL.md"
+SKILL_FILE="$REPO_ROOT/corpus/skills/invoker-setup/SKILL.md"
 CONTRACT_FILE="$REPO_ROOT/packages/contracts/src/prerequisites.ts"
 
 if grep -Eq "id: ['\"]node['\"]" "$CONTRACT_FILE"; then

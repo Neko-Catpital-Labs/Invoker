@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regression test for skills/remote-ci-verify/scripts/run-remote-ci-verify.sh.
+# Regression test for corpus/skills/remote-ci-verify/scripts/run-remote-ci-verify.sh.
 #
 # The script passes env to the remote by prefixing `VAR=value ... bash -se` onto
 # the ssh command. ssh joins its args with spaces, so a multi-word value like
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="$ROOT/skills/remote-ci-verify/scripts/run-remote-ci-verify.sh"
+SCRIPT="$ROOT/corpus/skills/remote-ci-verify/scripts/run-remote-ci-verify.sh"
 
 [[ -f "$SCRIPT" ]] || { echo "FAIL: script not found: $SCRIPT" >&2; exit 1; }
 
