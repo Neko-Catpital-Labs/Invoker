@@ -1,0 +1,29 @@
+---
+description: Keep correlating docs updated whenever behavior or user-facing flows change
+alwaysApply: true
+---
+
+# Keep correlating docs in sync
+
+When you change product behavior, public CLI/UI copy, install/setup flows, skills, or operator procedures in this repo, update the matching docs in the **same change** (same PR / same commit set). Do not leave docs describing the old behavior.
+
+## What to update
+
+Search for and revise every stale reference, typically under:
+
+- `README.md`
+- `docs/` (especially `getting-started.md` and any feature-specific doc)
+- `CLAUDE.md` / `CONTRIBUTING.md` when bootstrap or contributor steps change
+- Sample transcripts and demo strings that mirror user-visible output (e.g. `docs/install-transcript.txt`, quick-install demo text)
+- Skill / onboarding docs that teach the changed flow
+
+## How to decide scope
+
+- User-facing behavior change → update the doc that operators read for that flow.
+- Rename a flag, path, or command → grep the old spelling across `*.md` and fix hits.
+- If no doc exists yet and the change introduces a new operator-facing path, add a short section to the closest existing doc (prefer `docs/getting-started.md` or the feature doc) rather than shipping silent behavior.
+
+## Non-goals
+
+- Do not invent large new doc sets for tiny internal refactors with no operator impact.
+- Do not update untracked personal notes unless the user asks.

@@ -76,7 +76,7 @@ invoker-cli install
 invoker-cli run plans/fixtures/hello-world.yaml --standalone
 ```
 
-`invoker-cli install` installs the first-party Invoker AI helper skills, registers the Invoker MCP server with Codex, Claude, Cursor, and OMP, and enables default workers (`pr-status`, `autofix`, `auto-approve`). It skips Slack/machines. Interactive `invoker-cli setup` still walks those when you want them.
+`invoker-cli install` installs the first-party Invoker AI helper skills under `~/.invoker`, writes an MCP snippet at `~/.invoker/mcp-servers/invoker.json`, and enables default workers (`pr-status`, `autofix`, `auto-approve`). It does **not** modify Cursor / Claude / Codex / OMP configs by default, and it skips Slack/machines. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in without a prompt (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
 
 Or download the platform binary from GitHub Releases:
 
@@ -140,9 +140,9 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker AI helpers inside the app. `invoker-cli install` already installs the helper skills and MCP server; run `invoker-cli setup` (or System Setup in the desktop app) only if you also want optional Slack and remote machine configuration.
+Packaged installs bundle the first-party Invoker AI helpers inside the app. `invoker-cli install` already installs helper skills under `~/.invoker` and the MCP snippet; run `invoker-cli setup` (or System Setup in the desktop app) to optionally register harness MCP/skills (`--register-harnesses` or answer yes to the prompt) and to configure Slack / remote machines.
 
-Then, in Codex, Claude, Cursor, or OMP, ask in normal chat to plan and run durable work through Invoker. Install already installs `invoker-chat-submit` plus MCP review/submit/status tools, so the agent can prepare a review, wait for one approval, submit, and watch without a slash command.
+Then, in Codex, Claude, Cursor, or OMP (after harness registration or a manual snippet merge), ask in normal chat to plan and run durable work through Invoker. `invoker-chat-submit` plus MCP review/submit/status tools prepare a review, wait for one approval, submit, and watch without a slash command.
 
 Explicit fallback:
 
@@ -316,7 +316,7 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers. Prefer normal chat with the installed `invoker-chat-submit` skill and MCP tools; `/invoker-plan-to-invoker "help me plan <change>"` remains the explicit slash-command fallback.
+If you need to turn a product or implementation plan into an Invoker workflow, run `invoker-cli setup` (or System Setup in the desktop app) to install helpers and optionally register harness MCP/skills. Prefer normal chat with `invoker-chat-submit` and MCP tools after harness registration; `/invoker-plan-to-invoker "help me plan <change>"` remains the explicit slash-command fallback.
 
 If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
