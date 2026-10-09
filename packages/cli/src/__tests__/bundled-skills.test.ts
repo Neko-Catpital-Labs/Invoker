@@ -789,6 +789,52 @@ describe('bundled-skills', () => {
     }
   });
 
+  it('registerHarnesses writes MCP/skills into detected harnesses', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const fakeHome = makeTempRoot('invoker-register-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      writePlanToInvokerCommands(resourcesRoot);
+
+      const installed = installBundledSkills(
+        {
+          isPackaged: true,
+          repoRoot,
+          resourcesPath: resourcesRoot,
+          invokerHomeRoot,
+          isInstalled: allHarnessesInstalled,
+        },
+        'install',
+        'all',
+        { registerHarnesses: true },
+      );
+
+      expect(existsSync(join(invokerHomeRoot, 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(fakeHome, '.cursor', 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(fakeHome, '.cursor', 'commands', 'invoker-plan-to-invoker.md'))).toBe(true);
+      expect(existsSync(join(fakeHome, '.cursor', 'mcp.json'))).toBe(true);
+      expect(JSON.parse(readFileSync(join(fakeHome, '.cursor', 'mcp.json'), 'utf-8')).mcpServers.invoker).toEqual({
+        type: 'stdio',
+        command: 'invoker-cli',
+        args: ['mcp'],
+      });
+      expect(existsSync(join(fakeHome, '.cursor', 'rules', 'invoker-execution-precedence.mdc'))).toBe(true);
+      expect(installed.mcpTargets.some((target) => target.id === 'cursor' && target.installed)).toBe(true);
+      expect(installed.instructionTargets?.some((target) => target.id === 'cursor' && target.installed)).toBe(true);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
   it('uninstall reverses Invoker-home writes and leaves unrelated harness files', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
