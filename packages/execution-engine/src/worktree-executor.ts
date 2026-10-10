@@ -3,6 +3,7 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { resolve, join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import type { TaskState } from '@invoker/workflow-core';
 import type { ExecutorStartup, ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executor.js';
 import { RepoPool, type AcquiredWorktree, type RepoPoolLeasePersistence } from './repo-pool.js';
@@ -26,6 +27,11 @@ import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 import { loadLinearEnv } from './remote-agent-env.js';
 import { inspectTaskFreshness } from './task-specification-preflight.js';
+import {
+  cleanupLocalInvokerHome as defaultCleanupLocalInvokerHome,
+  resolveDiskCleanupEnabled,
+  type DiskHeadroomWorkerStore,
+} from './workers/disk-headroom-reclaim.js';
 
 // Re-export for backward compatibility
 export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
@@ -66,6 +72,10 @@ export interface WorktreeExecutorConfig {
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
   /** Optional dependency/bootstrap command run before the task command in local worktrees. */
   provisionCommand?: string;
+  /** Invoker home root used for ENOSPC provisioning recovery cleanup. */
+  invokerHome?: string;
+  /** Test seam for local disk cleanup. Defaults to cleanupLocalInvokerHome. */
+  cleanupLocalDisk?: typeof defaultCleanupLocalInvokerHome;
   /**
    * Per-repo override for `provisionCommand`, keyed by `repoUrl` (normalized —
    * see `normalizeRepoUrlForProvisionLookup`). A workflow whose `repoUrl` has
@@ -118,11 +128,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private readonly claudeCommand: string;
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
   private readonly secretsFile: string | undefined;
+  private readonly invokerHome: string | undefined;
+  private readonly cleanupLocalDisk: typeof defaultCleanupLocalInvokerHome;
   private pool: RepoPool;
   constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
+    this.invokerHome = config.invokerHome;
+    this.cleanupLocalDisk = config.cleanupLocalDisk ?? defaultCleanupLocalInvokerHome;
     this.secretsFile = config.secretsFile
       ?? (existsSync(join(homedir(), '.config', 'invoker', 'secrets.env'))
         ? join(homedir(), '.config', 'invoker', 'secrets.env')
@@ -575,15 +589,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     });
 
     this.setLocalProvisioningTimeout(executionId, Math.max(1, startupDeadlineMs - Date.now()));
-    const provisioning = this.provisionWorktree(
-      acquired.worktreePath,
-      executionId,
-      this.resolveProvisionCommand(repoUrl),
-      startup,
-    );
-    entry.process = provisioning.child;
+    const provisionCommand = this.resolveProvisionCommand(repoUrl);
     try {
-      await provisioning.completion;
+      await this.provisionWorktreeWithDiskRecovery(
+        entry,
+        acquired.worktreePath,
+        executionId,
+        provisionCommand,
+        startup,
+      );
       startup?.check();
       entry.process = null;
       entry.phase = 'running';
@@ -912,6 +926,112 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       startMessage: `[worktree] Provisioning worktree dependencies in ${dir}\n`,
       failurePrefix: 'Worktree provisioning failed:',
     });
+  }
+
+  private async provisionWorktreeWithDiskRecovery(
+    entry: WorktreeEntry,
+    dir: string,
+    executionId: string,
+    command: string,
+    startup?: ExecutorStartup,
+  ): Promise<void> {
+    const first = this.provisionWorktree(dir, executionId, command, startup);
+    entry.process = first.child;
+    try {
+      await first.completion;
+      return;
+    } catch (err) {
+      if (!this.isLocalProvisionDiskFullError(err)) throw err;
+      const recovered = await this.reclaimDiskAfterProvisionEnospc(executionId, startup);
+      if (!recovered) throw err;
+    }
+
+    startup?.check();
+    if (startup?.deadlineMs !== undefined) {
+      this.setLocalProvisioningTimeout(executionId, Math.max(1, startup.deadlineMs - Date.now()));
+    }
+    const retry = this.provisionWorktree(dir, executionId, command, startup);
+    entry.process = retry.child;
+    await retry.completion;
+  }
+
+  private isLocalProvisionDiskFullError(err: unknown): boolean {
+    const message = err instanceof Error
+      ? `${err.name}\n${err.message}\n${err.stack ?? ''}`
+      : String(err);
+    return /\b(?:ERR_PNPM_ENOSPC|ENOSPC|no space left on device)\b/i.test(message);
+  }
+
+  private async reclaimDiskAfterProvisionEnospc(
+    executionId: string,
+    startup?: ExecutorStartup,
+  ): Promise<boolean> {
+    if (!this.invokerHome) {
+      this.emitOutput(
+        executionId,
+        '[worktree] Provisioning failed with ENOSPC, but no Invoker home was configured for cleanup retry.\n',
+      );
+      return false;
+    }
+    if (!resolveDiskCleanupEnabled()) {
+      this.emitOutput(
+        executionId,
+        '[worktree] Provisioning failed with ENOSPC, but disk cleanup is disabled.\n',
+      );
+      return false;
+    }
+    startup?.check();
+    this.emitOutput(
+      executionId,
+      `[worktree] Provisioning failed with ENOSPC; reclaiming Invoker-managed disk under ${this.invokerHome} before one retry.\n`,
+    );
+    try {
+      const result = await this.cleanupLocalDisk({
+        invokerHome: this.invokerHome,
+        targetKey: `local ${this.invokerHome}`,
+        store: this.buildActiveEntryDiskCleanupStore(),
+      });
+      startup?.check();
+      this.emitOutput(
+        executionId,
+        result.ok
+          ? `[worktree] Disk cleanup completed (${result.reason}); retrying provisioning once.\n`
+          : `[worktree] Disk cleanup failed (${result.reason}); provisioning will fail without retry.\n`,
+      );
+      return result.ok;
+    } catch (cleanupErr) {
+      const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+      this.emitOutput(
+        executionId,
+        `[worktree] Disk cleanup failed after provisioning ENOSPC: ${message}\n`,
+      );
+      return false;
+    }
+  }
+
+  private buildActiveEntryDiskCleanupStore(): DiskHeadroomWorkerStore {
+    const workflows: Array<{ id: string; repoUrl?: string }> = [];
+    const tasksByWorkflowId = new Map<string, TaskState[]>();
+    let index = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.completed || !entry.worktreeDir) continue;
+      const workflowId = `active-worktree-${index}`;
+      index += 1;
+      workflows.push({ id: workflowId, repoUrl: entry.request.inputs.repoUrl });
+      tasksByWorkflowId.set(workflowId, [{
+        id: entry.request.actionId,
+        description: entry.request.inputs.description ?? entry.request.actionId,
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {} as TaskState['config'],
+        execution: { workspacePath: entry.worktreeDir },
+      } as TaskState]);
+    }
+    return {
+      listWorkflows: () => workflows,
+      loadTasks: (workflowId) => tasksByWorkflowId.get(workflowId) ?? [],
+    };
   }
 }
 

@@ -462,6 +462,82 @@ describe('WorktreeExecutor', () => {
 
     taskProcess.emit('close', 0, null);
   });
+  it('reclaims local Invoker-managed disk and retries once when provisioning hits ENOSPC', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const firstProvisionProcess = createMockProcess();
+    const secondProvisionProcess = createMockProcess();
+    const provisionProcesses = [firstProvisionProcess, secondProvisionProcess];
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile') {
+        return provisionProcesses.shift() ?? createMockProcess();
+      }
+      return baseImpl!(cmd, args, options);
+    });
+    const cleanupLocalDisk = vi.fn(async () => ({
+      targetKey: 'local /fake/invoker',
+      ok: true,
+      reason: 'critical-cleanup',
+      protectedSkipCount: 1,
+      protectedSkipBytes: 0,
+    }));
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/invoker/repos',
+      worktreeBaseDir: '/fake/invoker/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      invokerHome: '/fake/invoker',
+      cleanupLocalDisk,
+    });
+    const pool = mockPool(provisionedExecutor);
+    pool.acquireWorktree.mockImplementation((_repoUrl: string, branch: string) => {
+      const sanitized = branch.replace(/\//g, '-');
+      return Promise.resolve({
+        clonePath: '/fake/invoker/repos/clone',
+        worktreePath: `/fake/invoker/worktrees/${sanitized}`,
+        branch,
+        release: vi.fn().mockResolvedValue(undefined),
+        softRelease: vi.fn(),
+      });
+    });
+
+    const startPromise = provisionedExecutor.start(makeRequest());
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.filter(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+      )).toHaveLength(1);
+    });
+
+    (firstProvisionProcess.stderr as EventEmitter).emit(
+      'data',
+      "ERR_PNPM_ENOSPC ENOSPC: no space left on device, copyfile '/store/file' -> '/fake/invoker/worktrees/checkout/node_modules/pkg/file'\n",
+    );
+    firstProvisionProcess.emit('close', 1, null);
+
+    await vi.waitFor(() => {
+      expect(cleanupLocalDisk).toHaveBeenCalledTimes(1);
+      expect(mockedSpawn.mock.calls.filter(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+      )).toHaveLength(2);
+    });
+    const cleanupArg = cleanupLocalDisk.mock.calls[0]![0];
+    expect(cleanupArg).toMatchObject({
+      invokerHome: '/fake/invoker',
+      targetKey: 'local /fake/invoker',
+    });
+    const protectedTasks = cleanupArg.store.loadTasks(cleanupArg.store.listWorkflows()[0]!.id);
+    expect(protectedTasks[0]!.execution.workspacePath).toMatch(/^\/fake\/invoker\/worktrees\//);
+
+    secondProvisionProcess.emit('close', 0, null);
+    await startPromise;
+
+    const taskCall = mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo hello',
+    );
+    expect(taskCall).toBeDefined();
+
+    taskProcess.emit('close', 0, null);
+  });
   it('BUG: fails the whole task when the provision command fails only because the repo has no package.json', async () => {
     // Repro for a production incident: a pool's provisionCommand (e.g. this
     // repo's own local-mac/local-fallback `pnpm install --frozen-lockfile`)
