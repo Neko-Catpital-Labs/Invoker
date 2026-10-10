@@ -18,7 +18,7 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, reviewClaimSlices, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import { readPublishModeDeclaration, resolvePublishMode, reviewClaimSlices, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -488,7 +488,11 @@ export async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args
   reviewGate: ReviewGateState;
 }> {
   const reviewClaims = args.workflowId ? workflowReviewClaims(host, args.workflowId) : [];
-  if (isInvokerRepoUrl(args.repoUrl)) {
+  const publishMode = resolvePublishMode({
+    repoUrl: args.repoUrl,
+    declaredMode: readPublishModeDeclaration(args.cwd),
+  });
+  if (publishMode === 'stack') {
     if (!host.publishReviewStackWithMakePrSkill) {
       throw new Error('make-pr skill is required to publish Invoker review stacks');
     }
