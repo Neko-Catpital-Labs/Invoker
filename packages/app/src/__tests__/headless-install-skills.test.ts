@@ -69,6 +69,7 @@ describe('headless install-skills', () => {
 
   it('prints Uninstalled when install-skills uninstall runs', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const installBundledSkills = vi.fn(() => makeStatus());
 
     await runHeadless(['install-skills', 'uninstall'], {
@@ -77,7 +78,9 @@ describe('headless install-skills', () => {
 
     expect(installBundledSkills).toHaveBeenCalledWith('uninstall');
     const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+    const err = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(output).toContain('Uninstalled 2 bundled AI helpers with prefix "invoker-".');
+    expect(err).toContain('prefer `invoker-cli uninstall`');
   });
 
   it('throws a clear error when helper installation is unavailable', async () => {

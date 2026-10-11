@@ -65,6 +65,7 @@ import {
 } from './mcp-workflow-status.js';
 import { defaultConfigPath, runDoctor, runSetup } from './onboarding.js';
 import { runInstall } from './quick-install.js';
+import { runUninstall } from './uninstall.js';
 import {
   applyDesiredStateWorkerToggle,
   applyWorkerToggle,
@@ -239,6 +240,7 @@ function usage(): string {
     '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli install [--demo]',
+    '  invoker-cli uninstall [--dry-run] [--yes] [--keep-data]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
@@ -264,6 +266,7 @@ function usage(): string {
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
     '  install         Quick-install: global cli+ui, doctor --fix, skills+MCP, default workers. Skips Slack/machines.',
+    '  uninstall       Remove Invoker-owned integrations, home data, and global npm packages. Flags: --dry-run, --yes, --keep-data. Run `invoker-cli uninstall --help` for exit codes and coverage.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
@@ -287,13 +290,15 @@ function usage(): string {
     '  --max-wait-ms <ms>  Maximum park time for `wait`. Defaults to 86400000 (24h).',
     '  --poll-interval-ms <ms>  Query interval for `wait`. Defaults to 5000.',
     '  --parallel N    Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.',
-    '  --dry-run       Print matching task IDs for `retry-tasks` without mutating.',
+    '  --dry-run       For `retry-tasks`: print matching task IDs without mutating. For `uninstall`: print the deletion plan and coverage without mutating disk.',
+    '  --yes           For `uninstall` / `setup`: skip confirmation prompts (`uninstall` requires this when stdin is not a TTY).',
+    '  --keep-data     For `uninstall`: skip Invoker home data purge; still remove integrations and global npm packages.',
     '  --force         Let `set` edit a running task; the owner cancels the launched attempt first.',
     '  --              End `set` options; later arguments are passed as values even if they start with --.',
     '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
     '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
     '  --fix            Best-effort install of missing doctor tools.',
-    '  --help           Show this help text.',
+    '  --help           Show this help text (or `invoker-cli uninstall --help` for uninstall coverage).',
     '  --version        Show the CLI version.',
   ].join('\n');
 }
@@ -1614,6 +1619,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'install') {
       return await runInstall(argv.slice(1));
+    }
+    if (argv[0] === 'uninstall') {
+      return await runUninstall(argv.slice(1));
     }
     if (argv[0] === 'setup') {
       return await runSetup(argv.slice(1));
