@@ -25,6 +25,8 @@ import {
   DEFAULT_PR_MAINTENANCE_TARGET_REPO,
   DEFAULT_E2E_AUTOFIX_TARGET_REPO,
   resolveSpendCircuitBreakerWorkerConfig,
+  resolveForceExecution,
+  applyForceExecutionView,
 } from '../config.js';
 import { validateInvokerConfig } from '../config-validation.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -1187,5 +1189,106 @@ describe('resolveSpendCircuitBreakerWorkerConfig', () => {
   it('falls back to a neutral owner label when config does not name the host', () => {
     const resolved = resolveSpendCircuitBreakerWorkerConfig({ remoteTargets: {} } as never);
     expect(resolved.codexDailyGate?.localHostName).toBe('owner');
+  });
+});
+
+
+describe('forceExecution', () => {
+  it('leaves every input unchanged when forceExecution is absent', () => {
+    const force = resolveForceExecution({});
+    expect(force).toBeUndefined();
+
+    const input = { poolId: 'remote_pool', executionAgent: 'codex', runnerKind: 'ssh' as const };
+    const view = applyForceExecutionView(input, force);
+    expect(view).toEqual(input);
+    expect(input).toEqual({ poolId: 'remote_pool', executionAgent: 'codex', runnerKind: 'ssh' });
+  });
+
+  it('treats a blank poolId and executionAgent as no override', () => {
+    expect(resolveForceExecution({ forceExecution: {} })).toBeUndefined();
+    expect(resolveForceExecution({ forceExecution: { poolId: '   ', executionAgent: ' ' } })).toBeUndefined();
+  });
+
+  it('replaces the pool and the agent when both are set', () => {
+    const force = resolveForceExecution({
+      forceExecution: { poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID, executionAgent: 'claude' },
+    });
+    expect(force).toEqual({ poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID, executionAgent: 'claude' });
+
+    const input = { poolId: 'remote_pool', executionAgent: 'codex', runnerKind: 'ssh' as const };
+    expect(applyForceExecutionView(input, force)).toEqual({
+      poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID,
+      executionAgent: 'claude',
+      runnerKind: 'ssh',
+    });
+    expect(input).toEqual({ poolId: 'remote_pool', executionAgent: 'codex', runnerKind: 'ssh' });
+  });
+
+  it('trims the configured poolId and executionAgent', () => {
+    expect(resolveForceExecution({
+      forceExecution: { poolId: '  local-worktree  ', executionAgent: '  claude  ' },
+    })).toEqual({ poolId: 'local-worktree', executionAgent: 'claude' });
+  });
+
+  it('keeps the pool for scratch, docker and merge runner kinds while still forcing the agent', () => {
+    const force = resolveForceExecution({
+      forceExecution: { poolId: BUILT_IN_LOCAL_EXECUTION_POOL_ID, executionAgent: 'claude' },
+    });
+
+    for (const runnerKind of ['scratch', 'docker', 'merge'] as const) {
+      expect(applyForceExecutionView(
+        { poolId: 'remote_pool', executionAgent: 'codex', runnerKind },
+        force,
+      )).toEqual({ poolId: 'remote_pool', executionAgent: 'claude', runnerKind });
+    }
+  });
+
+  it('forces the pool for worktree and ssh runner kinds and when runnerKind is absent', () => {
+    const force = resolveForceExecution({ forceExecution: { poolId: 'forced_pool' } });
+
+    for (const runnerKind of ['worktree', 'ssh'] as const) {
+      expect(applyForceExecutionView({ poolId: 'remote_pool', runnerKind }, force)).toEqual({
+        poolId: 'forced_pool',
+        runnerKind,
+      });
+    }
+    expect(applyForceExecutionView({ poolId: 'remote_pool' }, force)).toEqual({ poolId: 'forced_pool' });
+  });
+
+  it('replaces only the agent when executionAgent alone is set', () => {
+    const force = resolveForceExecution({ forceExecution: { executionAgent: 'claude' } });
+    expect(applyForceExecutionView({ poolId: 'remote_pool', executionAgent: 'codex' }, force)).toEqual({
+      poolId: 'remote_pool',
+      executionAgent: 'claude',
+    });
+  });
+
+  it('preserves unrelated fields on the input view', () => {
+    const force = resolveForceExecution({ forceExecution: { poolId: 'forced_pool' } });
+    expect(applyForceExecutionView({ taskId: 't1', poolId: 'remote_pool' }, force)).toEqual({
+      taskId: 't1',
+      poolId: 'forced_pool',
+    });
+  });
+
+  it('rejects a non-object forceExecution', () => {
+    expect(() => validateInvokerConfig({ forceExecution: 'local-worktree' as never }))
+      .toThrow(/forceExecution must be an object/);
+    expect(() => validateInvokerConfig({ forceExecution: [] as never }))
+      .toThrow(/forceExecution must be an object/);
+  });
+
+  it('rejects a blank poolId or executionAgent', () => {
+    expect(() => validateInvokerConfig({ forceExecution: { poolId: '   ' } }))
+      .toThrow(/forceExecution.poolId must be a non-empty string when set/);
+    expect(() => validateInvokerConfig({ forceExecution: { executionAgent: '' } }))
+      .toThrow(/forceExecution.executionAgent must be a non-empty string when set/);
+  });
+
+  it('accepts an absent forceExecution and a fully set one', () => {
+    expect(() => validateInvokerConfig({})).not.toThrow();
+    expect(() => validateInvokerConfig({
+      forceExecution: { poolId: 'local-worktree', executionAgent: 'claude' },
+    })).not.toThrow();
   });
 });
