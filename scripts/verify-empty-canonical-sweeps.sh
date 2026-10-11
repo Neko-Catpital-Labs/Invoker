@@ -16,7 +16,7 @@ source_globs=(
   --glob '!**/*.test.ts'
   --glob '!**/*.spec.ts'
   --glob '!scripts/verify-empty-canonical-sweeps.sh'
-  --glob '!skills/*/fixtures/**'
+  --glob '!corpus/skills/*/fixtures/**'
 )
 
 rg_source_hits() {
