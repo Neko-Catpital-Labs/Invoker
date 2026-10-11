@@ -22,7 +22,6 @@ const MARKDOWN_FENCE_LANGUAGE_EXTENSIONS = new Map([
 ]);
 
 const MARKDOWN_FILES_GRANDFATHERED_BEFORE_SKILLS_COVERAGE_LANDED = new Set([
-  'skills/admin-bypass-sweep/SKILL.md',
   'skills/plan-to-invoker/playbooks/verify-then-build.md',
 ]);
 
