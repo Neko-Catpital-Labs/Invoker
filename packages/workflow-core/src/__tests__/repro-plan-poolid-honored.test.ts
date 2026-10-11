@@ -142,3 +142,67 @@ tasks:
     expect(task!.config.poolId).toBe('local-mac-only');
   });
 });
+
+describe('repro: forceExecution.poolId wins over plan pins and route rules', () => {
+  const routeRules = [
+    { regex: '\\bpnpm(?:\\s|$)', poolId: 'ssh-pool', strategy: 'route' as const },
+  ];
+  const pools = ['forced-pool', 'ssh-pool', 'pinned-pool'];
+
+  function orchestratorWith(forcePoolId?: string): Orchestrator {
+    return new Orchestrator({
+      persistence: new InMemoryPersistence(),
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 3,
+      defaultPoolId: 'ssh-pool',
+      availablePoolIds: pools,
+      executorRoutingRules: routeRules,
+      ...(forcePoolId !== undefined ? { forcePoolId } : {}),
+    });
+  }
+
+  const pnpmPlan = (poolId?: string) => ({
+    name: 'Force Pool',
+    repoUrl: 'git@github.com:test/repo.git',
+    tasks: [
+      {
+        id: 't1',
+        description: 'Heavyweight command task',
+        command: 'cd packages/workflow-core && pnpm test',
+        ...(poolId !== undefined ? { poolId } : {}),
+      },
+    ],
+  });
+
+  it('forced pool beats a plan pin and a matching route rule', () => {
+    const orchestrator = orchestratorWith('forced-pool');
+    orchestrator.loadPlan(pnpmPlan('pinned-pool'));
+    expect(orchestrator.getTask('t1')!.config.poolId).toBe('forced-pool');
+  });
+
+  it('keeps the route rule for the same command when the force pool is absent', () => {
+    const orchestrator = orchestratorWith();
+    orchestrator.loadPlan(pnpmPlan());
+    expect(orchestrator.getTask('t1')!.config.poolId).toBe('ssh-pool');
+
+    expect(() => orchestratorWith().loadPlan(pnpmPlan('pinned-pool')))
+      .toThrow(/must use poolId="ssh-pool", but plan declares poolId="pinned-pool"/);
+  });
+
+  it('leaves scratch tasks off pool routing while the force pool is set', () => {
+    const orchestrator = orchestratorWith('forced-pool');
+    orchestrator.loadPlan({
+      name: 'Force Pool Scratch',
+      scratch: true,
+      tasks: [{ id: 's1', description: 'Scratch task', command: 'pnpm test' }],
+    });
+    const task = orchestrator.getTask('s1');
+    expect(task!.config.runnerKind).toBe('scratch');
+    expect(task!.config.poolId).toBeUndefined();
+  });
+
+  it('rejects a forced pool that is not defined in executionPools', () => {
+    expect(() => orchestratorWith('missing-pool').loadPlan(pnpmPlan()))
+      .toThrow(/forced poolId="missing-pool" because it is not defined in executionPools/);
+  });
+});
