@@ -623,7 +623,7 @@ export function WorkflowInspector({
                 <button
                   type="button"
                   onClick={() => onRestartTask?.(task.id)}
-                  className="flex-1 rounded bg-amber-500 px-3 py-2 text-xs font-medium text-black transition-colors hover:bg-amber-400"
+                  className="flex-1 rounded bg-amber-500 px-3 py-2 text-xs font-medium text-[#6B124E] transition-colors hover:bg-amber-400"
                 >
                   Restart Task
                 </button>
