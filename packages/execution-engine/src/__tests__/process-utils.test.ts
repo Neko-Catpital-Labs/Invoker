@@ -69,12 +69,45 @@ describe('process-utils shell environment resolution', () => {
     }
   });
 
-  it('parses shell PATH markers from noisy output', async () => {
+  it('parses a shell environment dump from noisy output', async () => {
     const { processUtils } = await loadProcessUtils();
-    const parsed = processUtils.parseResolvedShellPath(
-      'warning\n__INVOKER_EFFECTIVE_PATH_START__/opt/homebrew/bin:/usr/bin__INVOKER_EFFECTIVE_PATH_END__\nfooter',
+    const start = '__INVOKER_SHELL_ENV_abc_START__';
+    const end = '__INVOKER_SHELL_ENV_abc_END__';
+    const dump = `${start}PATH=/opt/homebrew/bin:/usr/bin\0INVOKER_REPRO_FROM_ZSHRC=from-zshrc\0BROKEN\0=novalue\0MULTILINE=a\nb\0${end}`;
+    expect(processUtils.parseShellEnvironmentDump(
+      `warning\n${dump}\nfooter`,
+      start,
+      end,
+    )).toEqual({
+      PATH: '/opt/homebrew/bin:/usr/bin',
+      INVOKER_REPRO_FROM_ZSHRC: 'from-zshrc',
+      MULTILINE: 'a\nb',
+    });
+    expect(processUtils.parseResolvedShellPath(`warning\n${dump}\nfooter`, start, end)).toBe(
+      '/opt/homebrew/bin:/usr/bin',
     );
-    expect(parsed).toBe('/opt/homebrew/bin:/usr/bin');
+  });
+
+  it('imports shell variables the owner does not already have', async () => {
+    const { processUtils } = await loadProcessUtils();
+    expect(processUtils.selectShellEnvironmentImports(
+      {
+        PATH: '/usr/bin',
+        OWNER_WINS: 'from-owner',
+        ELECTRON_RUN_AS_NODE: '1',
+      },
+      {
+        PATH: '/opt/homebrew/bin',
+        OWNER_WINS: 'from-shell',
+        ELECTRON_RUN_AS_NODE: 'from-shell',
+        INVOKER_RESOLVING_ENVIRONMENT: '1',
+        INVOKER_REPRO_FROM_ZSHRC: 'from-zshrc',
+        MULTILINE: 'a\nb',
+      },
+    )).toEqual({
+      INVOKER_REPRO_FROM_ZSHRC: 'from-zshrc',
+      MULTILINE: 'a\nb',
+    });
   });
 
   it('prepends common Homebrew paths in the macOS fallback PATH', async () => {
@@ -93,28 +126,54 @@ describe('process-utils shell environment resolution', () => {
     process.env.ELECTRON_NO_ASAR = '1';
     process.env.ELECTRON_NO_ATTACH_CONSOLE = '1';
     process.env.INVOKER_REPO_CONFIG_PATH = '/tmp/operator-only-repo-config.json';
+    process.env.OWNER_WINS = 'from-owner';
+    delete process.env.INVOKER_REPRO_FROM_ZSHRC;
+    delete process.env.INVOKER_RESOLVING_ENVIRONMENT;
 
     const { processUtils, mockedSpawn } = await loadProcessUtils();
     const proc = createMockProcess();
     mockedSpawn.mockReturnValue(proc as never);
 
     const initPromise = processUtils.initializeShellEnvironment();
-    proc.stdout?.emit(
-      'data',
-      Buffer.from(
-        'noise before __INVOKER_EFFECTIVE_PATH_START__/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin__INVOKER_EFFECTIVE_PATH_END__ noise after',
-      ),
-    );
+    const spawnArgs = mockedSpawn.mock.calls[0]?.[1] as string[] | undefined;
+    const script = spawnArgs?.[3] ?? '';
+    const start = script.match(/__INVOKER_SHELL_ENV_[0-9a-f]+_START__/)?.[0];
+    const end = script.match(/__INVOKER_SHELL_ENV_[0-9a-f]+_END__/)?.[0];
+    expect(spawnArgs?.slice(0, 2)).toEqual(['-i', '-l']);
+    expect(script).toContain('/usr/bin/env -0');
+    expect(start).toBeTruthy();
+    expect(end).toBeTruthy();
+    const dump = [
+      'PATH=/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin',
+      'INVOKER_REPRO_FROM_ZSHRC=from-zshrc',
+      'INVOKER_RESOLVING_ENVIRONMENT=1',
+      'ELECTRON_RUN_AS_NODE=from-shell',
+      'OWNER_WINS=from-shell',
+      'MULTILINE=line1\nline2',
+    ].join('\0') + '\0';
+    proc.stdout?.emit('data', Buffer.from(`noise before ${start}${dump}${end} noise after`));
     proc.emit('close', 0, null);
 
     const result = await initPromise;
     expect(result.status).toBe('resolved');
+    expect(result.importedCount).toBe(2);
     expect(result.path).toBe('/usr/bin:/bin:/opt/homebrew/bin:/Users/test/.local/bin:/usr/local/bin');
     expect(process.env.PATH).toBe(result.path);
+    expect(process.env.INVOKER_REPRO_FROM_ZSHRC).toBe('from-zshrc');
+    expect(process.env.MULTILINE).toBe('line1\nline2');
+    expect(process.env.OWNER_WINS).toBe('from-owner');
+    expect(process.env.ELECTRON_RUN_AS_NODE).toBe('1');
+    expect(process.env.INVOKER_RESOLVING_ENVIRONMENT).toBeUndefined();
     expect(processUtils.getEffectivePath()).toBe(result.path);
     expect(processUtils.cleanElectronEnv()).toMatchObject({
       PATH: result.path,
+      INVOKER_REPRO_FROM_ZSHRC: 'from-zshrc',
+      MULTILINE: 'line1\nline2',
+      OWNER_WINS: 'from-owner',
     });
+    delete process.env.INVOKER_REPRO_FROM_ZSHRC;
+    delete process.env.MULTILINE;
+    delete process.env.OWNER_WINS;
     expect(processUtils.cleanElectronEnv()).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
     expect(processUtils.cleanElectronEnv()).not.toHaveProperty('ELECTRON_NO_ASAR');
     expect(processUtils.cleanElectronEnv()).not.toHaveProperty('ELECTRON_NO_ATTACH_CONSOLE');
@@ -180,7 +239,7 @@ describe('process-utils shell environment resolution', () => {
     const proc = createMockProcess();
     mockedSpawn.mockReturnValue(proc as never);
 
-    await expect(processUtils.probeMacOSShellPath('/bin/zsh', 5)).rejects.toThrow(/timed out/);
+    await expect(processUtils.probeMacOSShellEnvironment('/bin/zsh', 5)).rejects.toThrow(/timed out/);
     expect(proc.kill).toHaveBeenCalledWith('SIGKILL');
   });
 
@@ -192,6 +251,7 @@ describe('process-utils shell environment resolution', () => {
     const result = await processUtils.initializeShellEnvironment();
 
     expect(result.status).toBe('skipped');
+    expect(result.importedCount).toBe(0);
     expect(result.path).toBe('/usr/local/bin:/usr/bin:/bin');
     expect(mockedSpawn).not.toHaveBeenCalled();
   });

@@ -1,12 +1,22 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
 export const SIGKILL_TIMEOUT_MS = 5_000;
 const SHELL_ENV_RESOLUTION_TIMEOUT_MS = 10_000;
-const SHELL_ENV_MARKER_START = '__INVOKER_EFFECTIVE_PATH_START__';
-const SHELL_ENV_MARKER_END = '__INVOKER_EFFECTIVE_PATH_END__';
+const SHELL_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const INVOKER_RESOLVING_ENVIRONMENT = 'INVOKER_RESOLVING_ENVIRONMENT';
+
+const SHELL_ENV_IMPORT_DENY = new Set([
+  'PATH',
+  INVOKER_RESOLVING_ENVIRONMENT,
+  'ELECTRON_RUN_AS_NODE',
+  'ELECTRON_NO_ASAR',
+  'ELECTRON_NO_ATTACH_CONSOLE',
+  'INVOKER_REPO_CONFIG_PATH',
+  'INVOKER_HEADLESS_STANDALONE',
+]);
 
 const MACOS_PATH_FALLBACK_PREFIXES = [
   '/opt/homebrew/bin',
@@ -26,6 +36,7 @@ export interface ShellEnvironmentInitResult {
   status: 'resolved' | 'fallback' | 'skipped';
   path: string;
   shell: string;
+  importedCount: number;
   reason?: string;
 }
 
@@ -146,14 +157,56 @@ export function applyMacOSPathFallback(rawPath?: string): string {
   return joinPathEntries(withPrependedUniqueEntries(base, preferred));
 }
 
-export function parseResolvedShellPath(output: string): string | null {
-  const start = output.lastIndexOf(SHELL_ENV_MARKER_START);
+export function createShellEnvMarkers(): { start: string; end: string } {
+  const id = randomBytes(8).toString('hex');
+  return {
+    start: `__INVOKER_SHELL_ENV_${id}_START__`,
+    end: `__INVOKER_SHELL_ENV_${id}_END__`,
+  };
+}
+
+export function parseShellEnvironmentDump(
+  output: string,
+  markerStart: string,
+  markerEnd: string,
+): Record<string, string> | null {
+  const start = output.lastIndexOf(markerStart);
   if (start === -1) return null;
-  const payloadStart = start + SHELL_ENV_MARKER_START.length;
-  const end = output.indexOf(SHELL_ENV_MARKER_END, payloadStart);
+  const payloadStart = start + markerStart.length;
+  const end = output.indexOf(markerEnd, payloadStart);
   if (end === -1) return null;
-  const resolved = output.slice(payloadStart, end).trim();
-  return resolved.length > 0 ? resolved : null;
+  const env: Record<string, string> = {};
+  for (const entry of output.slice(payloadStart, end).split('\0')) {
+    if (!entry) continue;
+    const eq = entry.indexOf('=');
+    if (eq <= 0) continue;
+    const key = entry.slice(0, eq);
+    if (!SHELL_ENV_KEY.test(key)) continue;
+    env[key] = entry.slice(eq + 1);
+  }
+  return Object.keys(env).length > 0 ? env : null;
+}
+
+export function parseResolvedShellPath(
+  output: string,
+  markerStart: string,
+  markerEnd: string,
+): string | null {
+  const path = parseShellEnvironmentDump(output, markerStart, markerEnd)?.PATH;
+  return path && path.length > 0 ? path : null;
+}
+
+export function selectShellEnvironmentImports(
+  ownerEnv: NodeJS.ProcessEnv,
+  shellEnv: Record<string, string>,
+): Record<string, string> {
+  const imports: Record<string, string> = {};
+  for (const [key, value] of Object.entries(shellEnv)) {
+    if (SHELL_ENV_IMPORT_DENY.has(key)) continue;
+    if (ownerEnv[key] !== undefined) continue;
+    imports[key] = value;
+  }
+  return imports;
 }
 
 export function getEffectivePath(): string {
@@ -176,12 +229,16 @@ export function resolveExecutableOnCurrentPath(command: string): string | undefi
   return undefined;
 }
 
-export async function probeMacOSShellPath(shell: string, timeoutMs = SHELL_ENV_RESOLUTION_TIMEOUT_MS): Promise<string> {
-  const probeScript = `printf '%s%s%s' '${SHELL_ENV_MARKER_START}' "$PATH" '${SHELL_ENV_MARKER_END}'`;
+export async function probeMacOSShellEnvironment(
+  shell: string,
+  timeoutMs = SHELL_ENV_RESOLUTION_TIMEOUT_MS,
+): Promise<Record<string, string>> {
+  const markers = createShellEnvMarkers();
+  const probeScript = `printf '%s' '${markers.start}'; /usr/bin/env -0; printf '%s' '${markers.end}'`;
 
-  return await new Promise<string>((resolve, reject) => {
+  return await new Promise<Record<string, string>>((resolve, reject) => {
     let settled = false;
-    let stdout = '';
+    const stdoutChunks: Buffer[] = [];
     let stderr = '';
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -207,7 +264,7 @@ export async function probeMacOSShellPath(shell: string, timeoutMs = SHELL_ENV_R
     }
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      stdout += chunk.toString();
+      stdoutChunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
     });
     child.stderr?.on('data', (chunk: Buffer | string) => {
       stderr += chunk.toString();
@@ -215,16 +272,20 @@ export async function probeMacOSShellPath(shell: string, timeoutMs = SHELL_ENV_R
     child.on('error', (err) => finish(() => reject(err)));
     child.on('close', (code, signal) => {
       finish(() => {
-        const combinedOutput = `${stdout}${stderr}`;
-        const resolved = parseResolvedShellPath(combinedOutput);
+        const resolved = parseShellEnvironmentDump(
+          Buffer.concat(stdoutChunks).toString('utf8'),
+          markers.start,
+          markers.end,
+        );
         if (resolved) {
           resolve(resolved);
           return;
         }
         const reason = code === 0
-          ? `shell probe did not emit a PATH marker`
+          ? `shell probe did not emit an environment dump`
           : `shell probe exited with code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`;
-        reject(new Error(reason));
+        const detail = stderr.trim();
+        reject(new Error(detail ? `${reason}: ${detail}` : reason));
       });
     });
 
@@ -246,6 +307,7 @@ export async function initializeShellEnvironment(): Promise<ShellEnvironmentInit
         status: 'skipped',
         path: effectivePath,
         shell,
+        importedCount: 0,
         reason: 'shell environment resolution is only used on macOS',
       };
       return initializationResult;
@@ -253,13 +315,18 @@ export async function initializeShellEnvironment(): Promise<ShellEnvironmentInit
 
     try {
       const inheritedPath = process.env.PATH;
-      const resolvedPath = await probeMacOSShellPath(shell);
-      effectivePath = applyMacOSPathFallback(mergePathValues(inheritedPath, resolvedPath));
+      const shellEnv = await probeMacOSShellEnvironment(shell);
+      const imports = selectShellEnvironmentImports(process.env, shellEnv);
+      for (const [key, value] of Object.entries(imports)) {
+        process.env[key] = value;
+      }
+      effectivePath = applyMacOSPathFallback(mergePathValues(inheritedPath, shellEnv.PATH));
       process.env.PATH = effectivePath;
       initializationResult = {
         status: 'resolved',
         path: effectivePath,
         shell,
+        importedCount: Object.keys(imports).length,
       };
       return initializationResult;
     } catch (err) {
@@ -269,6 +336,7 @@ export async function initializeShellEnvironment(): Promise<ShellEnvironmentInit
         status: 'fallback',
         path: effectivePath,
         shell,
+        importedCount: 0,
         reason: err instanceof Error ? err.message : String(err),
       };
       return initializationResult;
