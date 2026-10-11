@@ -54,10 +54,10 @@ for (const name of names) {
 const covered = SELECTABLE_CATEGORIES.reduce((total, category) => total + byCategory.get(category).length, 0);
 
 for (const name of missing) {
-  console.error(`FAIL: skills/${name}/SKILL.md has no category: field, so INVOKER_SKILL_CATEGORY installs silently omit it`);
+  console.error(`FAIL: corpus/skills/${name}/SKILL.md has no category: field, so INVOKER_SKILL_CATEGORY installs silently omit it`);
 }
 for (const entry of unknown) {
-  console.error(`FAIL: skills/${entry} is not one of ${SELECTABLE_CATEGORIES.join(', ')}`);
+  console.error(`FAIL: corpus/skills/${entry} is not one of ${SELECTABLE_CATEGORIES.join(', ')}`);
 }
 
 if (missing.length > 0 || unknown.length > 0 || covered !== names.length) {
