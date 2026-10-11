@@ -1935,13 +1935,28 @@ function startHeadlessMode(): void {
               logger,
               allowGraphMutation: invokerConfig.allowGraphMutation,
               fetchOpenStackPrs: () => {
-                const repo = process.env.INVOKER_GITHUB_TARGET_REPO?.trim();
-                if (!repo) {
+                const githubRepo = process.env.INVOKER_GITHUB_TARGET_REPO?.trim();
+                const gitlabProject = process.env.INVOKER_GITLAB_PROJECT?.trim();
+                const providers = createDefaultReviewProviders();
+                if (gitlabProject) {
+                  const gitlab = providers.reviewProviderRegistry.getOrThrow('gitlab');
+                  return fetchOpenStackPrs({
+                    repo: gitlabProject,
+                    cwd: repoRoot,
+                    listOpenReviews: (opts) => gitlab.listOpenReviews!(opts),
+                  });
+                }
+                if (!githubRepo) {
                   throw new Error(
-                    'invoker:spawn-review-gate-stack-ci-repair requires INVOKER_GITHUB_TARGET_REPO to be set.',
+                    'invoker:spawn-review-gate-stack-ci-repair requires INVOKER_GITHUB_TARGET_REPO or INVOKER_GITLAB_PROJECT.',
                   );
                 }
-                return fetchOpenStackPrs({ repo, cwd: repoRoot });
+                const github = providers.reviewProviderRegistry.getOrThrow('github');
+                return fetchOpenStackPrs({
+                  repo: githubRepo,
+                  cwd: repoRoot,
+                  listOpenReviews: (opts) => github.listOpenReviews!(opts),
+                });
               },
             });
           });

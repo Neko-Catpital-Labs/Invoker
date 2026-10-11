@@ -20,6 +20,7 @@ import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { isInvokerRepoUrl, reviewClaimSlices, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
+import { resolveForgeProvider } from './resolve-forge-provider.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
 
@@ -542,9 +543,11 @@ export async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args
     };
   }
 
-  if (!host.mergeGateProvider) {
-    throw new Error('merge review publication requires a configured review provider');
-  }
+  const mergeGateProvider = resolveForgeProvider({
+    reviewProviderRegistry: host.reviewProviderRegistry,
+    mergeGateProvider: host.mergeGateProvider,
+    repoUrl: args.repoUrl,
+  });
   if (reviewClaims.length > 1) {
     throw new Error(
       `workflow ${args.workflowId} carries ${reviewClaims.length} review claims, but it would publish as one PR; split the plan into a workflow chain with one claim per workflow: ${reviewClaims.map((claim) => `"${claim}"`).join('; ')}`,
@@ -572,7 +575,7 @@ export async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args
   logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Creating review PR', {
     featureBranch: args.featureBranch,
   });
-  const result = await host.mergeGateProvider.createReview({
+  const result = await mergeGateProvider.createReview({
     baseBranch: args.baseBranch,
     featureBranch: args.featureBranch,
     title: args.workflowName,
@@ -583,14 +586,14 @@ export async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args
     reviewUrl: result.url,
     reviewId: result.identifier,
   });
-  console.log(`[merge] Created GitHub PR: ${result.url}`);
+  console.log(`[merge] Created ${mergeGateProvider.name} review: ${result.url}`);
 
   const reviewGate = buildSingleArtifactReviewGate({
     expectedGeneration: args.expectedGeneration,
     title: args.workflowName,
     url: result.url,
     providerId: result.identifier,
-    provider: host.mergeGateProvider.name,
+    provider: mergeGateProvider.name,
     branch: args.featureBranch,
     baseBranch: args.baseBranch,
     nowIso: new Date().toISOString(),
