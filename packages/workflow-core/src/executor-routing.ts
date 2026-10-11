@@ -162,7 +162,21 @@ export function resolveExecutorRouting(
   defaultPoolId: string | undefined,
   rules: ExecutorRoutingRule[],
   availablePoolIds: Set<string>,
+  forcePoolId?: string,
 ): { poolId: string; reason: ExecutorRoutingReason } {
+  const forcedPoolId = forcePoolId?.trim();
+  if (forcedPoolId) {
+    if (!availablePoolIds.has(forcedPoolId)) {
+      throw new Error(
+        `Task "${taskId}" cannot use forced poolId="${forcedPoolId}" because it is not defined in executionPools.`,
+      );
+    }
+    return {
+      poolId: forcedPoolId,
+      reason: { type: 'poolId', poolId: forcedPoolId },
+    };
+  }
+
   const configuredDefaultPoolId = defaultPoolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID;
   if (!configuredDefaultPoolId.trim() || !availablePoolIds.has(configuredDefaultPoolId)) {
     throw new Error(

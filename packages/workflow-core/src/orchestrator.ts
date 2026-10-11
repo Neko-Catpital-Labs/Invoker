@@ -756,6 +756,7 @@ export interface OrchestratorConfig {
   availablePoolIds?: string[];
   /** Default pool applied to tasks that do not declare a pool and do not match a route rule. */
   defaultPoolId?: string;
+  forcePoolId?: string;
   /**
    * When true, keep tasks persisted as `pending` until the executor confirms
    * startup success, then transition to `running`.
@@ -809,6 +810,7 @@ export class Orchestrator {
   private readonly executorRoutingRules: ExecutorRoutingRule[];
   private readonly availablePoolIds: Set<string>;
   private readonly defaultPoolId: string | undefined;
+  private readonly forcePoolId: string | undefined;
   private readonly deferRunningUntilLaunch: boolean;
   private readonly launchDeferralBackoffMs?: number;
   private readonly resolveRepoDefaultBranch: (repoUrl: string) => string;
@@ -872,6 +874,7 @@ export class Orchestrator {
       ...(config.availablePoolIds ?? []),
     ]);
     this.defaultPoolId = config.defaultPoolId ?? BUILT_IN_LOCAL_EXECUTION_POOL_ID;
+    this.forcePoolId = config.forcePoolId;
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
     this.launchDeferralBackoffMs = config.launchDeferralBackoffMs;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
@@ -1591,6 +1594,7 @@ export class Orchestrator {
           this.defaultPoolId,
           this.executorRoutingRules,
           this.availablePoolIds,
+          this.forcePoolId,
         );
         taskConfig = { ...baseConfig, poolId: resolvedRouting.poolId };
         resolvedRoutingByTaskId.set(scopedId, resolvedRouting.reason);
