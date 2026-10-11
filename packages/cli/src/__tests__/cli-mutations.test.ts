@@ -274,8 +274,8 @@ describe('invoker-cli set', () => {
 
     expect(code).toBe(0);
     expect(output.stdout).toContain('set <field> <taskId> <value...>');
-    expect(output.stdout).toContain('Workflow and task management');
-    expect(output.stdout).toContain(`Fields: ${CLI_SET_FIELDS.join(', ')}.`);
+    expect(output.stdout).toContain('Manage workflows & tasks');
+    expect(output.stdout).toContain(`Change a task field (${CLI_SET_FIELDS.join(', ')}).`);
   });
 
   it.each(Object.entries(POSITIVE_SET_CASES))('sends set %s to the live owner over headless.exec', async (field, { task, values }) => {

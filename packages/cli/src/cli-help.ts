@@ -28,301 +28,296 @@ export type HelpCommandGroup = {
   readonly commands: readonly HelpCommand[];
 };
 
-export type HelpOptionGroup = {
-  readonly title: string;
-  readonly options: readonly HelpOption[];
+export type HelpFormatOptions = {
+  readonly color?: boolean;
+};
+
+type HelpStyle = {
+  title: (text: string) => string;
+  section: (text: string) => string;
+  command: (text: string) => string;
+  dim: (text: string) => string;
+  flag: (text: string) => string;
 };
 
 const SET_FIELDS = listHeadlessSetSubcommandsForScope('task');
+const ANSI = {
+  reset: '\u001b[0m',
+  bold: '\u001b[1m',
+  dim: '\u001b[2m',
+  cyan: '\u001b[36m',
+  green: '\u001b[32m',
+  yellow: '\u001b[33m',
+} as const;
+
+function paint(enabled: boolean, codes: string, text: string): string {
+  if (!enabled) return text;
+  return `${codes}${text}${ANSI.reset}`;
+}
+
+export function shouldUseHelpColor(options: HelpFormatOptions = {}): boolean {
+  if (options.color === true) return true;
+  if (options.color === false) return false;
+  if (process.env.NO_COLOR !== undefined) return false;
+  if (process.env.FORCE_COLOR === '0') return false;
+  if (process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== '') return true;
+  return Boolean(process.stdout.isTTY);
+}
+
+function createHelpStyle(color: boolean): HelpStyle {
+  return {
+    title: (text) => paint(color, `${ANSI.bold}${ANSI.cyan}`, text),
+    section: (text) => paint(color, ANSI.bold, text),
+    command: (text) => paint(color, ANSI.green, text),
+    dim: (text) => paint(color, ANSI.dim, text),
+    flag: (text) => paint(color, ANSI.yellow, text),
+  };
+}
 
 const COMMAND_GROUPS: readonly HelpCommandGroup[] = [
   {
-    title: 'Workflow execution',
-    commands: [
-      {
-        id: 'run',
-        usage: 'run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
-        summary: 'Submit to a live Invoker owner when available, otherwise run standalone.',
-        options: [
-          { flag: '--live', description: 'Require a running Invoker owner and submit over IPC.' },
-          { flag: '--standalone', description: 'Skip IPC and use an isolated/configured CLI database.' },
-          { flag: '--db-dir <path>', description: 'Runtime database directory. Defaults to ~/.invoker-cli.' },
-          { flag: '--config <path>', description: 'Optional config path reserved for CLI runtime configuration.' },
-          { flag: '--json', description: 'Emit only a machine-readable result summary on stdout.' },
-        ],
-      },
-      {
-        id: 'wait',
-        usage: 'wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
-        summary: 'Park until a live-owner workflow settles, then print one INVOKER_WAKE line.',
-        options: [
-          { flag: '--max-wait-ms <ms>', description: 'Maximum park time. Defaults to 86400000 (24h).' },
-          { flag: '--poll-interval-ms <ms>', description: 'Query interval. Defaults to 5000.' },
-        ],
-      },
-    ],
-  },
-  {
-    title: 'Workflow and task queries',
-    commands: [
-      {
-        id: 'query workflows',
-        usage: 'query workflows [--status <status>] [--output text|json] [--standalone]',
-        summary: 'Read workflows from a live owner, or from a read-only database view with --standalone.',
-      },
-      {
-        id: 'query tasks',
-        usage: 'query tasks [--workflow <id>] [--status <status>] [--output text|json] [--standalone]',
-        summary: 'Read tasks from a live owner, or from a read-only database view with --standalone.',
-      },
-      {
-        id: 'query workflow',
-        usage: 'query workflow <id> [--output text|json]',
-        summary: 'Read one workflow from a live owner.',
-      },
-      {
-        id: 'query task',
-        usage: 'query task <id> [--output text|json]',
-        summary: 'Read one task from a live owner.',
-      },
-      {
-        id: 'query capacity',
-        usage: 'query capacity [--output text|json]',
-        summary: 'Show live pool/member slot usage, queue depth by workflow, and the oldest-waiting task. Requires a live owner.',
-      },
-    ],
-  },
-  {
-    title: 'Workflow and task management',
-    commands: [
-      {
-        id: 'retry',
-        usage: 'retry <workflowId>',
-        summary: 'Ask a live Invoker owner to retry a workflow.',
-      },
-      {
-        id: 'resume',
-        usage: 'resume <workflowId>',
-        summary: 'Ask a live Invoker owner to resume a workflow.',
-      },
-      {
-        id: 'retry-task',
-        usage: 'retry-task <taskId>',
-        summary: 'Ask a live Invoker owner to retry one task.',
-      },
-      {
-        id: 'retry-tasks',
-        usage: 'retry-tasks --status <status> [--parallel N] [--dry-run]',
-        summary: 'Retry all tasks matching a status through a live owner.',
-        options: [
-          { flag: '--status <status>', description: 'Required. Status filter for matching tasks.' },
-          { flag: '--parallel N', description: 'Maximum concurrent mutation requests. Defaults to 8.' },
-          { flag: '--dry-run', description: 'Print matching task IDs without mutating.' },
-        ],
-      },
-      {
-        id: 'set',
-        usage: 'set <field> <taskId> <value...> [--force] [-- <value...>]',
-        summary: `Edit one task field through a live owner. Fields: ${SET_FIELDS.join(', ')}.`,
-        details: [
-          'Refuses terminal tasks, running tasks without --force, and pool or executor changes the task\'s runner kind cannot take.',
-        ],
-        options: [
-          { flag: '--force', description: 'Edit a running task; the owner cancels the launched attempt first.' },
-          { flag: '--', description: 'End options; later arguments are passed as values even if they start with --.' },
-        ],
-      },
-      {
-        id: 'delete',
-        usage: 'delete <workflowId>',
-        summary: 'Ask a live Invoker owner to delete one workflow.',
-      },
-      {
-        id: 'delete-all',
-        usage: 'delete-all',
-        summary: 'Ask a live Invoker owner to delete all workflows. Runs unconditionally; the owner snapshots the DB first.',
-      },
-      {
-        id: 'agent-login',
-        usage: 'agent-login <start <claude|codex> | code <sessionId> <code> | status <sessionId>> [--output text|json]',
-        summary: 'Start or complete an agent login session through a live Invoker owner.',
-        options: [
-          { flag: '--output text|json', description: 'Output format. Defaults to text.' },
-        ],
-      },
-    ],
-  },
-  {
-    title: 'Owner and workers',
-    commands: [
-      {
-        id: 'owner serve',
-        usage: 'owner serve',
-        summary: 'Start a headless Invoker owner process.',
-      },
-      {
-        id: 'worker',
-        usage: 'worker [autofix|list]',
-        summary: 'Run a registry-selected worker or list available worker kinds.',
-      },
-      {
-        id: 'worker toggles',
-        usage: 'worker toggles [--enable <id>|--disable <id> ...]',
-        summary: 'Show or set owner worker on/off (pr-status, autofix, PR maintenance, e2e auto-fix, worker-session-mine, codex-spend-clamp, idle-task-cleanup) and policy flags (auto-approve, disk-headroom cleanup).',
-      },
-      {
-        id: 'run-worker',
-        usage: 'run-worker <kind> -- <args...>',
-        summary: 'Run one worker kind once with optional forwarded arguments.',
-      },
-    ],
-  },
-  {
-    title: 'Runtime controls',
-    commands: [
-      {
-        id: 'spend-gate',
-        usage: 'spend-gate [status|reset]',
-        summary: 'Show or clear the Codex daily-spend shutoff. While tripped, every Codex request fails; `reset` reopens it after you review the sessions.',
-      },
-      {
-        id: 'auto-approve-authors',
-        usage: 'auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
-        summary: 'Show or set GitHub logins in config.json that auto-approve may act on. Does not enable the auto-approve toggle.',
-        options: [
-          { flag: '--json', description: 'Emit a machine-readable allowlist snapshot.' },
-          { flag: '--set <login...>', description: 'Replace the allowlist with the given logins.' },
-          { flag: '--add <login>', description: 'Add one login to the allowlist.' },
-          { flag: '--add-current-github-user', description: 'Add the login from `gh api user`.' },
-          { flag: '--clear', description: 'Clear the allowlist.' },
-        ],
-      },
-    ],
-  },
-  {
-    title: 'Installation and diagnostics',
+    title: 'Getting started',
     commands: [
       {
         id: 'install',
         usage: 'install [--demo]',
-        summary: 'Quick-install: global cli+ui, doctor --fix, skills+MCP, default workers. Skips Slack/machines.',
+        summary: 'Install the CLI, UI, skills, and default workers.',
         options: [
-          { flag: '--demo', description: 'Print the expected install transcript without mutating the machine.' },
-        ],
-      },
-      {
-        id: 'uninstall',
-        usage: 'uninstall [--dry-run] [--yes] [--keep-data]',
-        summary: 'Remove Invoker-owned integrations, home data, and global npm packages. Run `invoker-cli uninstall --help` for exit codes and coverage.',
-        options: [
-          { flag: '--dry-run', description: 'Print the deletion plan and coverage without mutating disk.' },
-          { flag: '--yes', description: 'Skip confirmation prompts (required when stdin is not a TTY).' },
-          { flag: '--keep-data', description: 'Skip Invoker home data purge; still remove integrations and global npm packages.' },
+          { flag: '--demo', description: 'Show a sample install transcript without changing anything.' },
         ],
       },
       {
         id: 'doctor',
         usage: 'doctor [--fix] [--json]',
-        summary: 'Validate tools, config, and your default planning preset.',
+        summary: 'Check that your tools and config look healthy.',
         options: [
-          { flag: '--fix', description: 'Best-effort install of missing doctor tools.' },
-          { flag: '--json', description: 'Emit only a machine-readable doctor report on stdout.' },
+          { flag: '--fix', description: 'Try to install missing tools.' },
+          { flag: '--json', description: 'Print JSON instead of text.' },
         ],
       },
-    ],
-  },
-  {
-    title: 'Setup and integrations',
-    commands: [
       {
         id: 'setup',
         usage: 'setup [planner|slack|machines] [--check|--from-env] [--yes] [--json] [--register-harnesses]',
-        summary: 'Run the setup wizard, or directly configure planner MCP, Slack, or machines.',
+        summary: 'Configure planner, Slack, machines, or AI harnesses.',
         options: [
-          { flag: '--check', description: 'Report planner/setup state without writing changes.' },
-          { flag: '--from-env', description: 'Run Slack setup from SLACK_* environment values without prompts.' },
+          { flag: '--check', description: 'Show status without changing anything.' },
+          { flag: '--from-env', description: 'Configure Slack from SLACK_* env vars.' },
           { flag: '--yes', description: 'Skip confirmation prompts.' },
-          { flag: '--json', description: 'Emit machine-readable setup output where supported.' },
-          { flag: '--register-harnesses', description: 'Opt in to harness MCP/skill registration without a prompt.' },
-          { flag: '--planner-url <url>', description: 'Planner service URL for `setup planner`.' },
-          { flag: '--access-token <tok>', description: 'Planner service access token for `setup planner`.' },
+          { flag: '--json', description: 'Print JSON where supported.' },
+          { flag: '--register-harnesses', description: 'Wire Cursor/Claude/Codex helpers without asking.' },
+          { flag: '--planner-url <url>', description: 'Planner URL for `setup planner`.' },
+          { flag: '--access-token <tok>', description: 'Planner access token for `setup planner`.' },
           {
             flag: '--planner-package <spec>',
-            description: `Planner MCP package spec for \`setup planner\`. Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}.`,
+            description: `Planner package for \`setup planner\` (default ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}).`,
           },
-          { flag: '--target <path>', description: 'MCP config path for planner setup. Defaults to ~/.invoker/mcp.json.' },
-          { flag: '--uninstall', description: 'Remove the experimental planner MCP entry and disable its Invoker flag.' },
+          { flag: '--target <path>', description: 'MCP config path (default ~/.invoker/mcp.json).' },
+          { flag: '--uninstall', description: 'Remove the experimental planner MCP entry.' },
         ],
       },
       {
         id: 'mcp',
         usage: 'mcp',
-        summary: 'Start the Invoker MCP stdio server.',
+        summary: 'Start the MCP server for AI tools.',
+      },
+    ],
+  },
+  {
+    title: 'Run workflows',
+    commands: [
+      {
+        id: 'run',
+        usage: 'run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+        summary: 'Run a plan. Uses the open app when possible.',
+        options: [
+          { flag: '--live', description: 'Require a running Invoker app/owner.' },
+          { flag: '--standalone', description: 'Run locally without talking to the app.' },
+          { flag: '--db-dir <path>', description: 'Local DB folder (default ~/.invoker-cli).' },
+          { flag: '--config <path>', description: 'Optional config file path.' },
+          { flag: '--json', description: 'Print JSON instead of text.' },
+        ],
+      },
+      {
+        id: 'wait',
+        usage: 'wait <workflowId> [--max-wait-ms <ms>] [--poll-interval-ms <ms>]',
+        summary: 'Wait until a workflow finishes, then print INVOKER_WAKE.',
+        options: [
+          { flag: '--max-wait-ms <ms>', description: 'Give up after this many ms (default 24h).' },
+          { flag: '--poll-interval-ms <ms>', description: 'How often to check (default 5000).' },
+        ],
+      },
+    ],
+  },
+  {
+    title: 'Look up status',
+    commands: [
+      {
+        id: 'query workflows',
+        usage: 'query workflows [--status <status>] [--output text|json] [--standalone]',
+        summary: 'List workflows.',
+      },
+      {
+        id: 'query tasks',
+        usage: 'query tasks [--workflow <id>] [--status <status>] [--output text|json] [--standalone]',
+        summary: 'List tasks.',
+      },
+      {
+        id: 'query workflow',
+        usage: 'query workflow <id> [--output text|json]',
+        summary: 'Show one workflow.',
+      },
+      {
+        id: 'query task',
+        usage: 'query task <id> [--output text|json]',
+        summary: 'Show one task.',
+      },
+      {
+        id: 'query capacity',
+        usage: 'query capacity [--output text|json]',
+        summary: 'Show free slots and queue depth (needs a running owner).',
+      },
+    ],
+  },
+  {
+    title: 'Manage workflows & tasks',
+    commands: [
+      {
+        id: 'retry',
+        usage: 'retry <workflowId>',
+        summary: 'Retry a workflow.',
+      },
+      {
+        id: 'resume',
+        usage: 'resume <workflowId>',
+        summary: 'Resume a paused workflow.',
+      },
+      {
+        id: 'retry-task',
+        usage: 'retry-task <taskId>',
+        summary: 'Retry one task.',
+      },
+      {
+        id: 'retry-tasks',
+        usage: 'retry-tasks --status <status> [--parallel N] [--dry-run]',
+        summary: 'Retry every task with a given status.',
+        options: [
+          { flag: '--status <status>', description: 'Required status filter.' },
+          { flag: '--parallel N', description: 'Max concurrent retries (default 8).' },
+          { flag: '--dry-run', description: 'List matches without retrying.' },
+        ],
+      },
+      {
+        id: 'set',
+        usage: 'set <field> <taskId> <value...> [--force] [-- <value...>]',
+        summary: `Change a task field (${SET_FIELDS.join(', ')}).`,
+        details: [
+          'Blocked for finished tasks. Running tasks need --force. Some pool/executor changes are rejected by runner kind.',
+        ],
+        options: [
+          { flag: '--force', description: 'Edit a running task (cancels the current attempt first).' },
+          { flag: '--', description: 'Treat later args as values, even if they start with --.' },
+        ],
+      },
+      {
+        id: 'delete',
+        usage: 'delete <workflowId>',
+        summary: 'Delete one workflow.',
+      },
+      {
+        id: 'delete-all',
+        usage: 'delete-all',
+        summary: 'Delete all workflows (owner snapshots the DB first).',
+      },
+    ],
+  },
+  {
+    title: 'Owner & workers',
+    commands: [
+      {
+        id: 'owner serve',
+        usage: 'owner serve',
+        summary: 'Start a headless owner process.',
+      },
+      {
+        id: 'worker',
+        usage: 'worker [autofix|list]',
+        summary: 'Run a worker, or list kinds.',
+      },
+      {
+        id: 'worker toggles',
+        usage: 'worker toggles [--enable <id>|--disable <id> ...]',
+        summary: 'Turn background workers on or off.',
+      },
+      {
+        id: 'run-worker',
+        usage: 'run-worker <kind> -- <args...>',
+        summary: 'Run one worker once.',
+      },
+    ],
+  },
+  {
+    title: 'Advanced',
+    commands: [
+      {
+        id: 'spend-gate',
+        usage: 'spend-gate [status|reset]',
+        summary: 'Check or clear the Codex spend shutoff.',
+        details: [
+          'While tripped, every Codex request fails. Use `reset` after you review sessions.',
+        ],
+      },
+      {
+        id: 'auto-approve-authors',
+        usage: 'auto-approve-authors [--json] [--set <login...>|--add <login>|--add-current-github-user|--clear]',
+        summary: 'Who auto-approve may act for (does not turn the toggle on).',
+        options: [
+          { flag: '--json', description: 'Print JSON.' },
+          { flag: '--set <login...>', description: 'Replace the allowlist.' },
+          { flag: '--add <login>', description: 'Add one GitHub login.' },
+          { flag: '--add-current-github-user', description: 'Add your current `gh` login.' },
+          { flag: '--clear', description: 'Clear the allowlist.' },
+        ],
+      },
+      {
+        id: 'agent-login',
+        usage: 'agent-login <start <claude|codex> | code <sessionId> <code> | status <sessionId>> [--output text|json]',
+        summary: 'Start or finish an agent login.',
+        options: [
+          { flag: '--output text|json', description: 'Output format (default text).' },
+        ],
+      },
+      {
+        id: 'uninstall',
+        usage: 'uninstall [--dry-run] [--yes] [--keep-data]',
+        summary: 'Remove Invoker installs and integrations. See `uninstall --help`.',
+        options: [
+          { flag: '--dry-run', description: 'Show what would be removed.' },
+          { flag: '--yes', description: 'Skip prompts (required when stdin is not a TTY).' },
+          { flag: '--keep-data', description: 'Keep home data; still remove integrations and npm packages.' },
+        ],
       },
     ],
   },
 ];
 
-const GLOBAL_OPTIONS: readonly HelpOption[] = [
-  { flag: '--help', description: 'Show this help text (or `invoker-cli <command> --help` for command details).' },
-  { flag: '--version', description: 'Show the CLI version.' },
-  { flag: '--json', description: 'Emit only a machine-readable result summary on stdout (where supported).' },
-  { flag: '--live', description: 'Require a running Invoker owner and submit over IPC (`run`).' },
-  { flag: '--standalone', description: 'Skip IPC for `run` or `query` and use an isolated/configured CLI database.' },
-  { flag: '--db-dir <path>', description: 'Runtime database directory. Defaults to ~/.invoker-cli.' },
-  { flag: '--config <path>', description: 'Optional config path reserved for CLI runtime configuration.' },
+const ROOT_OPTIONS: readonly HelpOption[] = [
+  { flag: '--help', description: 'Show help.' },
+  { flag: '--version', description: 'Show version.' },
+  { flag: '--json', description: 'Print JSON where supported.' },
+  { flag: '--live', description: 'Require a running Invoker app (`run`).' },
+  { flag: '--standalone', description: 'Stay local for `run` / `query`.' },
+  { flag: '--db-dir <path>', description: 'Local DB folder (default ~/.invoker-cli).' },
+  { flag: '--config <path>', description: 'Optional config path.' },
 ];
 
 const QUERY_OPTIONS: readonly HelpOption[] = [
-  { flag: '--workflow <id>', description: 'Restrict `query tasks` to one workflow.' },
-  { flag: '--status <status>', description: 'Restrict `query workflows` or `query tasks` to one status.' },
-  { flag: '--output <fmt>', description: 'Query output format. Supported values: text, json. Defaults to text.' },
+  { flag: '--workflow <id>', description: 'Limit `query tasks` to one workflow.' },
+  { flag: '--status <status>', description: 'Filter by status.' },
+  { flag: '--output <fmt>', description: 'text or json (default text).' },
+  { flag: '--standalone', description: 'Read a local DB instead of a live owner (list queries).' },
 ];
 
-const EXECUTION_MUTATION_OPTIONS: readonly HelpOption[] = [
-  { flag: '--max-wait-ms <ms>', description: 'Maximum park time for `wait`. Defaults to 86400000 (24h).' },
-  { flag: '--poll-interval-ms <ms>', description: 'Query interval for `wait`. Defaults to 5000.' },
-  { flag: '--parallel N', description: 'Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.' },
-  {
-    flag: '--dry-run',
-    description: 'For `retry-tasks`: print matching task IDs without mutating. For `uninstall`: print the deletion plan and coverage without mutating disk.',
-  },
-  { flag: '--force', description: 'Let `set` edit a running task; the owner cancels the launched attempt first.' },
-  { flag: '--', description: 'End `set` options; later arguments are passed as values even if they start with --.' },
-];
-
-const INSTALL_SETUP_OPTIONS: readonly HelpOption[] = [
-  { flag: '--demo', description: 'For `install`: print the expected transcript without mutating the machine.' },
-  { flag: '--yes', description: 'For `uninstall` / `setup`: skip confirmation prompts (`uninstall` requires this when stdin is not a TTY).' },
-  { flag: '--keep-data', description: 'For `uninstall`: skip Invoker home data purge; still remove integrations and global npm packages.' },
-  { flag: '--fix', description: 'For `doctor`: best-effort install of missing tools.' },
-  { flag: '--from-env', description: 'For `setup slack`: run from SLACK_* environment values without prompts.' },
-  { flag: '--check', description: 'For `setup`: report state without writing changes.' },
-];
-
-const PLANNER_SETUP_OPTIONS: readonly HelpOption[] = [
-  { flag: '--planner-url <url>', description: 'Planner service URL for `setup planner`.' },
-  { flag: '--access-token <tok>', description: 'Planner service access token for `setup planner`.' },
-  {
-    flag: '--planner-package <spec>',
-    description: `Planner MCP package spec for \`setup planner\`. Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}.`,
-  },
-  { flag: '--target <path>', description: 'MCP config path for planner setup. Defaults to ~/.invoker/mcp.json.' },
-  { flag: '--uninstall', description: 'Remove the experimental planner MCP entry and disable its Invoker flag.' },
-];
-
-const ROOT_OPTION_GROUPS: readonly HelpOptionGroup[] = [
-  { title: 'Global options', options: GLOBAL_OPTIONS },
-  { title: 'Query options', options: QUERY_OPTIONS },
-  { title: 'Execution and mutation options', options: EXECUTION_MUTATION_OPTIONS },
-  { title: 'Installation and setup options', options: INSTALL_SETUP_OPTIONS },
-  { title: 'Planner setup options', options: PLANNER_SETUP_OPTIONS },
-];
-
-const QUERY_COMMAND_OPTIONS: readonly HelpOption[] = [
-  ...QUERY_OPTIONS,
-  { flag: '--standalone', description: 'Read from a configured/isolated CLI database instead of a live owner (list queries only).' },
-];
+const QUERY_GROUP_TITLE = 'Look up status';
 
 function flattenCommands(): HelpCommand[] {
   return COMMAND_GROUPS.flatMap((group) => [...group.commands]);
@@ -336,48 +331,50 @@ export function listRootHelpCommands(): readonly HelpCommand[] {
   return flattenCommands();
 }
 
-function formatOptionLines(options: readonly HelpOption[], indent = '  '): string[] {
+function formatOptionLines(
+  options: readonly HelpOption[],
+  style: HelpStyle,
+  indent = '  ',
+): string[] {
   const width = options.reduce((max, option) => Math.max(max, option.flag.length), 0);
-  return options.map((option) => `${indent}${option.flag.padEnd(width)}  ${option.description}`);
+  return options.map((option) => {
+    const flag = style.flag(option.flag.padEnd(width));
+    return `${indent}${flag}  ${style.dim(option.description)}`;
+  });
 }
 
-function formatCommandBlock(command: HelpCommand, indent = '    '): string[] {
-  const lines = [`${indent}${command.usage}`];
-  lines.push(`${indent}  ${command.summary}`);
-  for (const detail of command.details ?? []) {
-    lines.push(`${indent}  ${detail}`);
-  }
+function formatCommandBlock(command: HelpCommand, style: HelpStyle, indent = '    '): string[] {
+  const lines = [`${indent}${style.command(command.usage)}`];
+  lines.push(`${indent}  ${style.dim(command.summary)}`);
   return lines;
 }
 
-export function formatRootHelp(): string {
+export function formatRootHelp(options: HelpFormatOptions = {}): string {
+  const style = createHelpStyle(shouldUseHelpColor(options));
   const lines: string[] = [
-    'Invoker CLI',
+    style.title('Invoker CLI'),
     '',
-    'Usage:',
-    '  invoker-cli <command> [options]',
-    '  invoker-cli --help',
-    '  invoker-cli --version',
+    style.section('Usage'),
+    style.dim('  invoker-cli <command> [options]'),
+    style.dim('  invoker-cli --help'),
+    style.dim('  invoker-cli --version'),
     '',
-    'Commands:',
+    style.section('Commands'),
   ];
 
   for (const group of COMMAND_GROUPS) {
     lines.push('');
-    lines.push(`  ${group.title}`);
+    lines.push(`  ${style.section(group.title)}`);
     for (const command of group.commands) {
-      lines.push(...formatCommandBlock(command));
+      lines.push(...formatCommandBlock(command, style));
     }
   }
 
-  for (const group of ROOT_OPTION_GROUPS) {
-    lines.push('');
-    lines.push(`${group.title}:`);
-    lines.push(...formatOptionLines(group.options));
-  }
-
   lines.push('');
-  lines.push('Run \'invoker-cli <command> --help\' for command-specific options and details.');
+  lines.push(style.section('Common options'));
+  lines.push(...formatOptionLines(ROOT_OPTIONS, style));
+  lines.push('');
+  lines.push(style.dim('More detail: invoker-cli <command> --help'));
   return lines.join('\n');
 }
 
@@ -389,10 +386,10 @@ function findQueryHelp(): HelpCommand {
   return {
     id: 'query',
     usage: 'query <workflows|tasks|workflow <id>|task <id>|capacity> [options]',
-    summary: 'Read workflow and task state from a live owner, or from a read-only database view with --standalone.',
-    options: QUERY_COMMAND_OPTIONS,
+    summary: 'Inspect workflows and tasks.',
+    options: QUERY_OPTIONS,
     details: COMMAND_GROUPS
-      .find((group) => group.title === 'Workflow and task queries')
+      .find((group) => group.title === QUERY_GROUP_TITLE)
       ?.commands
       .map((command) => `${command.usage} — ${command.summary}`) ?? [],
   };
@@ -414,10 +411,13 @@ export function resolveHelpCommandId(argv: readonly string[]): string | undefine
 
 function withQueryOptions(command: HelpCommand): HelpCommand {
   if (command.options && command.options.length > 0) return command;
-  return { ...command, options: QUERY_COMMAND_OPTIONS };
+  return { ...command, options: QUERY_OPTIONS };
 }
 
-export function formatCommandHelp(commandId: string): string | undefined {
+export function formatCommandHelp(
+  commandId: string,
+  options: HelpFormatOptions = {},
+): string | undefined {
   let command: HelpCommand | undefined;
   if (commandId === 'query') {
     command = findQueryHelp();
@@ -428,21 +428,22 @@ export function formatCommandHelp(commandId: string): string | undefined {
   }
   if (!command) return undefined;
 
+  const style = createHelpStyle(shouldUseHelpColor(options));
   const lines: string[] = [
-    `Usage: invoker-cli ${command.usage}`,
+    `${style.section('Usage')}: invoker-cli ${style.command(command.usage)}`,
     '',
     command.summary,
   ];
   for (const detail of command.details ?? []) {
-    lines.push(detail);
+    lines.push(style.dim(detail));
   }
   if (command.options && command.options.length > 0) {
     lines.push('');
-    lines.push('Options:');
-    lines.push(...formatOptionLines(command.options));
+    lines.push(style.section('Options'));
+    lines.push(...formatOptionLines(command.options, style));
   }
   lines.push('');
-  lines.push('Run \'invoker-cli --help\' for all commands.');
+  lines.push(style.dim('All commands: invoker-cli --help'));
   return lines.join('\n');
 }
 

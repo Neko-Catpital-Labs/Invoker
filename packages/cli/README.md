@@ -6,6 +6,6 @@ Standalone headless Invoker runner.
 invoker-cli run plans/fixtures/hello-world.yaml --db-dir /tmp/invoker-cli-smoke-db
 ```
 
-`invoker-cli --help` prints grouped commands (execution, queries, management, workers, install/setup) and scoped options. Use `invoker-cli <command> --help` for command-specific flags; `invoker-cli uninstall --help` also documents exit codes and coverage.
+`invoker-cli --help` lists commands by priority (getting started → run → look up → manage → workers → advanced)
 
 The v1 archive distribution requires Node 26.

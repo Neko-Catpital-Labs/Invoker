@@ -6,6 +6,7 @@ import {
   formatRootHelp,
   listHelpCommandGroups,
   listRootHelpCommands,
+  shouldUseHelpColor,
 } from '../cli-help.js';
 import { CLI_SET_FIELDS, main } from '../index.js';
 
@@ -31,16 +32,19 @@ function captureProcessOutput() {
 }
 
 const EXPECTED_GROUPS = [
-  'Workflow execution',
-  'Workflow and task queries',
-  'Workflow and task management',
-  'Owner and workers',
-  'Runtime controls',
-  'Installation and diagnostics',
-  'Setup and integrations',
+  'Getting started',
+  'Run workflows',
+  'Look up status',
+  'Manage workflows & tasks',
+  'Owner & workers',
+  'Advanced',
 ] as const;
 
 const EXPECTED_COMMAND_IDS = [
+  'install',
+  'doctor',
+  'setup',
+  'mcp',
   'run',
   'wait',
   'query workflows',
@@ -55,35 +59,32 @@ const EXPECTED_COMMAND_IDS = [
   'set',
   'delete',
   'delete-all',
-  'agent-login',
   'owner serve',
   'worker',
   'worker toggles',
   'run-worker',
   'spend-gate',
   'auto-approve-authors',
-  'install',
+  'agent-login',
   'uninstall',
-  'doctor',
-  'setup',
-  'mcp',
 ] as const;
 
 describe('cli help catalog', () => {
-  it('lists every command under the intended groups', () => {
+  it('lists every command under priority-ordered groups', () => {
     const groups = listHelpCommandGroups();
     expect(groups.map((group) => group.title)).toEqual([...EXPECTED_GROUPS]);
 
     const byGroup = new Map(groups.map((group) => [group.title, group.commands.map((command) => command.id)]));
-    expect(byGroup.get('Workflow execution')).toEqual(['run', 'wait']);
-    expect(byGroup.get('Workflow and task queries')).toEqual([
+    expect(byGroup.get('Getting started')).toEqual(['install', 'doctor', 'setup', 'mcp']);
+    expect(byGroup.get('Run workflows')).toEqual(['run', 'wait']);
+    expect(byGroup.get('Look up status')).toEqual([
       'query workflows',
       'query tasks',
       'query workflow',
       'query task',
       'query capacity',
     ]);
-    expect(byGroup.get('Workflow and task management')).toEqual([
+    expect(byGroup.get('Manage workflows & tasks')).toEqual([
       'retry',
       'resume',
       'retry-task',
@@ -91,29 +92,27 @@ describe('cli help catalog', () => {
       'set',
       'delete',
       'delete-all',
-      'agent-login',
     ]);
-    expect(byGroup.get('Owner and workers')).toEqual([
+    expect(byGroup.get('Owner & workers')).toEqual([
       'owner serve',
       'worker',
       'worker toggles',
       'run-worker',
     ]);
-    expect(byGroup.get('Runtime controls')).toEqual(['spend-gate', 'auto-approve-authors']);
-    expect(byGroup.get('Installation and diagnostics')).toEqual(['install', 'uninstall', 'doctor']);
-    expect(byGroup.get('Setup and integrations')).toEqual(['setup', 'mcp']);
+    expect(byGroup.get('Advanced')).toEqual([
+      'spend-gate',
+      'auto-approve-authors',
+      'agent-login',
+      'uninstall',
+    ]);
   });
 
-  it('keeps root help discoverable, grouped, and free of ANSI color', () => {
-    const help = formatRootHelp();
+  it('keeps root help scannable and plain without color', () => {
+    const help = formatRootHelp({ color: false });
     expect(help.startsWith('Invoker CLI\n')).toBe(true);
-    expect(help).toContain('Usage:\n  invoker-cli <command> [options]');
-    expect(help).toContain('Global options:');
-    expect(help).toContain('Query options:');
-    expect(help).toContain('Execution and mutation options:');
-    expect(help).toContain('Installation and setup options:');
-    expect(help).toContain('Planner setup options:');
-    expect(help).toContain('Run \'invoker-cli <command> --help\' for command-specific options and details.');
+    expect(help).toContain('Usage\n  invoker-cli <command> [options]');
+    expect(help).toContain('Common options');
+    expect(help).toContain('More detail: invoker-cli <command> --help');
     expect(help).not.toMatch(/\u001b\[|\x1b\[/);
 
     for (const group of EXPECTED_GROUPS) {
@@ -125,26 +124,50 @@ describe('cli help catalog', () => {
     }
   });
 
-  it('preserves set fields, force semantics, concurrency, spend-gate, and auto-approve notes', () => {
-    const help = formatRootHelp();
-    expect(help).toContain(`Fields: ${CLI_SET_FIELDS.join(', ')}.`);
-    expect(help).toContain('Let `set` edit a running task; the owner cancels the launched attempt first.');
-    expect(help).toContain('Maximum concurrent mutation requests for `retry-tasks`. Defaults to 8.');
-    expect(help).toContain('While tripped, every Codex request fails');
-    expect(help).toContain('Does not enable the auto-approve toggle.');
-    expect(help).toContain('the owner snapshots the DB first.');
-    expect(help).toContain(`Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}`);
-    expect(help).toContain('Defaults to ~/.invoker/mcp.json');
+  it('uses ANSI color when requested', () => {
+    const help = formatRootHelp({ color: true });
+    expect(help).toMatch(/\u001b\[/);
+    expect(help).toContain('Invoker CLI');
+    expect(help).toContain('Getting started');
+  });
+
+  it('honors NO_COLOR for auto color detection', () => {
+    const previous = process.env.NO_COLOR;
+    process.env.NO_COLOR = '1';
+    try {
+      expect(shouldUseHelpColor()).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = previous;
+    }
+  });
+
+  it('preserves important behavioral notes in command help', () => {
+    const root = formatRootHelp({ color: false });
+    expect(root).toContain(`Change a task field (${CLI_SET_FIELDS.join(', ')}).`);
+    expect(root).toContain('Check or clear the Codex spend shutoff.');
+    expect(root).toContain('does not turn the toggle on');
+    expect(root).toContain('owner snapshots the DB first');
+
+    const setHelp = formatCommandHelp('set', { color: false });
+    expect(setHelp).toContain('--force');
+    expect(setHelp).toContain('Running tasks need --force');
+
+    const retryHelp = formatCommandHelp('retry-tasks', { color: false });
+    expect(retryHelp).toContain('default 8');
+
+    const setupHelp = formatCommandHelp('setup', { color: false });
+    expect(setupHelp).toContain(`default ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}`);
+    expect(setupHelp).toContain('~/.invoker/mcp.json');
   });
 
   it('formats command-specific help for supported commands', () => {
-    expect(formatCommandHelp('query')).toContain('Usage: invoker-cli query <workflows|tasks|workflow <id>|task <id>|capacity>');
-    expect(formatCommandHelp('query')).toContain('--workflow <id>');
-    expect(formatCommandHelp('retry-tasks')).toContain('--parallel N');
-    expect(formatCommandHelp('retry-tasks')).toContain('Defaults to 8.');
-    expect(formatCommandHelp('set')).toContain('--force');
-    expect(formatCommandHelp('setup')).toContain('--planner-url <url>');
-    expect(formatCommandHelp('uninstall')).toContain('--keep-data');
+    expect(formatCommandHelp('query', { color: false })).toContain('Usage: invoker-cli query <workflows|tasks|workflow <id>|task <id>|capacity>');
+    expect(formatCommandHelp('query', { color: false })).toContain('--workflow <id>');
+    expect(formatCommandHelp('retry-tasks', { color: false })).toContain('--parallel N');
+    expect(formatCommandHelp('set', { color: false })).toContain('--force');
+    expect(formatCommandHelp('setup', { color: false })).toContain('--planner-url <url>');
+    expect(formatCommandHelp('uninstall', { color: false })).toContain('--keep-data');
   });
 });
 
@@ -157,9 +180,9 @@ describe('invoker-cli --help integration', () => {
       expect(code).toBe(0);
       expect(output.stderr).toBe('');
       expect(output.stdout).toContain('Invoker CLI');
-      expect(output.stdout).toContain('Workflow execution');
+      expect(output.stdout).toContain('Getting started');
+      expect(output.stdout).toContain('Run workflows');
       expect(output.stdout).toContain('run <plan.yaml>');
-      expect(output.stdout).not.toMatch(/\u001b\[|\x1b\[/);
     }
   });
 
@@ -172,7 +195,7 @@ describe('invoker-cli --help integration', () => {
       { argv: ['wait', '--help'], needle: 'Usage: invoker-cli wait' },
       { argv: ['setup', 'planner', '--help'], needle: 'Usage: invoker-cli setup' },
       { argv: ['spend-gate', '--help'], needle: 'spend-gate [status|reset]' },
-      { argv: ['auto-approve-authors', '--help'], needle: 'Does not enable the auto-approve toggle.' },
+      { argv: ['auto-approve-authors', '--help'], needle: 'does not turn the toggle on' },
       { argv: ['doctor', '--help'], needle: 'doctor [--fix] [--json]' },
     ];
 
