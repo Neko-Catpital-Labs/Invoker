@@ -2,7 +2,7 @@
 # Prove plan-to-invoker hard-requires scrub-handoff-artifacts on PR-bound plans.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL="$ROOT/skills/plan-to-invoker/SKILL.md"
+SKILL="$ROOT/corpus/skills/plan-to-invoker/SKILL.md"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/handoff-scrub-gate.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -134,11 +134,11 @@ sed 's#bash scripts/scrub-handoff-artifacts.sh#bash scripts/scrub-handoff-artifa
 
 set +e
 # Prefer atomicity lint once the gate exists; fall back to skill-doctor first-failed.
-bash "$ROOT/skills/plan-to-invoker/scripts/lint-task-atomicity.sh" "$miss" >/tmp/miss-out 2>&1
+bash "$ROOT/corpus/skills/plan-to-invoker/scripts/lint-task-atomicity.sh" "$miss" >/tmp/miss-out 2>&1
 miss_ec=$?
-bash "$ROOT/skills/plan-to-invoker/scripts/lint-task-atomicity.sh" "$ok" >/tmp/ok-out 2>&1
+bash "$ROOT/corpus/skills/plan-to-invoker/scripts/lint-task-atomicity.sh" "$ok" >/tmp/ok-out 2>&1
 ok_ec=$?
-bash "$ROOT/skills/plan-to-invoker/scripts/lint-task-atomicity.sh" "$apply" > "$tmp/apply-out" 2>&1
+bash "$ROOT/corpus/skills/plan-to-invoker/scripts/lint-task-atomicity.sh" "$apply" > "$tmp/apply-out" 2>&1
 apply_ec=$?
 set -e
 
