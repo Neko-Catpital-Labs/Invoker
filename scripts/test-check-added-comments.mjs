@@ -331,8 +331,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
   ].join('\n');
   assert.equal(
     collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.js']])).length,
-    0,
-    'a grandfathered skill markdown path must stay exempt even for a genuinely new fence comment',
+    1,
+    'skills/admin-bypass-sweep/SKILL.md is no longer exempt, so a new fence comment there is flagged',
   );
 }
 
