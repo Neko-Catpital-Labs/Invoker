@@ -18,6 +18,7 @@ import type {
 } from '@invoker/execution-engine';
 import { DEFAULT_CODEX_DAILY_TOKEN_BUDGET } from '@invoker/execution-engine';
 import { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
+import type { RunnerKind } from '@invoker/workflow-core';
 
 export { BUILT_IN_LOCAL_EXECUTION_POOL_ID } from '@invoker/workflow-core';
 
@@ -49,6 +50,11 @@ export interface DefaultExecutionConfig {
    * Only applied when the resolved task executionAgent matches this default agent.
    */
   executionModel?: string;
+}
+
+export interface ForceExecutionConfig {
+  poolId?: string;
+  executionAgent?: string;
 }
 
 /**
@@ -405,6 +411,7 @@ export interface InvokerConfig {
    * This is separate from Slack planning presets and applies across surfaces.
    */
   defaultExecution?: DefaultExecutionConfig;
+  forceExecution?: ForceExecutionConfig;
   /**
    * When true, failed CI checks on Invoker-created review-gate PRs can
    * trigger the same auto-fix recovery flow used for task failures.
@@ -825,6 +832,50 @@ export function resolveAutoFixExecutionModel(config: InvokerConfig): string | un
 
 export function resolveAutoFixPoolId(config: InvokerConfig): string | undefined {
   return config.autoFixPoolId?.trim() || undefined;
+}
+
+export interface ResolvedForceExecution {
+  poolId?: string;
+  executionAgent?: string;
+}
+
+export function resolveForceExecution(config: InvokerConfig): ResolvedForceExecution | undefined {
+  const force = config.forceExecution;
+  if (!force || typeof force !== 'object') return undefined;
+  const poolId = force.poolId?.trim();
+  const executionAgent = force.executionAgent?.trim();
+  if (!poolId && !executionAgent) return undefined;
+  return {
+    ...(poolId ? { poolId } : {}),
+    ...(executionAgent ? { executionAgent } : {}),
+  };
+}
+
+const FORCE_EXECUTION_POOL_EXEMPT_RUNNER_KINDS: ReadonlySet<string> = new Set<RunnerKind>([
+  'scratch',
+  'docker',
+  'merge',
+]);
+
+export interface ForceExecutionViewInput {
+  poolId?: string;
+  executionAgent?: string;
+  runnerKind?: RunnerKind | string;
+}
+
+export function applyForceExecutionView<T extends ForceExecutionViewInput>(
+  input: T,
+  force: ResolvedForceExecution | undefined,
+): T & ForceExecutionViewInput {
+  if (!force) return input;
+  const overrides: ForceExecutionViewInput = {};
+  if (force.executionAgent) {
+    overrides.executionAgent = force.executionAgent;
+  }
+  if (force.poolId && !FORCE_EXECUTION_POOL_EXEMPT_RUNNER_KINDS.has(input.runnerKind ?? '')) {
+    overrides.poolId = force.poolId;
+  }
+  return { ...input, ...overrides };
 }
 
 
