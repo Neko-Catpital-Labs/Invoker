@@ -33,6 +33,7 @@ describe('external dependency manifest', () => {
       'git',
       'pnpm',
       'gh',
+      'glab',
       'docker',
       'ssh',
       'codex',

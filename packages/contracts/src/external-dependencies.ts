@@ -79,6 +79,14 @@ const TOOL_DEPENDENCIES = {
     requiredFor: 'GitHub PR and release flows',
     installHint: 'brew install gh',
   },
+  glab: {
+    id: 'glab',
+    name: 'GitLab CLI',
+    kind: 'tool',
+    command: 'glab',
+    requiredFor: 'GitLab merge request and pipeline flows',
+    installHint: 'brew install glab',
+  },
   docker: {
     id: 'docker',
     name: 'Docker',
