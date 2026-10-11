@@ -20,8 +20,7 @@ import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry,
   TaskRunner,
-  GitHubMergeGateProvider,
-  ReviewProviderRegistry,
+  createDefaultReviewProviders,
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
@@ -204,12 +203,7 @@ export function createHeadlessExecutor(
         });
       },
     },
-    mergeGateProvider: new GitHubMergeGateProvider(),
-    reviewProviderRegistry: (() => {
-      const registry = new ReviewProviderRegistry();
-      registry.register(new GitHubMergeGateProvider());
-      return registry;
-    })(),
+    ...createDefaultReviewProviders(),
     executionAgentRegistry: deps.executionAgentRegistry,
     callbacks: {
       onOutput: (taskId, data) => {
