@@ -222,6 +222,7 @@ function parseGitLabProject(host: string, pathname: string): ForgeProject | unde
     };
   }
 
+  if (/(^|\/)-(\/|$)/.test(pathname)) return undefined;
   const projectPath = stripGitSuffix(pathname);
   if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
   return {
