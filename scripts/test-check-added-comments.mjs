@@ -181,8 +181,8 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/scripts/pr_worker_safe_push.py b/scripts/pr_worker_safe_push.py',
-    '+++ b/scripts/pr_worker_safe_push.py',
+    'diff --git a/scripts/repair_filing_ledger.py b/scripts/repair_filing_ledger.py',
+    '+++ b/scripts/repair_filing_ledger.py',
     '@@ -0,0 +1,2 @@',
     '+value = 1',
     '+result = value  # a whole-file reformat could re-add this line verbatim',
@@ -197,8 +197,26 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
 
 {
   const diff = [
-    'diff --git a/scripts/pr_worker_safe_push_new_helper.py b/scripts/pr_worker_safe_push_new_helper.py',
-    '+++ b/scripts/pr_worker_safe_push_new_helper.py',
+    'diff --git a/scripts/pr_worker_safe_push.py b/scripts/pr_worker_safe_push.py',
+    '+++ b/scripts/pr_worker_safe_push.py',
+    '@@ -0,0 +1,2 @@',
+    '+value = 1',
+    '+result = value  # a path that left the grandfather set has no exemption left',
+    '',
+  ].join('\n');
+  const violations = collectAddedCommentViolations(diff);
+  assert.equal(
+    violations.length,
+    1,
+    'scripts/pr_worker_safe_push.py left the grandfather set, so its added comments are violations',
+  );
+  assert.equal(violations[0].line, 2);
+}
+
+{
+  const diff = [
+    'diff --git a/scripts/repair_filing_ledger_new_helper.py b/scripts/repair_filing_ledger_new_helper.py',
+    '+++ b/scripts/repair_filing_ledger_new_helper.py',
     '@@ -0,0 +1,2 @@',
     '+value = 1',
     '+result = value  # a new file must not inherit its neighbor\'s exemption',
