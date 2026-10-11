@@ -14,9 +14,9 @@ fail() {
   exit 1
 }
 
-mkdir -p "$TMP/scripts/repro" "$TMP/skills/invoker-setup" "$TMP/packages/contracts/src"
+mkdir -p "$TMP/scripts/repro" "$TMP/corpus/skills/invoker-setup" "$TMP/packages/contracts/src"
 cp "$REPO_ROOT/scripts/repro/repro-coderabbit-pr2634-default-preset-error.sh" "$TMP/scripts/repro/"
-cp "$REPO_ROOT/skills/invoker-setup/SKILL.md" "$TMP/skills/invoker-setup/SKILL.md"
+cp "$REPO_ROOT/corpus/skills/invoker-setup/SKILL.md" "$TMP/corpus/skills/invoker-setup/SKILL.md"
 
 python3 - "$REPO_ROOT/packages/contracts/src/prerequisites.ts" "$TMP/packages/contracts/src/prerequisites.ts" <<'PY'
 from pathlib import Path
