@@ -10,6 +10,7 @@ import {
   type AgentLoginWatchConfig,
   type CatstackDeployConfig,
   type DbReaperConfig,
+  type ForceExecutionConfig,
   type CrossRepoResearchConfig,
   type CrossRepoResearchSource,
   type InvokerConfig,
@@ -412,6 +413,21 @@ function validateAdminBypassE2eBabysitConfig(config: InvokerConfig): void {
   }
 }
 
+function validateForceExecutionConfig(config: InvokerConfig): void {
+  const forceExecution = config.forceExecution;
+  if (forceExecution === undefined) return;
+  if (typeof forceExecution !== 'object' || forceExecution === null || Array.isArray(forceExecution)) {
+    throw new Error('forceExecution must be an object');
+  }
+  const typed = forceExecution as ForceExecutionConfig;
+  if (typed.poolId !== undefined && !isNonEmptyString(typed.poolId)) {
+    throw new Error('forceExecution.poolId must be a non-empty string when set');
+  }
+  if (typed.executionAgent !== undefined && !isNonEmptyString(typed.executionAgent)) {
+    throw new Error('forceExecution.executionAgent must be a non-empty string when set');
+  }
+}
+
 export function validateInvokerConfig(config: InvokerConfig, options: ConfigValidationOptions = {}): InvokerConfig {
   const agentRegistry = options.agentRegistry ?? builtinAgents;
   const nestedExecutionAgent = config.defaultExecution?.executionAgent;
@@ -448,5 +464,6 @@ export function validateInvokerConfig(config: InvokerConfig, options: ConfigVali
   validateSelfDeployConfig(config);
   validateDbReaperConfig(config);
   validateAdminBypassE2eBabysitConfig(config);
+  validateForceExecutionConfig(config);
   return config;
 }
