@@ -2,6 +2,8 @@ node_modules/
 dist/
 .invoker/
 *.db
+*.db-shm
+*.db-wal
 .env*
 .DS_Store
 coverage/
@@ -60,3 +62,9 @@ user.bazelrc
 packages/invoker_worker/.venv/
 packages/invoker_worker/*.egg-info/
 .pytest_cache/
+
+# Ephemeral workspace dirs; workspace/evals stays tracked.
+workspace/worktrees/
+workspace/tmp/
+workspace/artifacts/
+workspace/data/
