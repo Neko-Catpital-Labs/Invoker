@@ -90,6 +90,18 @@ describe('parseForgeProject', () => {
     });
   });
 
+  it('rejects unrecognized GitLab project subpaths', () => {
+    expect(
+      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/issues/5'),
+    ).toBeUndefined();
+    expect(
+      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/tree/main'),
+    ).toBeUndefined();
+    expect(
+      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/blob/main/README.md'),
+    ).toBeUndefined();
+  });
+
   it('accepts INVOKER_GITLAB_HOST self-managed hosts', () => {
     process.env.INVOKER_GITLAB_HOST = 'git.example.com';
     expect(parseForgeProject('https://git.example.com/team/app/-/merge_requests/3')).toEqual({
