@@ -504,7 +504,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
   }, [session?.outputSnapshot, session?.sessionId, terminalActive]);
 
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+    <div className="relative min-h-0 flex-1 overflow-hidden bg-[#FC68DC]">
       {!session && (
         <div
           data-testid="invoker-terminal-tmux-placeholder"
