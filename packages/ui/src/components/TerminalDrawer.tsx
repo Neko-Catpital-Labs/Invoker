@@ -447,7 +447,7 @@ export function TerminalDrawer({
       </div>
       <div
           data-testid="terminal-drawer-body"
-          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative shrink-0 overflow-hidden bg-black'}
+          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-[#FC68DC]' : 'relative shrink-0 overflow-hidden bg-[#FC68DC]'}
           style={{
             ...(isMaximized ? {} : { height: DRAWER_BODY_HEIGHT_PX }),
             display: showBody ? undefined : 'none',
