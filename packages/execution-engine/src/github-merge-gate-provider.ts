@@ -5,12 +5,16 @@ import { join } from 'node:path';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import type {
-  MergeGateProvider,
+  ForgeFetchFailedJobLogOptions,
+  ForgeListOpenReviewsOptions,
+  ForgeOpenReview,
+  ForgeProvider,
   MergeGateProviderResult,
   MergeGateApprovalStatus,
   MergeGatePrLifecycle,
   MergeGateFailedCheck,
 } from './merge-gate-provider.js';
+import { parseForgeProject } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import { isGitRefLockRace, retryTransientGitHubCli } from './git-utils.js';
 
@@ -109,8 +113,8 @@ async function listRemoteNamesForGithubCli(
   }
 }
 
-export class GitHubMergeGateProvider implements MergeGateProvider {
-  readonly name = 'github';
+export class GitHubMergeGateProvider implements ForgeProvider {
+  readonly name = 'github' as const;
 
   private static readonly TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
 
@@ -227,6 +231,38 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       ], cwd));
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  async listOpenReviews(opts: ForgeListOpenReviewsOptions): Promise<ForgeOpenReview[]> {
+    const stdout = await retryTransientGitHubCli(() => this.exec('gh', [
+      'pr', 'list',
+      '--repo', opts.projectPath,
+      '--state', 'open',
+      '--json', 'number,state,baseRefName,headRefName,headRefOid,url',
+      '--limit', '500',
+    ], opts.cwd));
+    const rows = JSON.parse(stdout) as ForgeOpenReview[];
+    return rows.map((row) => ({
+      number: row.number,
+      state: row.state,
+      baseRefName: row.baseRefName,
+      headRefName: row.headRefName,
+      headRefOid: row.headRefOid,
+      url: row.url,
+    }));
+  }
+
+  async fetchFailedJobLog(opts: ForgeFetchFailedJobLogOptions): Promise<string | undefined> {
+    const project = parseForgeProject(opts.detailsUrl);
+    if (!project || project.kind !== 'github' || !project.runId) return undefined;
+    try {
+      const args = project.jobId
+        ? ['run', 'view', '--log-failed', '--job', project.jobId]
+        : ['run', 'view', project.runId, '--log-failed'];
+      return await this.exec('gh', args, opts.cwd);
+    } catch {
+      return undefined;
     }
   }
 
