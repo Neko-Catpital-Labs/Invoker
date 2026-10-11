@@ -115,20 +115,20 @@ describe('invoker-cli', () => {
   it('--help exits 0', async () => {
     const result = await runCli(['--help']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('invoker-cli run <plan.yaml>');
+    expect(result.stdout).toContain('run <plan.yaml>');
   });
 
   it('--help lists the MCP server command and JSON-only output contract', async () => {
     const result = await runCli(['--help']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('invoker-cli mcp');
-    expect(result.stdout).toContain('Emit only a machine-readable result summary on stdout.');
+    expect(result.stdout).toContain('\n    mcp\n');
+    expect(result.stdout).toContain('Emit only a machine-readable result summary on stdout');
   });
 
   it('--help lists the planner setup command', async () => {
     const result = await runCli(['--help']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('invoker-cli setup [planner|slack]');
+    expect(result.stdout).toContain('setup [planner|slack|machines]');
     expect(result.stdout).toContain('--planner-url <url>');
     expect(result.stdout).toContain('Defaults to ~/.invoker/mcp.json');
   });
@@ -234,7 +234,7 @@ describe('invoker-cli', () => {
   it('--help lists the headless owner command', async () => {
     const result = await runCli(['--help']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('invoker-cli owner serve');
+    expect(result.stdout).toContain('owner serve');
     expect(result.stdout).toContain('Start a headless Invoker owner process.');
   });
 

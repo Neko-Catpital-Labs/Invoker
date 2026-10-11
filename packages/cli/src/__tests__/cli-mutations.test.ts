@@ -272,10 +272,9 @@ describe('invoker-cli set', () => {
     const code = await main(['--help']);
     output.restore();
 
-    const usageBlock = output.stdout.split('\n\n')[0].split('\n').slice(1);
-    const subcommands = usageBlock.map((line) => line.trim().split(/\s+/)[1]);
     expect(code).toBe(0);
-    expect(subcommands).toContain('set');
+    expect(output.stdout).toContain('set <field> <taskId> <value...>');
+    expect(output.stdout).toContain('Workflow and task management');
     expect(output.stdout).toContain(`Fields: ${CLI_SET_FIELDS.join(', ')}.`);
   });
 
