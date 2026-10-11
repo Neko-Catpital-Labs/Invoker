@@ -81,7 +81,7 @@ const COMMAND_GROUPS: readonly HelpCommandGroup[] = [
       {
         id: 'install',
         usage: 'install [--demo]',
-        summary: 'Install the CLI, UI, skills, and default workers.',
+        summary: 'Set up the UI, skills, MCP integration, and default workers.',
         options: [
           { flag: '--demo', description: 'Show a sample install transcript without changing anything.' },
         ],

@@ -145,8 +145,8 @@ export async function runInstall(
     if (arg === '-h' || arg === '--help') {
       io.print('Usage: invoker-cli install [--demo]');
       io.print('');
-      io.print('Quick-install: global cli+ui, doctor --fix, skills+MCP, enable pr-status/autofix/auto-approve.');
-      io.print('Skips Slack credentials and remote machines.');
+      io.print('Set up the UI, skills, MCP integration, and default workers.');
+      io.print('Also runs doctor --fix and ensures global cli+ui packages. Skips Slack and remote machines.');
       return 0;
     }
     throw new Error(`Unknown install option: ${arg}`);
