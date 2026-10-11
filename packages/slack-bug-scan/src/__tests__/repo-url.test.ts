@@ -10,6 +10,11 @@ describe('slack-bug-scan repo url extraction', () => {
     expect(extractRepoUrlFromText('see https://github.com/acme/widgets for source')).toBe('https://github.com/acme/widgets');
   });
 
+  it('extracts a GitLab nested-group project url', () => {
+    expect(extractRepoUrlFromText('see https://gitlab.com/Group/Sub/Project for source'))
+      .toBe('https://gitlab.com/Group/Sub/Project');
+  });
+
   it('returns undefined when no url is present', () => {
     expect(extractRepoUrlFromText('just a random channel about snacks')).toBeUndefined();
     expect(extractRepoUrlFromText(undefined)).toBeUndefined();
