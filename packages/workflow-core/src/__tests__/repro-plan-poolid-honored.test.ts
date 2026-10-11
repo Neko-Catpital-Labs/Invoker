@@ -141,4 +141,61 @@ tasks:
     const task = orchestrator.getTask('t1');
     expect(task!.config.poolId).toBe('local-mac-only');
   });
+
+  it('forcePoolId wins over a route rule and a plan pin for a pnpm command', () => {
+    const orchestrator = new Orchestrator({
+      persistence: new InMemoryPersistence(),
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 3,
+      defaultPoolId: 'mixed-local-ssh',
+      availablePoolIds: ['mixed-local-ssh', 'route-pool', 'forced-pool'],
+      executorRoutingRules: [{ regex: '\\bpnpm(?:\\s|$)', poolId: 'route-pool', strategy: 'route' }],
+      forcePoolId: 'forced-pool',
+    });
+
+    orchestrator.loadPlan({
+      name: 'Force Pool Wins',
+      repoUrl: 'git@github.com:test/repo.git',
+      poolId: 'route-pool',
+      tasks: [
+        {
+          id: 't1',
+          description: 'pnpm task with route rule and plan pin',
+          prompt: 'do the work',
+          command: 'pnpm test',
+        },
+      ],
+    });
+
+    const task = orchestrator.getTask('t1');
+    expect(task!.config.poolId).toBe('forced-pool');
+  });
+
+  it('without forcePoolId, the route rule still wins for the same pnpm command', () => {
+    const orchestrator = new Orchestrator({
+      persistence: new InMemoryPersistence(),
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 3,
+      defaultPoolId: 'mixed-local-ssh',
+      availablePoolIds: ['mixed-local-ssh', 'route-pool'],
+      executorRoutingRules: [{ regex: '\\bpnpm(?:\\s|$)', poolId: 'route-pool', strategy: 'route' }],
+    });
+
+    orchestrator.loadPlan({
+      name: 'Route Rule Wins',
+      repoUrl: 'git@github.com:test/repo.git',
+      poolId: 'route-pool',
+      tasks: [
+        {
+          id: 't1',
+          description: 'pnpm task with route rule and plan pin',
+          prompt: 'do the work',
+          command: 'pnpm test',
+        },
+      ],
+    });
+
+    const task = orchestrator.getTask('t1');
+    expect(task!.config.poolId).toBe('route-pool');
+  });
 });
