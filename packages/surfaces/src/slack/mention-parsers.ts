@@ -1,3 +1,4 @@
+import { parseForgeProject } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/planning-core';
 
 export type LocalRequest =
@@ -8,7 +9,6 @@ export type LocalRequest =
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
 const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
-const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 const CHANNEL_REPO_SETUP_INTENT_RE = /\b(?:set\s*up|setup|configure|map|bind)\b/i;
 const CHANNEL_REPO_PAIR_RE = /#([A-Za-z0-9][A-Za-z0-9_-]{0,79})\s*(?:(?:=>|->|=|:|\bto\b|\bfor\b|\brepo(?:sitory)?\b)\s*)?(<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+))/gi;
 
@@ -122,13 +122,18 @@ export function normalizeSupportedRepoCandidate(candidate: string): string | und
   }
   if (!url.host || url.username || url.password || url.search || url.hash) return undefined;
 
-  const host = url.host.toLowerCase();
-  if (host === 'github.com') {
-    return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
-      ? candidate.replace(/\/$/, '')
-      : undefined;
+  const cleaned = candidate.replace(/\/$/, '');
+  const project = parseForgeProject(cleaned);
+  if (
+    project
+    && !project.reviewId
+    && !project.jobId
+    && !project.runId
+    && !project.pipelineId
+  ) {
+    return cleaned;
   }
-  return url.pathname.endsWith('.git') ? candidate : undefined;
+  return url.pathname.endsWith('.git') ? cleaned : undefined;
 }
 
 function normalizePublicChannelName(name: string): string {
