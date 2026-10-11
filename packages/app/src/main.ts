@@ -102,7 +102,7 @@ import {
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
-  GitHubMergeGateProvider,
+  createDefaultReviewProviders,
   PR_STATUS_WORKER_KIND,
   registerBuiltinAgents,
   registerBuiltinWorkers,
@@ -450,7 +450,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
-    mergeGateProvider: new GitHubMergeGateProvider(),
+    ...createDefaultReviewProviders(),
     autoFix: {
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,
