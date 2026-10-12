@@ -127,6 +127,7 @@ describe('repairReviewGateCiByPr', () => {
         logger,
         defaultAutoFixRetries: 2,
         getAutoFixAgent: () => 'codex',
+        getForceExecutionAgent: () => 'claude',
         attemptLedger: createAutoFixAttemptLedger(),
       },
       mergeGateProvider: { checkApproval },
@@ -147,6 +148,7 @@ describe('repairReviewGateCiByPr', () => {
       headSha: 'sha-1',
       headRef: 'feature/ci',
       statusText: 'CI failed',
+      agentName: 'claude',
     });
     expect(result).toMatchObject({
       status: 'queued',
