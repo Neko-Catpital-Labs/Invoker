@@ -1136,6 +1136,56 @@ tasks:
     expect(plan.tasks.map((task) => task.executionAgent)).toEqual([undefined, 'codex', 'claude']);
   });
 
+  it('applies forceExecution.executionAgent to command and prompt tasks, over a pinned agent', () => {
+    writeFileSync(isolatedConfigPath, JSON.stringify({
+      defaultBranch: 'main',
+      defaultExecutionAgent: 'codex',
+      forceExecution: { executionAgent: 'claude' },
+    }));
+    const yaml = `
+name: Force Agent Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: command-task
+    description: "Command-only task"
+    command: "echo hi"
+  - id: prompt-task
+    description: "Prompt task"
+    prompt: "Do the thing"
+  - id: pinned-task
+    description: "Pinned agent"
+    prompt: "Do the thing"
+    executionAgent: codex
+`;
+    const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
+    expect(plan.tasks.map((task) => task.executionAgent)).toEqual(['claude', 'claude', 'claude']);
+  });
+
+  it('keeps a pinned executionAgent when forceExecution.executionAgent is absent', () => {
+    writeFileSync(isolatedConfigPath, JSON.stringify({
+      defaultBranch: 'main',
+      defaultExecutionAgent: 'codex',
+      forceExecution: { poolId: 'forced_pool' },
+    }));
+    const yaml = `
+name: No Force Agent Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: command-task
+    description: "Command-only task"
+    command: "echo hi"
+  - id: prompt-task
+    description: "Prompt task"
+    prompt: "Do the thing"
+  - id: pinned-task
+    description: "Pinned agent"
+    prompt: "Do the thing"
+    executionAgent: claude
+`;
+    const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
+    expect(plan.tasks.map((task) => task.executionAgent)).toEqual([undefined, 'codex', 'claude']);
+  });
+
   it('parses executionModel from task definitions', () => {
     const yaml = `
 name: Model Test
