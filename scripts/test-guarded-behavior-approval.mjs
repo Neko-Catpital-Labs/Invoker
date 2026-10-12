@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 
 import { analyzeGuardedBehaviorApproval } from './guarded-behavior-approval.mjs';
 
@@ -38,6 +37,24 @@ function assertAppearsBefore(source, before, after, message) {
   assert.notEqual(beforeIndex, -1, `${message}: missing ${before}`);
   assert.notEqual(afterIndex, -1, `${message}: missing ${after}`);
   assert.ok(beforeIndex < afterIndex, message);
+}
+
+function findDirectAdminBypassLabelFiles(dirUrl = new URL('./', import.meta.url), prefix = 'scripts') {
+  const files = [];
+  for (const entry of readdirSync(dirUrl, { withFileTypes: true })) {
+    const relPath = `${prefix}/${entry.name}`;
+    const entryUrl = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dirUrl);
+    if (entry.isDirectory()) {
+      files.push(...findDirectAdminBypassLabelFiles(entryUrl, relPath));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const source = readFileSync(entryUrl, 'utf8');
+    if (/labels\[\]=admin-bypass|--add-label admin-bypass/.test(source)) {
+      files.push(relPath);
+    }
+  }
+  return files;
 }
 
 assert.deepEqual(analyze([], 'diff --git a/README.md b/README.md\n+ordinary\n'), {
@@ -86,14 +103,7 @@ assertAppearsBefore(
   'daily release bump must check guarded approval before labeling admin-bypass',
 );
 
-const directLabelFiles = execFileSync('rg', [
-  '-l',
-  'labels\\[\\]=admin-bypass|--add-label admin-bypass',
-  'scripts',
-], { encoding: 'utf8' })
-  .trim()
-  .split(/\r?\n/)
-  .filter(Boolean)
+const directLabelFiles = findDirectAdminBypassLabelFiles()
   .filter(path => !/\/(?:test[-_]|fixtures\/)/.test(path))
   .sort();
 assert.deepEqual(directLabelFiles, [

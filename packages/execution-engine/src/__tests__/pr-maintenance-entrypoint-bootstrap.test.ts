@@ -92,6 +92,7 @@ describe('PR maintenance entrypoints bootstrap', () => {
         ...process.env,
         PATH: `${stubBin}:${process.env.PATH ?? ''}`,
         INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+        INVOKER_GITHUB_TARGET_REPOS: '',
         INVOKER_PR_CRON_AUTHOR: 'octocat',
         INVOKER_PR_CRON_DRY_RUN: '1',
         INVOKER_PR_CRON_LOCK: lockPath,

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolveActiveInvokerProfileEnv, resolveInvokerIpcSocketPath, resolveRepoRoot } from '../index.js';
 
 const tempDirs: string[] = [];
+const originalProductionOwnerService = process.env.INVOKER_PRODUCTION_OWNER_SERVICE;
 
 function makeRepoWithProfileScript(source: string): string {
   const repoRoot = mkdtempSync(join(tmpdir(), 'invoker-profile-env-'));
@@ -21,6 +22,12 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+  if (originalProductionOwnerService === undefined) delete process.env.INVOKER_PRODUCTION_OWNER_SERVICE;
+  else process.env.INVOKER_PRODUCTION_OWNER_SERVICE = originalProductionOwnerService;
+});
+
+beforeEach(() => {
+  delete process.env.INVOKER_PRODUCTION_OWNER_SERVICE;
 });
 
 describe('resolveActiveInvokerProfileEnv', () => {
@@ -124,8 +131,10 @@ describe('resolveActiveInvokerProfileEnv', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'invoker-profile-env-missing-'));
     tempDirs.push(repoRoot);
 
-    expect(() => resolveActiveInvokerProfileEnv({ repoRoot })).not.toThrow();
-    expect(resolveActiveInvokerProfileEnv({ repoRoot })).toEqual({});
+    const options = { repoRoot, productionMarkerFileExists: () => false };
+
+    expect(() => resolveActiveInvokerProfileEnv(options)).not.toThrow();
+    expect(resolveActiveInvokerProfileEnv(options)).toEqual({});
   });
 
   it.each([
