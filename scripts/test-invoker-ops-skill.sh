@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_MD="$REPO_ROOT/skills/invoker-ops/SKILL.md"
+SKILL_MD="$REPO_ROOT/corpus/skills/invoker-ops/SKILL.md"
 RETRY_SCRIPT="$REPO_ROOT/scripts/retry-tasks-by-status.sh"
 RUN_SH="$REPO_ROOT/run.sh"
 README="$REPO_ROOT/README.md"
@@ -40,7 +40,7 @@ bash "$RETRY_SCRIPT" --self-test
 
 must_contain "$SKILL_MD" "Never report a workflow/task count, CI status, merge status" "skill must forbid reporting stale status from memory"
 must_contain "$SKILL_MD" "Run the query command again in the same turn" "skill must require a fresh query before reporting state"
-must_contain "$SKILL_MD" "skills/prove-it/SKILL.md" "skill must reference the shared prove-it evidence rule"
+must_contain "$SKILL_MD" "corpus/skills/prove-it/SKILL.md" "skill must reference the shared prove-it evidence rule"
 
 must_contain "$SKILL_MD" "The stop reason is stored in \`execution.inputPrompt\`, and no headless query projection emits that field" "skill must name where the needs_input reason lives and that queries do not project it"
 must_contain "$SKILL_MD" 'say "not projected", not "empty"' "skill must distinguish an unprojected field from an empty one"
