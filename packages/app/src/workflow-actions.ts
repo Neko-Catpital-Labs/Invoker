@@ -36,7 +36,13 @@ import {
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
-import { loadConfig, resolveConflictResolutionSettings, resolveDefaultExecutionAgent } from './config.js';
+import {
+  loadConfig,
+  resolveConflictResolutionSettings,
+  resolveDefaultExecutionAgent,
+  resolveForceExecution,
+  type InvokerConfig,
+} from './config.js';
 
 type LoadedWorkflow = NonNullable<ReturnType<SQLiteAdapter['loadWorkflow']>>;
 type FreshBaseState = { branch: string; commit: string };
@@ -856,7 +862,7 @@ export async function resolveConflictAction(
   try {
     assertLineageCurrent(lineage, orchestrator, signal);
     const config = loadConfig();
-    const settings = resolveConflictResolutionSettings(config, {
+    const settings = resolveConflictResolutionSettingsForAction(config, {
       explicitAgent: agentName,
       pathDefaultAgent: options?.pathDefaultAgent ?? resolveDefaultExecutionAgent(config),
     });
@@ -883,6 +889,20 @@ function resolveTaskRunnerDefaultExecutionAgent(taskExecutor: TaskRunner): strin
   const configured = (taskExecutor as { getDefaultExecutionAgent?: () => string | undefined })
     .getDefaultExecutionAgent?.()?.trim();
   return configured && configured.length > 0 ? configured : DEFAULT_EXECUTION_AGENT;
+}
+
+function resolveConflictResolutionSettingsForAction(
+  config: InvokerConfig,
+  options?: {
+    explicitAgent?: string;
+    pathDefaultAgent?: string;
+  },
+): ReturnType<typeof resolveConflictResolutionSettings> {
+  const forcedAgent = resolveForceExecution(config)?.executionAgent;
+  return resolveConflictResolutionSettings(config, {
+    ...options,
+    explicitAgent: forcedAgent ?? options?.explicitAgent,
+  });
 }
 
 
@@ -955,7 +975,7 @@ export async function fixWithAgentAction(
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
-      const conflictSettings = resolveConflictResolutionSettings(loadConfig(), {
+      const conflictSettings = resolveConflictResolutionSettingsForAction(loadConfig(), {
         explicitAgent: options.agentName,
         pathDefaultAgent: resolveTaskRunnerDefaultExecutionAgent(taskExecutor),
       });
@@ -1127,7 +1147,7 @@ function formatAutoFixDiagnostics(err: unknown): string | undefined {
 
 type AutoFixAgentSelection = {
   selectedAgent: string;
-  selectedAgentSource: 'config' | 'default';
+  selectedAgentSource: 'force' | 'config' | 'default';
   configuredAutoFixAgent?: string;
   fallbackChain: string;
 };
@@ -1136,8 +1156,18 @@ type AutoFixPostRouteStrategy = 'rerun_task' | 'resume_from_fixed_tip';
 
 function resolveAutoFixAgent(
   configuredAutoFixAgent: string | undefined,
+  forceExecutionAgent: string | undefined,
 ): AutoFixAgentSelection {
+  const forceAgent = forceExecutionAgent?.trim() || undefined;
   const configAgent = configuredAutoFixAgent?.trim() || undefined;
+  if (forceAgent) {
+    return {
+      selectedAgent: forceAgent,
+      selectedAgentSource: 'force',
+      configuredAutoFixAgent: configAgent,
+      fallbackChain: 'forceExecution.executionAgent->config->default',
+    };
+  }
   if (configAgent) {
     return {
       selectedAgent: configAgent,
@@ -1271,14 +1301,18 @@ export async function autoFixOnFailure(
     hasMergeConflict: Boolean(task.execution.mergeConflict),
   });
 
-  const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
+  const config = loadConfig();
+  const agentSelection = resolveAutoFixAgent(
+    deps.getAutoFixAgent?.(),
+    resolveForceExecution(config)?.executionAgent,
+  );
   let persistedSavedError: string | undefined;
   let lineage: TaskLineageSnapshot | undefined;
   let routeAgent = agentSelection.selectedAgent;
   let conflictSettings: ReturnType<typeof resolveConflictResolutionSettings> | undefined;
   try {
     if (recoveryRoute.kind === 'resolveConflict') {
-      conflictSettings = resolveConflictResolutionSettings(loadConfig(), {
+      conflictSettings = resolveConflictResolutionSettingsForAction(config, {
         pathDefaultAgent: agentSelection.selectedAgent,
       });
       routeAgent = conflictSettings.agent ?? routeAgent;
