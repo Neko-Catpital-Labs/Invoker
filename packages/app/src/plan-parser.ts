@@ -13,7 +13,7 @@ import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
 import { hasReservedTaskIdPrefix, isPathSafeId, normalizeWorkflowBaseBranch, parseTaskFreshnessSpec, planPublicationAuthorityViolation } from '@invoker/workflow-core';
 import { isInvokerRepoUrl, reviewClaimSlices } from '@invoker/execution-engine';
-import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
+import { loadConfig, resolveDefaultExecutionAgent, resolveForceExecution } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 /** Workflow base branches default to master, while explicit stack bases are preserved. */
@@ -44,7 +44,18 @@ function taskNeedsDefaultExecutionAgent(task: PlanDefinition['tasks'][number]): 
   )) ?? false;
 }
 
-export function applyPlanExecutionAgentDefault(plan: PlanDefinition, executionAgent: string): PlanDefinition {
+export function applyPlanExecutionAgentDefault(
+  plan: PlanDefinition,
+  executionAgent: string,
+  forceExecutionAgent?: string,
+): PlanDefinition {
+  const forcedExecutionAgent = forceExecutionAgent?.trim();
+  if (forcedExecutionAgent) {
+    return {
+      ...plan,
+      tasks: plan.tasks.map((task) => ({ ...task, executionAgent: forcedExecutionAgent })),
+    };
+  }
   const defaultExecutionAgent = executionAgent.trim();
   if (!defaultExecutionAgent) return plan;
   return {
@@ -59,7 +70,12 @@ export function applyPlanExecutionAgentDefault(plan: PlanDefinition, executionAg
 }
 
 export function applyConfiguredPlanDefaults(plan: PlanDefinition): PlanDefinition {
-  return applyPlanExecutionAgentDefault(plan, resolveDefaultExecutionAgent(loadConfig()));
+  const config = loadConfig();
+  return applyPlanExecutionAgentDefault(
+    plan,
+    resolveDefaultExecutionAgent(config),
+    resolveForceExecution(config)?.executionAgent,
+  );
 }
 
 export const WORKER_SUBMITTED_TASK_PRIORITY = -10;
