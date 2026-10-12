@@ -486,7 +486,6 @@ describe('WorktreeExecutor', () => {
       cacheDir: '/fake/invoker/repos',
       worktreeBaseDir: '/fake/invoker/worktrees',
       provisionCommand: 'pnpm install --frozen-lockfile',
-      invokerHome: '/fake/invoker',
       cleanupLocalDisk,
     });
     const pool = mockPool(provisionedExecutor);

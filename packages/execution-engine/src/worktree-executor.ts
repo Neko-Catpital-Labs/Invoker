@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, unlinkSync } from 'node:fs';
-import { resolve, join, isAbsolute } from 'node:path';
+import { basename, dirname, resolve, join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
@@ -42,6 +42,16 @@ const SSH_PREFIX = 'ssh://';
 const FILE_PREFIX = 'file://';
 const GIT_AT_PATTERN = /^git@[\w.-]+:/;
 const GITHUB_SHORTHAND_PATTERN = /^[\w.-]+\/[\w.-]+$/;
+
+function inferInvokerHomeFromManagedDirs(cacheDir: string, worktreeBaseDir: string): string | undefined {
+  const resolvedCacheDir = resolve(cacheDir);
+  const resolvedWorktreeBaseDir = resolve(worktreeBaseDir);
+  if (basename(resolvedCacheDir) !== 'repos') return undefined;
+  if (basename(resolvedWorktreeBaseDir) !== 'worktrees') return undefined;
+  const cacheParent = dirname(resolvedCacheDir);
+  if (dirname(resolvedWorktreeBaseDir) !== cacheParent) return undefined;
+  return cacheParent;
+}
 
 export function isCloneableRepoUrl(repoUrl: string): boolean {
   const trimmed = repoUrl.trim();
@@ -135,7 +145,6 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
-    this.invokerHome = config.invokerHome;
     this.cleanupLocalDisk = config.cleanupLocalDisk ?? defaultCleanupLocalInvokerHome;
     this.secretsFile = config.secretsFile
       ?? (existsSync(join(homedir(), '.config', 'invoker', 'secrets.env'))
@@ -145,6 +154,8 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     this.setRepoProvisionCommands(config.repoProvisionCommands);
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
+    this.invokerHome = config.invokerHome
+      ?? inferInvokerHomeFromManagedDirs(config.cacheDir, this.worktreeBaseDir);
     this.pool = new RepoPool({
       cacheDir: config.cacheDir,
       maxWorktrees: config.maxWorktrees,
@@ -1026,6 +1037,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         createdAt: new Date(),
         config: {} as TaskState['config'],
         execution: { workspacePath: entry.worktreeDir },
+        taskStateVersion: 1,
       } as TaskState]);
     }
     return {

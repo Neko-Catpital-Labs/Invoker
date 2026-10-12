@@ -1276,7 +1276,6 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     executorRegistry.register('worktree', new WorktreeExecutor({
       worktreeBaseDir: join(dbDir, 'worktrees'),
       cacheDir: join(dbDir, 'repos'),
-      invokerHome: dbDir,
       maxWorktrees: maxConcurrency,
       agentRegistry: executionAgentRegistry,
     }));
