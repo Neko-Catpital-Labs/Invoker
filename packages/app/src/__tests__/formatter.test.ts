@@ -412,6 +412,7 @@ describe('serializeTask', () => {
 
     const result = serializeTask(task);
     const config = result.config as Record<string, unknown>;
+    expect(config).not.toBe(task.config);
     expect(config.poolId).toBe('local-worktree');
     expect(config.executionAgent).toBe('claude');
     expect(task.config.poolId).toBe('mixed-local-ssh');
