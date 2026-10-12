@@ -79,7 +79,7 @@ SLACK_DOCTOR="$SLACK_INSTALL_ROOT/vendor/skills/plan-to-invoker/scripts/skill-do
 # missing packaged dependency instead of proving the npm install stands alone.
 DOCTOR_HOME="$SCRATCH/doctor-home"
 mkdir -p "$DOCTOR_HOME"
-DOCTOR_OUTPUT="$(cd "$SCRATCH" && env -u INVOKER_REPO_ROOT HOME="$DOCTOR_HOME" INVOKER_DB_DIR="$DOCTOR_HOME/.invoker" bash "$SLACK_DOCTOR" --skip-assumptions "$ROOT/skills/plan-to-invoker/fixtures/positive/02-feature-implementation.yaml" 2>/dev/null || true)"
+DOCTOR_OUTPUT="$(cd "$SCRATCH" && env -u INVOKER_REPO_ROOT HOME="$DOCTOR_HOME" INVOKER_DB_DIR="$DOCTOR_HOME/.invoker" bash "$SLACK_DOCTOR" --skip-assumptions "$ROOT/corpus/skills/plan-to-invoker/fixtures/positive/02-feature-implementation.yaml" 2>/dev/null || true)"
 for step in validate-plan lint-review-units; do
   STATUS="$(printf '%s' "$DOCTOR_OUTPUT" | node -e '
     const raw = require("node:fs").readFileSync(0, "utf8");
