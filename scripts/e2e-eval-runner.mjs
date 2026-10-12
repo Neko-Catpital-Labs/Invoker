@@ -247,14 +247,11 @@ export function createRunRoot() {
 export function runTask(task, options = {}) {
   const runRoot = options.runRoot ?? createRunRoot();
   const runId = options.runId ?? randomUUID();
-  const taskRoot = assertOutsideRepoCheckout(path.join(runRoot, task.id), `task root for ${task.id}`);
+  const taskRoot = assertOutsideRepoCheckout(mkdtempSync(path.join(runRoot, `${task.id}-workspace-`)), `task root for ${task.id}`);
   const workspaceDir = path.join(taskRoot, 'workspace');
-  const verifierDir = path.join(taskRoot, 'verifier');
   mkdirSync(workspaceDir, { recursive: true });
-  mkdirSync(verifierDir, { recursive: true });
 
   materializeFiles(workspaceDir, task.fixtureFiles);
-  materializeFiles(verifierDir, task.verifier.files);
 
   const startedAt = new Date().toISOString();
   const solverEnv = {
@@ -273,6 +270,11 @@ export function runTask(task, options = {}) {
     env: solverEnv,
     timeoutMs: task.solverTimeoutMs,
   });
+
+  const verifierRoot = assertOutsideRepoCheckout(mkdtempSync(path.join(runRoot, `${task.id}-verifier-`)), `verifier root for ${task.id}`);
+  const verifierDir = path.join(verifierRoot, 'verifier');
+  mkdirSync(verifierDir, { recursive: true });
+  materializeFiles(verifierDir, task.verifier.files);
 
   const verifier = runCommandSync(task.verifier, {
     cwd: verifierDir,
@@ -341,6 +343,7 @@ export function runTask(task, options = {}) {
 
   if (options.keep !== true) {
     rmSync(taskRoot, { recursive: true, force: true });
+    rmSync(verifierRoot, { recursive: true, force: true });
   }
   return row;
 }
@@ -495,6 +498,16 @@ function selfTestManifest() {
         },
       },
       {
+        id: 'solver-parent-traversal-cannot-read-verifier-assets',
+        prompt: 'Try to read verifier assets via the workspace parent.',
+        solver: { command: 'bash', args: ['-c', 'cat ../verifier/reference-solution.txt > stolen.txt 2>/dev/null || true'] },
+        verifier: {
+          command: 'bash',
+          args: ['-c', 'if [ "$(cat "$INVOKER_EVAL_WORKDIR/stolen.txt" 2>/dev/null)" = "secret" ]; then echo leaked-verifier-asset >&2; exit 1; fi; [ -f reference-solution.txt ] && echo isolated'],
+          files: { 'reference-solution.txt': 'secret' },
+        },
+      },
+      {
         id: 'verifier-timeout-grades-as-fail',
         prompt: 'Nothing to do.',
         verifierTimeoutMs: 1_200,
@@ -590,6 +603,9 @@ function selfTest() {
 
   const hidden = rowFor('verifier-assets-are-hidden-from-the-solver');
   check('verifier assets are never materialized in the solver workspace', hidden.graded === 'pass');
+
+  const traversal = rowFor('solver-parent-traversal-cannot-read-verifier-assets');
+  check('verifier assets are not readable via the solver workspace parent', traversal.graded === 'pass');
 
   const verifierTimeout = rowFor('verifier-timeout-grades-as-fail');
   check('a verifier that overruns its timeout grades fail', verifierTimeout.graded === 'fail' && verifierTimeout.verifier?.timedOut === true);
