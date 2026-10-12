@@ -853,6 +853,59 @@ describe('autoFixOnFailure', () => {
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
+  it('prefers forceExecution.executionAgent over conflictResolutionAgent for merge conflicts', async () => {
+    loadConfigMock.mockReturnValue({
+      forceExecution: { executionAgent: 'claude' },
+      conflictResolutionAgent: 'omp',
+      conflictResolutionModel: 'gpt-5-mini',
+    });
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
+      retryTask: vi.fn(() => started),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+      getAutoFixAgent: () => '   ',
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      mergeError,
+      'claude',
+      'gpt-5-mini',
+    );
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+  });
+
   it('checks the saved usage limit against the conflict resolution agent', async () => {
     loadConfigMock.mockReturnValue({
       conflictResolutionAgent: 'omp',
@@ -1261,6 +1314,56 @@ describe('autoFixOnFailure', () => {
         phase: 'auto-fix-agent-selected',
         selectedAgent: 'codex',
         selectedAgentSource: 'default',
+      }),
+    );
+  });
+
+  it('uses forceExecution.executionAgent when config.autoFixAgent is empty', async () => {
+    loadConfigMock.mockReturnValue({
+      forceExecution: { executionAgent: 'claude' },
+    });
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const logEvent = vi.fn();
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1', executionAgent: 'codex' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
+      retryTask: vi.fn(() => started),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent,
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+      getAutoFixAgent: () => '   ',
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-agent-selected',
+        selectedAgent: 'claude',
+        selectedAgentSource: 'force',
       }),
     );
   });
@@ -2544,6 +2647,38 @@ describe('fixWithAgentAction lineage guard', () => {
 });
 
 describe('resolveConflictAction lineage guard', () => {
+  it('prefers forceExecution.executionAgent over an explicit conflict agent', async () => {
+    loadConfigMock.mockReturnValue({
+      forceExecution: { executionAgent: 'claude' },
+      conflictResolutionAgent: 'codex',
+    });
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'fixing_with_ai',
+        config: { workflowId: 'wf-1' },
+        execution: { selectedAttemptId: 'att-1', generation: 5 },
+      })),
+      beginFixSession: vi.fn(() => ({ savedError: 'merge err' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, 'omp');
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'merge err', 'claude', undefined);
+    expect(result).toEqual({ autoApproved: false, started: [] });
+  });
+
   it('throws StaleLineageError when lineage changes during conflict resolution', async () => {
     let getTaskCallCount = 0;
     const mergeError = JSON.stringify({
