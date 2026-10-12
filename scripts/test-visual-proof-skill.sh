@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_MD="$REPO_ROOT/skills/visual-proof/SKILL.md"
+SKILL_MD="$REPO_ROOT/corpus/skills/visual-proof/SKILL.md"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -61,7 +61,7 @@ must_contain "open the exact file yourself" \
   "visual-proof skill must require opening the exact captured media before claiming it"
 must_contain "rejects a Visual Proof section that has media but no \`Manually inspected:\` line" \
   "visual-proof skill must document the Manually inspected validator gate"
-must_contain "skills/prove-it/SKILL.md" \
+must_contain "corpus/skills/prove-it/SKILL.md" \
   "visual-proof skill must reference the shared prove-it evidence rule"
 
 echo "OK: visual-proof skill contract checks passed"
