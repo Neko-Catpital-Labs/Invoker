@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, unlinkSync } from 'node:fs';
-import { resolve, join, isAbsolute } from 'node:path';
+import { basename, dirname, resolve, join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
@@ -135,7 +135,6 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
-    this.invokerHome = config.invokerHome;
     this.cleanupLocalDisk = config.cleanupLocalDisk ?? defaultCleanupLocalInvokerHome;
     this.secretsFile = config.secretsFile
       ?? (existsSync(join(homedir(), '.config', 'invoker', 'secrets.env'))
@@ -145,6 +144,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     this.setRepoProvisionCommands(config.repoProvisionCommands);
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
+    this.invokerHome = config.invokerHome ?? inferInvokerHomeRoot({
+      cacheDir: config.cacheDir,
+      worktreeBaseDir: this.worktreeBaseDir,
+    });
     this.pool = new RepoPool({
       cacheDir: config.cacheDir,
       maxWorktrees: config.maxWorktrees,
@@ -1024,6 +1027,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         status: 'pending',
         dependencies: [],
         createdAt: new Date(),
+        taskStateVersion: 1,
         config: {} as TaskState['config'],
         execution: { workspacePath: entry.worktreeDir },
       } as TaskState]);
@@ -1033,6 +1037,18 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       loadTasks: (workflowId) => tasksByWorkflowId.get(workflowId) ?? [],
     };
   }
+}
+
+function inferInvokerHomeRoot(config: { cacheDir: string; worktreeBaseDir?: string }): string | undefined {
+  const cacheDir = resolve(config.cacheDir);
+  if (basename(cacheDir) === 'repos') return dirname(cacheDir);
+
+  if (config.worktreeBaseDir) {
+    const worktreeBaseDir = resolve(config.worktreeBaseDir);
+    if (basename(worktreeBaseDir) === 'worktrees') return dirname(worktreeBaseDir);
+  }
+
+  return undefined;
 }
 
 function getDisplayOnlyBridgeSpec(
