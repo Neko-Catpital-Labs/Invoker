@@ -10,6 +10,7 @@ import {
 import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
 import {
   ciFailureActionKey,
+  parseReviewGateCiRepairWorkflowMutationArgs,
   queueReviewGateCiRepair,
   SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
 } from '../review-gate-ci-repair.js';
@@ -204,6 +205,28 @@ describe('PR status worker', () => {
         workerRetryBudget: 1,
       }),
     });
+  });
+
+  it('uses forced execution agent for CI repair before the auto-fix agent', async () => {
+    const event = makeEvent();
+    const harness = makeRepairHarness();
+    const policy = {
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 1,
+      getAutoFixAgent: () => 'claude',
+      getForceExecutionAgent: () => 'codex',
+    };
+
+    await expect(queueReviewGateCiRepair(policy, event)).resolves.toMatchObject({
+      decision: 'queued',
+      reason: 'queued',
+    });
+
+    const args = harness.submit.mock.calls[0]?.[3] ?? [];
+    expect(parseReviewGateCiRepairWorkflowMutationArgs(args).agentName).toBe('codex');
   });
 
   it('does not publish a CI repair intent for pending checks or merge-conflict-only polls', async () => {
