@@ -176,8 +176,6 @@ sys.exit(1)
 PY
   }
 
-  systemctl --user stop slack-manager.service 2>/dev/null || true
-
   python3 - <<PY
 import os
 import signal
