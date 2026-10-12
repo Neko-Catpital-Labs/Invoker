@@ -1324,6 +1324,7 @@ describe('autoFixOnFailure', () => {
     });
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const logEvent = vi.fn();
+    const appendTaskOutput = vi.fn();
     const orchestrator = {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
@@ -1339,7 +1340,7 @@ describe('autoFixOnFailure', () => {
     const persistence = {
       updateTask: vi.fn(),
       getTaskOutput: vi.fn(() => 'test output'),
-      appendTaskOutput: vi.fn(),
+      appendTaskOutput,
       logEvent,
     };
     const taskExecutor = {
@@ -1365,6 +1366,10 @@ describe('autoFixOnFailure', () => {
         selectedAgent: 'claude',
         selectedAgentSource: 'force',
       }),
+    );
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('fallback=forceExecution.executionAgent->config->default'),
     );
   });
 
