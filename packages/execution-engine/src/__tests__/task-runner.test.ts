@@ -206,6 +206,22 @@ describe('TaskRunner', () => {
     });
     await done;
   });
+
+  it('lets forced execution agent override task and default agents', () => {
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined } as any,
+      persistence: {} as any,
+      executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
+      executionDefaultsProvider: () => ({ executionAgent: 'omp' }),
+      forceExecutionAgentProvider: () => 'claude',
+      cwd: '/tmp',
+    });
+
+    expect(runner.resolveExecutionAgent(makeTask({
+      config: { executionAgent: 'codex' },
+    }))).toBe('claude');
+  });
+
   it('rejects incompatible fix models before spawning the agent', async () => {
     const runner = new TaskRunner({
       orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,

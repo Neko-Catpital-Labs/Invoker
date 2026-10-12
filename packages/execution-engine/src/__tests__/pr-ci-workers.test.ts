@@ -10,6 +10,7 @@ import {
 import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
 import {
   ciFailureActionKey,
+  parseReviewGateCiRepairWorkflowMutationArgs,
   queueReviewGateCiRepair,
   SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
 } from '../review-gate-ci-repair.js';
@@ -203,6 +204,34 @@ describe('PR status worker', () => {
         channel: SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
         workerRetryBudget: 1,
       }),
+    });
+  });
+
+  it('uses the forced execution agent for queued CI repair workflows', async () => {
+    const event = makeEvent();
+    const harness = makeRepairHarness();
+    const policy = {
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 1,
+      getAutoFixAgent: () => 'codex',
+      getForceExecutionAgent: () => 'claude',
+    };
+
+    await expect(queueReviewGateCiRepair(policy, event)).resolves.toMatchObject({
+      decision: 'queued',
+      reason: 'queued',
+      intentId: 42,
+    });
+
+    const [, , channel, args] = harness.submit.mock.calls[0];
+    expect(channel).toBe(SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL);
+    expect(parseReviewGateCiRepairWorkflowMutationArgs(args)).toMatchObject({
+      sourceWorkflowId: 'wf-1',
+      sourceTaskId: 'wf-1/merge',
+      agentName: 'claude',
     });
   });
 
