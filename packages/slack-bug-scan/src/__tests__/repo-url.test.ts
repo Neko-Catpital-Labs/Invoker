@@ -10,6 +10,33 @@ describe('slack-bug-scan repo url extraction', () => {
     expect(extractRepoUrlFromText('see https://github.com/acme/widgets for source')).toBe('https://github.com/acme/widgets');
   });
 
+  it('extracts a GitLab nested-group project url', () => {
+    expect(extractRepoUrlFromText('see https://gitlab.com/Group/Sub/Project for source'))
+      .toBe('https://gitlab.com/Group/Sub/Project');
+  });
+
+  it('returns the repository root for GitHub pull request urls', () => {
+    expect(extractRepoUrlFromText('review https://github.com/Acme/Widgets/pull/123/files'))
+      .toBe('https://github.com/acme/widgets');
+  });
+
+  it('returns the repository root for GitHub Actions job urls', () => {
+    expect(
+      extractRepoUrlFromText('failed job https://github.com/acme/widgets/actions/runs/123/attempts/2/jobs/456'),
+    )
+      .toBe('https://github.com/acme/widgets');
+  });
+
+  it('returns an ssh repository root for ssh-style forge resource urls', () => {
+    expect(extractRepoUrlFromText('review git@github.com:Acme/Widgets/pull/123'))
+      .toBe('git@github.com:acme/widgets.git');
+  });
+
+  it('returns the repository root for GitHub issue urls', () => {
+    expect(extractRepoUrlFromText('triage https://github.com/acme/widgets/issues/789'))
+      .toBe('https://github.com/acme/widgets');
+  });
+
   it('returns undefined when no url is present', () => {
     expect(extractRepoUrlFromText('just a random channel about snacks')).toBeUndefined();
     expect(extractRepoUrlFromText(undefined)).toBeUndefined();
