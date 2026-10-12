@@ -478,6 +478,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.115.0
         version: 0.115.0(zod@4.4.3)
+      '@invoker/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@slack/web-api':
         specifier: ^7.14.1
         version: 7.14.1
