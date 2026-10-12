@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   formatTaskStatus,
   formatWorkflowStatus,
@@ -16,6 +16,16 @@ import {
 import type { TaskState } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
 import type { WorkerActionSummary } from '@invoker/contracts';
+
+const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+
+vi.mock('../config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config.js')>();
+  return {
+    ...actual,
+    loadConfig: () => loadConfigMock(),
+  };
+});
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -41,6 +51,10 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     ...overrides,
   } as TaskState;
 }
+
+beforeEach(() => {
+  loadConfigMock.mockReturnValue({});
+});
 
 // ── formatTaskStatus ─────────────────────────────────────────
 
@@ -381,6 +395,63 @@ describe('serializeTask', () => {
     expect(config.runnerKind).toBe('worktree');
     expect(config.isMergeNode).toBe(false);
     expect(config.executionAgent).toBe('claude');
+  });
+
+  it('reports forced pool and agent without mutating the stored task pin', () => {
+    loadConfigMock.mockReturnValue({
+      forceExecution: { poolId: 'local-worktree', executionAgent: 'claude' },
+    });
+    const task = makeTask({
+      config: {
+        workflowId: 'wf-1',
+        runnerKind: 'ssh',
+        poolId: 'mixed-local-ssh',
+        executionAgent: 'codex',
+      } as TaskState['config'],
+    });
+
+    const result = serializeTask(task);
+    const config = result.config as Record<string, unknown>;
+    expect(config.poolId).toBe('local-worktree');
+    expect(config.executionAgent).toBe('claude');
+    expect(task.config.poolId).toBe('mixed-local-ssh');
+    expect(task.config.executionAgent).toBe('codex');
+  });
+
+  it('reports the stored pool and agent when forceExecution is absent', () => {
+    const task = makeTask({
+      config: {
+        runnerKind: 'ssh',
+        poolId: 'mixed-local-ssh',
+        executionAgent: 'codex',
+      } as TaskState['config'],
+    });
+
+    const config = serializeTask(task).config as Record<string, unknown>;
+    expect(config.poolId).toBe('mixed-local-ssh');
+    expect(config.executionAgent).toBe('codex');
+  });
+
+  it('keeps scratch, docker, and merge pools while reporting the forced agent', () => {
+    loadConfigMock.mockReturnValue({
+      forceExecution: { poolId: 'local-worktree', executionAgent: 'claude' },
+    });
+
+    for (const runnerKind of ['scratch', 'docker', 'merge'] as const) {
+      const task = makeTask({
+        config: {
+          runnerKind,
+          poolId: `stored-${runnerKind}`,
+          executionAgent: 'codex',
+        } as TaskState['config'],
+      });
+
+      const config = serializeTask(task).config as Record<string, unknown>;
+      expect(config.poolId).toBe(`stored-${runnerKind}`);
+      expect(config.executionAgent).toBe('claude');
+      expect(task.config.poolId).toBe(`stored-${runnerKind}`);
+      expect(task.config.executionAgent).toBe('codex');
+    }
   });
 
   it('includes execution subset when present', () => {
