@@ -553,7 +553,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
 
     def assert_plan_accepted_by_real_validator(self, plan, label):
         repo_root = Path(__file__).resolve().parent.parent
-        validator = repo_root / "skills" / "plan-to-invoker" / "scripts" / "validate-plan.sh"
+        validator = repo_root / "corpus" / "skills" / "plan-to-invoker" / "scripts" / "validate-plan.sh"
         self.assertTrue(validator.exists(), f"real validator missing at {validator}")
 
         with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
