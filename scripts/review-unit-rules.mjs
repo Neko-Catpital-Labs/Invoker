@@ -137,15 +137,15 @@ export function classifyReviewUnitsForPath(filePath) {
   if (/(benchmark|performance)/.test(lowerPath)) return ['proof'];
   if (/visual-proof/.test(lowerPath) && path.includes('/e2e/')) return ['proof'];
   if (
-    path === 'skills/make-pr/SKILL.md'
-    || path.startsWith('skills/chat-submit/')
-    || path.startsWith('skills/plan-to-invoker/')
-    || path.startsWith('skills/workflow-chain-submit/')
-    || path === 'skills/land-stack/SKILL.md'
-    || path === 'skills/visual-proof/SKILL.md'
-    || path === 'skills/prove-it/SKILL.md'
+    path === 'corpus/skills/make-pr/SKILL.md'
+    || path.startsWith('corpus/skills/chat-submit/')
+    || path.startsWith('corpus/skills/plan-to-invoker/')
+    || path.startsWith('corpus/skills/workflow-chain-submit/')
+    || path === 'corpus/skills/land-stack/SKILL.md'
+    || path === 'corpus/skills/visual-proof/SKILL.md'
+    || path === 'corpus/skills/prove-it/SKILL.md'
   ) return ['tooling-policy'];
-  if (path.startsWith('docs/') || path.startsWith('skills/') || path.endsWith('.md')) return ['docs'];
+  if (path.startsWith('docs/') || path.startsWith('corpus/skills/') || path.endsWith('.md')) return ['docs'];
   if (path.startsWith('.github/')) return ['tooling-policy'];
   if (
     path === 'package.json'

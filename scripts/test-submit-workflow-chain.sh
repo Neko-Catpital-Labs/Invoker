@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-CHAIN_SKILL="$ROOT/skills/workflow-chain-submit/SKILL.md"
+CHAIN_SKILL="$ROOT/corpus/skills/workflow-chain-submit/SKILL.md"
 [[ -f "$CHAIN_SKILL" ]] || { echo "missing $CHAIN_SKILL"; exit 1; }
 grep -qF 'Stacked onto WF-X' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing stacked-onto rule"; exit 1; }
 grep -qF -- '--onto-workflow' "$CHAIN_SKILL" || { echo "workflow-chain-submit SKILL missing --onto-workflow"; exit 1; }
