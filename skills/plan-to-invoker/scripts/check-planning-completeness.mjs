@@ -29,6 +29,8 @@ const HEADING_LABELS = [
   'Goal',
   'Motivation',
   'Safety invariant',
+  'Mock approved',
+  'Definitions',
   'Effectiveness measurement',
   'Review claim',
   'Review lane',
@@ -56,6 +58,8 @@ const HEADING_RE = {
   motivation: buildHeadingRegex('Motivation'),
   safety: buildHeadingRegex('Safety invariant'),
   effectiveness: buildHeadingRegex('Effectiveness measurement'),
+  mockApproved: buildHeadingRegex('Mock approved'),
+  definitions: buildHeadingRegex('Definitions'),
 };
 
 const SAFETY_LABEL_PRESENT_RE = /\bSafety invariant:/i;
@@ -159,6 +163,60 @@ function hasUnsupportedGreenBaselineClaim(plan, tasks) {
     .some((sentence) => GREEN_BASELINE_RE.test(sentence));
 }
 
+const MOCK_ID_RE = /^mock/i;
+const MOCK_APPROVED_RE = /^(?:yes|approved|signed[- ]off|confirmed|ok(?:ay)?)\b/i;
+
+function taskText(task) {
+  return [task.description, task.prompt].filter((v) => typeof v === 'string').join('\n\n');
+}
+
+function dependsOnTransitively(taskId, targetId, byId, seen = new Set()) {
+  if (seen.has(taskId)) return false;
+  seen.add(taskId);
+  const task = byId.get(taskId);
+  const deps = Array.isArray(task?.dependencies) ? task.dependencies : [];
+  return deps.some((dep) => dep === targetId || dependsOnTransitively(dep, targetId, byId, seen));
+}
+
+function checkAnalyticsMockFirst(plan, tasks) {
+  if (plan.deliverable !== 'analytics') return [];
+  const records = tasks.map(({ task }) => task).filter(isRecord);
+  const mock = records.find((task) => typeof task.id === 'string' && MOCK_ID_RE.test(task.id));
+  if (!mock) {
+    return [{
+      field: 'analyticsMock',
+      message: 'An analytics plan needs a first task whose id starts with "mock" that renders the output on non-production data before any collection task.',
+    }];
+  }
+  const gaps = [];
+  const text = taskText(mock);
+  const approved = headingValue(text, 'mockApproved');
+  if (isPlaceholder(approved) || !MOCK_APPROVED_RE.test(approved)) {
+    gaps.push({
+      field: 'analyticsMockApproval',
+      message: `Task "${mock.id}" needs "Mock approved:" starting with yes, approved, signed off, confirmed, or ok, naming the user's sign-off on what is shown.`,
+    });
+  }
+  if (isPlaceholder(headingValue(text, 'definitions'))) {
+    gaps.push({
+      field: 'analyticsMockDefinitions',
+      message: `Task "${mock.id}" needs "Definitions:" stating what each number or column shown means.`,
+    });
+  }
+  const byId = new Map(records.filter((task) => typeof task.id === 'string').map((task) => [task.id, task]));
+  const unordered = records
+    .filter((task) => typeof task.id === 'string' && task.id !== mock.id)
+    .filter((task) => !dependsOnTransitively(task.id, mock.id, byId))
+    .map((task) => task.id);
+  if (unordered.length > 0) {
+    gaps.push({
+      field: 'analyticsMockOrder',
+      message: `Every task must depend on "${mock.id}" so nothing is collected before the mock is approved. Missing: ${unordered.join(', ')}`,
+    });
+  }
+  return gaps;
+}
+
 function checkPlan(plan) {
   const gaps = [];
 
@@ -182,6 +240,8 @@ function checkPlan(plan) {
   }
 
   const tasks = collectTasks(plan);
+
+  gaps.push(...checkAnalyticsMockFirst(plan, tasks));
 
   if (hasUnsupportedGreenBaselineClaim(plan, tasks) && !hasFreshGreenBaselineReceipt(plan)) {
     gaps.push({
