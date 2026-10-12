@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { forgeProjectIdentityFromUrl } from '@invoker/contracts';
 import {
   formatPlanSummaryLines,
   formatSlackPlanBrief,
@@ -253,7 +254,8 @@ function capTailChars(value: string, max: number): string {
 
 // ── Planning request parsing ─────────────────────────────────
 
-const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
+const INVALID_LITERAL_REPO_URL_GUIDANCE =
+  'Use a GitHub or GitLab project URL, or a clone URL ending in .git.';
 const CHANNEL_REPO_BINDING_WORKFLOW_PREFIX = '__slack_channel_repo__:';
 const CHANNEL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -301,11 +303,11 @@ function repoDisplayName(repoUrl: string): string {
 }
 
 function repositoryIdentity(repoUrl: string): string {
+  const forgeIdentity = forgeProjectIdentityFromUrl(repoUrl);
+  if (forgeIdentity) return forgeIdentity;
   const parts = parseRepoParts(repoUrl);
   if (!parts) return stripGitSuffix(repoUrl.trim()).toLowerCase();
-  const host = parts.host.toLowerCase();
-  const path = host === 'github.com' ? parts.path.toLowerCase() : parts.path;
-  return `${host}/${path}`;
+  return `${parts.host.toLowerCase()}/${parts.path}`;
 }
 
 function channelRepoBindingWorkflowId(channelId: string): string {

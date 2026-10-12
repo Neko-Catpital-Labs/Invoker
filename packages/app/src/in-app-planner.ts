@@ -35,7 +35,7 @@ import type {
   PlanningTerminalMode,
   PlanningPresetOption,
 } from '@invoker/contracts';
-import { resolveInvokerHomeRoot } from '@invoker/contracts';
+import { forgeProjectIdentityFromUrl, resolveInvokerHomeRoot } from '@invoker/contracts';
 import type {
   ConversationMessageEntry,
   ConversationRepository,
@@ -469,6 +469,9 @@ function planningRepositoryContext(session: InAppPlanningChatSession): string {
 }
 
 function canonicalGitRepositoryIdentity(repoUrl: string): string {
+  const forgeIdentity = forgeProjectIdentityFromUrl(repoUrl);
+  if (forgeIdentity) return forgeIdentity;
+
   const trimmed = repoUrl.trim();
   const scpLike = /^git@([^:]+):(.+)$/i.exec(trimmed);
   if (scpLike) {
@@ -494,10 +497,7 @@ function canonicalRemoteRepositoryIdentity(host: string, path: string): string {
   const withoutGitSuffix = path
     .replace(/^\/+|\/+$/g, '')
     .replace(/\.git$/i, '');
-  const canonicalPath = canonicalHost === 'github.com'
-    ? withoutGitSuffix.toLowerCase()
-    : withoutGitSuffix;
-  return `${canonicalHost}/${canonicalPath}`;
+  return `${canonicalHost}/${withoutGitSuffix}`;
 }
 
 async function silentRepoMismatch(
