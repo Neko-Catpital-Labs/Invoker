@@ -193,6 +193,17 @@ type ExecutorRouting = {
   poolMemberId?: string;
 };
 
+type ResolvedForceExecution = {
+  poolId?: string;
+  executionAgent?: string;
+};
+
+type ForceExecutionViewInput = {
+  poolId?: unknown;
+  executionAgent?: unknown;
+  runnerKind?: unknown;
+};
+
 type SetTargetTask = {
   id: string;
   status: string;
@@ -206,6 +217,7 @@ const LAUNCHED_TASK_STATUSES = new Set<string>(['running', 'fixing_with_ai']);
 const RUNNER_KINDS_REQUIRING_POOL = new Set<string>(['worktree', 'ssh']);
 const RUNNER_KINDS_FORBIDDING_POOL = new Set<string>(['docker', 'merge', 'scratch']);
 const ROUTING_CONFIG_FIELD_PATH = /^(?:raw\.)?config\.(runnerKind|poolId|poolMemberId)$/;
+const FORCE_EXECUTION_POOL_EXEMPT_RUNNER_KINDS = new Set<string>(['scratch', 'docker', 'merge']);
 
 const silentLogger: Logger = {
   debug() {},
@@ -500,6 +512,33 @@ function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> 
   };
 }
 
+function resolveForceExecution(config: Record<string, unknown>): ResolvedForceExecution | undefined {
+  const force = config.forceExecution;
+  if (typeof force !== 'object' || force === null || Array.isArray(force)) return undefined;
+  const raw = force as Record<string, unknown>;
+  const poolId = typeof raw.poolId === 'string' ? raw.poolId.trim() : undefined;
+  const executionAgent = typeof raw.executionAgent === 'string' ? raw.executionAgent.trim() : undefined;
+  if (!poolId && !executionAgent) return undefined;
+  return {
+    ...(poolId ? { poolId } : {}),
+    ...(executionAgent ? { executionAgent } : {}),
+  };
+}
+
+function applyForceExecutionView<T extends ForceExecutionViewInput>(
+  input: T,
+  force: ResolvedForceExecution | undefined,
+): T & ForceExecutionViewInput {
+  if (!force) return input;
+  return {
+    ...input,
+    ...(force.executionAgent ? { executionAgent: force.executionAgent } : {}),
+    ...(force.poolId && !FORCE_EXECUTION_POOL_EXEMPT_RUNNER_KINDS.has(String(input.runnerKind ?? ''))
+      ? { poolId: force.poolId }
+      : {}),
+  };
+}
+
 function serializeTaskForQuery(task: TaskState): Record<string, unknown> {
   const config: Record<string, unknown> = {};
   if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
@@ -512,6 +551,7 @@ function serializeTaskForQuery(task: TaskState): Record<string, unknown> {
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
   if (task.config.executionModel != null) config.executionModel = task.config.executionModel;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
+  const outputConfig = applyForceExecutionView(config, resolveForceExecution(readInvokerConfigFile(defaultConfigPath())));
 
   const execution: Record<string, unknown> = {};
   if (task.execution.branch != null) execution.branch = task.execution.branch;
@@ -540,7 +580,7 @@ function serializeTaskForQuery(task: TaskState): Record<string, unknown> {
     status: task.status,
     dependencies: [...task.dependencies],
     createdAt: task.createdAt.toISOString(),
-    config,
+    config: outputConfig,
     execution,
   };
 }
