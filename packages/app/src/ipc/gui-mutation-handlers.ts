@@ -48,6 +48,7 @@ import {
   loadDefaultExecutionAgent,
   resolveAutoFixExecutionModel,
   resolveDefaultTaskExecutionSettings,
+  resolveForceExecution,
   type InvokerConfig,
 } from '../config.js';
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
@@ -913,6 +914,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
               logger,
               defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
               getAutoFixAgent: () => invokerConfig.autoFixAgent,
+              getForceExecutionAgent: () => resolveForceExecution(loadConfig())?.executionAgent,
               getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
               attemptLedger: autoFixAttemptLedger,
             },
