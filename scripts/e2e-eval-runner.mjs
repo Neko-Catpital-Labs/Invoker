@@ -249,12 +249,9 @@ export function runTask(task, options = {}) {
   const runId = options.runId ?? randomUUID();
   const taskRoot = assertOutsideRepoCheckout(path.join(runRoot, task.id), `task root for ${task.id}`);
   const workspaceDir = path.join(taskRoot, 'workspace');
-  const verifierDir = path.join(taskRoot, 'verifier');
   mkdirSync(workspaceDir, { recursive: true });
-  mkdirSync(verifierDir, { recursive: true });
 
   materializeFiles(workspaceDir, task.fixtureFiles);
-  materializeFiles(verifierDir, task.verifier.files);
 
   const startedAt = new Date().toISOString();
   const solverEnv = {
@@ -273,6 +270,12 @@ export function runTask(task, options = {}) {
     env: solverEnv,
     timeoutMs: task.solverTimeoutMs,
   });
+
+  const verifierDir = assertOutsideRepoCheckout(
+    mkdtempSync(path.join(runRoot, `${task.id}-verifier-`)),
+    `verifier root for ${task.id}`,
+  );
+  materializeFiles(verifierDir, task.verifier.files);
 
   const verifier = runCommandSync(task.verifier, {
     cwd: verifierDir,
@@ -341,6 +344,7 @@ export function runTask(task, options = {}) {
 
   if (options.keep !== true) {
     rmSync(taskRoot, { recursive: true, force: true });
+    rmSync(verifierDir, { recursive: true, force: true });
   }
   return row;
 }
@@ -487,10 +491,13 @@ function selfTestManifest() {
         id: 'verifier-assets-are-hidden-from-the-solver',
         prompt: 'Record everything you can read.',
         fixture: { files: { 'notes/seed.txt': 'seed\n' } },
-        solver: { command: 'bash', args: ['-c', 'find . -type f | sort > listing.txt'] },
+        solver: {
+          command: 'bash',
+          args: ['-c', 'find .. -maxdepth 3 -type f 2>/dev/null | sort > listing.txt || true; if [ -r ../verifier/reference-solution.txt ]; then cp ../verifier/reference-solution.txt stolen-reference.txt; fi'],
+        },
         verifier: {
           command: 'bash',
-          args: ['-c', 'grep -q seed.txt "$INVOKER_EVAL_WORKDIR/listing.txt" && ! grep -q reference-solution "$INVOKER_EVAL_WORKDIR/listing.txt" && [ ! -e "$INVOKER_EVAL_WORKDIR/reference-solution.txt" ] && [ -f reference-solution.txt ]'],
+          args: ['-c', 'grep -q seed.txt "$INVOKER_EVAL_WORKDIR/listing.txt" && ! grep -q reference-solution "$INVOKER_EVAL_WORKDIR/listing.txt" && [ ! -e "$INVOKER_EVAL_WORKDIR/reference-solution.txt" ] && [ ! -e "$INVOKER_EVAL_WORKDIR/stolen-reference.txt" ] && [ -f reference-solution.txt ]'],
           files: { 'reference-solution.txt': 'the answer the solver must never see\n' },
         },
       },
@@ -597,6 +604,7 @@ function selfTest() {
   check('the source checkout is unchanged by a run', checkoutBefore === checkoutAfter);
   check('workspaces live outside the source checkout', run.rows.every((row) => path.relative(REPO_ROOT, row.workspaceDir).startsWith('..')));
   check('disposable task directories are removed after grading', run.rows.every((row) => !existsSync(row.workspaceDir)));
+  check('disposable verifier directories are removed after grading', run.rows.every((row) => !existsSync(row.verifierDir)));
 
   const written = readFileSync(outPath, 'utf8').trim().split('\n');
   check('results are written as one JSON object per line', written.length === run.rows.length);
