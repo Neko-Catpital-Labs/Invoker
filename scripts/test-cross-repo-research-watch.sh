@@ -191,7 +191,7 @@ cat > "$sb/skip.json" <<'JSON'
   "goal": "Do not rebuild stacked PR UX",
   "motivation": "Invoker already orchestrates stacked PRs",
   "safetyInvariant": "No product change; documentation of skip only",
-  "verify": "test -f skills/land-stack/SKILL.md",
+  "verify": "test -f corpus/skills/land-stack/SKILL.md",
   "evidence": "land-stack skill exists",
   "effectivenessMeasurement": {
     "leadingSignals": ["no duplicate stacked-PR skill authored within 30d"],
