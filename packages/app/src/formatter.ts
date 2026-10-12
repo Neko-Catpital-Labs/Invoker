@@ -8,6 +8,7 @@ import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
 import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
+import { applyForceExecutionView, loadConfig, resolveForceExecution } from './config.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
 
@@ -448,7 +449,7 @@ export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
  * Dates are converted to ISO strings.
  */
 export function serializeTask(task: TaskState): Record<string, unknown> {
-  const config: Record<string, unknown> = {};
+  let config: Record<string, unknown> = {};
   if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
   if (task.config.command != null) config.command = task.config.command;
   if (task.config.prompt != null) config.prompt = task.config.prompt;
@@ -459,6 +460,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
   if (task.config.executionModel != null) config.executionModel = task.config.executionModel;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
+  config = applyForceExecutionView(config, resolveForceExecution(loadConfig()));
 
   const execution: Record<string, unknown> = {};
   if (task.execution.branch != null) execution.branch = task.execution.branch;
