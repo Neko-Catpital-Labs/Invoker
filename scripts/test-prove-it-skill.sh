@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_MD="$REPO_ROOT/skills/prove-it/SKILL.md"
+SKILL_MD="$REPO_ROOT/corpus/skills/prove-it/SKILL.md"
 
 fail() {
   echo "FAIL: $*" >&2

@@ -40,15 +40,15 @@ const stillToolingPolicy = [
   'scripts/create-pr.mjs',
   'scripts/review-unit-rules.mjs',
   '.github/workflows/ci.yml',
-  'skills/make-pr/SKILL.md',
-  'skills/chat-submit/SKILL.md',
-  'skills/chat-submit/scripts/check-contract.sh',
-  'skills/plan-to-invoker/SKILL.md',
-  'skills/plan-to-invoker/references/local-vs-remote-mcp.md',
-  'skills/workflow-chain-submit/SKILL.md',
-  'skills/land-stack/SKILL.md',
-  'skills/visual-proof/SKILL.md',
-  'skills/prove-it/SKILL.md',
+  'corpus/skills/make-pr/SKILL.md',
+  'corpus/skills/chat-submit/SKILL.md',
+  'corpus/skills/chat-submit/scripts/check-contract.sh',
+  'corpus/skills/plan-to-invoker/SKILL.md',
+  'corpus/skills/plan-to-invoker/references/local-vs-remote-mcp.md',
+  'corpus/skills/workflow-chain-submit/SKILL.md',
+  'corpus/skills/land-stack/SKILL.md',
+  'corpus/skills/visual-proof/SKILL.md',
+  'corpus/skills/prove-it/SKILL.md',
   'scripts/bootstrap.sh',
   'scripts/test-bootstrap.sh',
 ];
@@ -135,13 +135,13 @@ const mixedFiles = validateSingleReviewUnitFiles({
 assert.equal(mixedFiles.length, 1, 'files from two review units fail');
 assert.match(mixedFiles[0], /lists files from routing, activation-surface; split into one review unit per task\./);
 
-const lintScript = new URL('../skills/plan-to-invoker/scripts/lint-review-units.mjs', import.meta.url).pathname;
+const lintScript = new URL('../corpus/skills/plan-to-invoker/scripts/lint-review-units.mjs', import.meta.url).pathname;
 function lintPlan(planPath) {
   const result = spawnSync(process.execPath, [lintScript, planPath], { encoding: 'utf8' });
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
-const spanningFixture = new URL('../skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml', import.meta.url).pathname;
+const spanningFixture = new URL('../corpus/skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml', import.meta.url).pathname;
 const spanning = lintPlan(spanningFixture);
 assert.equal(spanning.status, 1, `a task whose Files span review units must fail:\n${spanning.stdout}${spanning.stderr}`);
 assert.match(spanning.stderr, /lists files from .*; split into one review unit per task\./);
