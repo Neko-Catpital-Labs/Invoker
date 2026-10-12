@@ -15,6 +15,25 @@ describe('slack-bug-scan repo url extraction', () => {
       .toBe('https://gitlab.com/Group/Sub/Project');
   });
 
+  it('returns the repository root for a forge review url', () => {
+    expect(extractRepoUrlFromText('pr: https://github.com/Acme/Widgets/pull/42'))
+      .toBe('https://github.com/acme/widgets');
+    expect(extractRepoUrlFromText('mr: https://gitlab.com/Group/Sub/Project/-/merge_requests/42'))
+      .toBe('https://gitlab.com/Group/Sub/Project');
+  });
+
+  it('returns the repository root for a forge job url', () => {
+    expect(extractRepoUrlFromText('job: https://github.com/Acme/Widgets/actions/runs/123/attempts/1/jobs/456'))
+      .toBe('https://github.com/acme/widgets');
+    expect(extractRepoUrlFromText('job: https://gitlab.com/Group/Sub/Project/-/jobs/456'))
+      .toBe('https://gitlab.com/Group/Sub/Project');
+  });
+
+  it('returns the repository root for a GitHub issue url', () => {
+    expect(extractRepoUrlFromText('issue: https://github.com/acme/widgets/issues/99'))
+      .toBe('https://github.com/acme/widgets');
+  });
+
   it('returns undefined when no url is present', () => {
     expect(extractRepoUrlFromText('just a random channel about snacks')).toBeUndefined();
     expect(extractRepoUrlFromText(undefined)).toBeUndefined();
