@@ -65,7 +65,7 @@ invoker_e2e_allow_repo_git_ops() {
 }
 
 invoker_e2e_ensure_make_pr_skill() {
-  local skill_src="$INVOKER_E2E_REPO_ROOT/skills/make-pr"
+  local skill_src="$INVOKER_E2E_REPO_ROOT/corpus/skills/make-pr"
   [ -f "$skill_src/SKILL.md" ] || return 0
   local run_scoped_agent_home
   run_scoped_agent_home="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-agent-home.XXXXXX")" || return 0
