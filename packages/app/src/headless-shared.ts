@@ -25,7 +25,7 @@ import {
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
-import { loadConfig, resolveAutoFixExecutionModel, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import { loadConfig, resolveAutoFixExecutionModel, resolveForceExecution, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { trackWorkflow } from './headless-watch.js';
@@ -188,6 +188,7 @@ export function createHeadlessExecutor(
     worktreeTargetsProvider: () => loadConfig().worktreeTargets ?? {},
     repoProvisionCommandsProvider: () => loadConfig().repoProvisionCommands ?? {},
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
+    forceExecutionAgentProvider: () => resolveForceExecution(loadConfig())?.executionAgent,
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
         publishReviewGateCiFailedLifecycleEvent(trigger, {
