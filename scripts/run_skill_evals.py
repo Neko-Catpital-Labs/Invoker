@@ -23,8 +23,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CASES = ROOT / "evals" / "plan-to-invoker" / "cases.jsonl"
-DEFAULT_RUNNER_CONFIG = ROOT / "evals" / "plan-to-invoker" / "runners.example.json"
+DEFAULT_CASES = ROOT / "workspace" / "evals" / "plan-to-invoker" / "cases.jsonl"
+DEFAULT_RUNNER_CONFIG = ROOT / "workspace" / "evals" / "plan-to-invoker" / "runners.example.json"
 DEFAULT_REPORT_TEMPLATE = ROOT / "scripts" / "report_template.html"
 WEIGHTS = {
     "correctness": 0.35,
