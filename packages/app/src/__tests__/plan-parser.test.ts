@@ -1082,6 +1082,23 @@ tasks:
     expect(plan.tasks.map((task) => task.executionAgent)).toEqual(['claude', 'claude', 'claude']);
   });
 
+  it('trims forceExecution.executionAgent before applying it to parsed tasks', () => {
+    writeFileSync(isolatedConfigPath, JSON.stringify({
+      defaultBranch: 'main',
+      forceExecution: { executionAgent: '  claude  ' },
+    }));
+    const yaml = `
+name: Trimmed Force Agent Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: command-task
+    description: "Command-only task"
+    command: "echo hi"
+`;
+    const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
+    expect(plan.tasks[0].executionAgent).toBe('claude');
+  });
+
   it('keeps a pinned executionAgent when forceExecution.executionAgent is absent', () => {
     writeFileSync(isolatedConfigPath, JSON.stringify({
       defaultBranch: 'main',
