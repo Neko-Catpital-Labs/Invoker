@@ -15,6 +15,32 @@ describe('slack-bug-scan repo url extraction', () => {
       .toBe('https://gitlab.com/Group/Sub/Project');
   });
 
+  it('returns the repository root for GitHub pull request and Actions urls', () => {
+    expect(extractRepoUrlFromText('review https://github.com/acme/widgets/pull/12'))
+      .toBe('https://github.com/acme/widgets');
+    expect(extractRepoUrlFromText('failed job https://github.com/acme/widgets/actions/runs/99/job/55'))
+      .toBe('https://github.com/acme/widgets');
+  });
+
+  it('returns the repository root for GitHub issue urls', () => {
+    expect(extractRepoUrlFromText('issue https://github.com/acme/widgets/issues/42'))
+      .toBe('https://github.com/acme/widgets');
+  });
+
+  it('returns the repository root for GitLab merge request and job urls', () => {
+    expect(extractRepoUrlFromText('review https://gitlab.com/Group/Sub/Project/-/merge_requests/7'))
+      .toBe('https://gitlab.com/Group/Sub/Project');
+    expect(extractRepoUrlFromText('failed job https://gitlab.com/Group/Sub/Project/-/jobs/42'))
+      .toBe('https://gitlab.com/Group/Sub/Project');
+    expect(extractRepoUrlFromText('pipeline https://gitlab.com/Group/Sub/Project/-/pipelines/9'))
+      .toBe('https://gitlab.com/Group/Sub/Project');
+  });
+
+  it('returns an ssh repository root for ssh resource urls', () => {
+    expect(extractRepoUrlFromText('review git@github.com:acme/widgets/pull/12'))
+      .toBe('git@github.com:acme/widgets.git');
+  });
+
   it('returns undefined when no url is present', () => {
     expect(extractRepoUrlFromText('just a random channel about snacks')).toBeUndefined();
     expect(extractRepoUrlFromText(undefined)).toBeUndefined();
