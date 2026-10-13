@@ -244,17 +244,19 @@ export function createRunRoot() {
   return assertOutsideRepoCheckout(root, 'run root');
 }
 
+function createVerifierRoot() {
+  const root = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-eval-verifier-'));
+  return assertOutsideRepoCheckout(root, 'verifier root');
+}
+
 export function runTask(task, options = {}) {
   const runRoot = options.runRoot ?? createRunRoot();
   const runId = options.runId ?? randomUUID();
   const taskRoot = assertOutsideRepoCheckout(path.join(runRoot, task.id), `task root for ${task.id}`);
   const workspaceDir = path.join(taskRoot, 'workspace');
-  const verifierDir = path.join(taskRoot, 'verifier');
   mkdirSync(workspaceDir, { recursive: true });
-  mkdirSync(verifierDir, { recursive: true });
 
   materializeFiles(workspaceDir, task.fixtureFiles);
-  materializeFiles(verifierDir, task.verifier.files);
 
   const startedAt = new Date().toISOString();
   const solverEnv = {
@@ -273,6 +275,11 @@ export function runTask(task, options = {}) {
     env: solverEnv,
     timeoutMs: task.solverTimeoutMs,
   });
+
+  const verifierRoot = createVerifierRoot();
+  const verifierDir = path.join(verifierRoot, task.id);
+  mkdirSync(verifierDir, { recursive: true });
+  materializeFiles(verifierDir, task.verifier.files);
 
   const verifier = runCommandSync(task.verifier, {
     cwd: verifierDir,
@@ -341,6 +348,7 @@ export function runTask(task, options = {}) {
 
   if (options.keep !== true) {
     rmSync(taskRoot, { recursive: true, force: true });
+    rmSync(verifierRoot, { recursive: true, force: true });
   }
   return row;
 }
@@ -487,10 +495,13 @@ function selfTestManifest() {
         id: 'verifier-assets-are-hidden-from-the-solver',
         prompt: 'Record everything you can read.',
         fixture: { files: { 'notes/seed.txt': 'seed\n' } },
-        solver: { command: 'bash', args: ['-c', 'find . -type f | sort > listing.txt'] },
+        solver: {
+          command: 'bash',
+          args: ['-c', 'find . -type f | sort > listing.txt; asset="$INVOKER_EVAL_WORKDIR/../verifier/reference-solution.txt"; cat "$asset" > stolen.txt 2>/dev/null || true; printf tampered > "$asset" 2>/dev/null || true'],
+        },
         verifier: {
           command: 'bash',
-          args: ['-c', 'grep -q seed.txt "$INVOKER_EVAL_WORKDIR/listing.txt" && ! grep -q reference-solution "$INVOKER_EVAL_WORKDIR/listing.txt" && [ ! -e "$INVOKER_EVAL_WORKDIR/reference-solution.txt" ] && [ -f reference-solution.txt ]'],
+          args: ['-c', 'grep -q seed.txt "$INVOKER_EVAL_WORKDIR/listing.txt" && ! grep -q reference-solution "$INVOKER_EVAL_WORKDIR/listing.txt" && [ ! -s "$INVOKER_EVAL_WORKDIR/stolen.txt" ] && [ "$(cat reference-solution.txt)" = "the answer the solver must never see" ]'],
           files: { 'reference-solution.txt': 'the answer the solver must never see\n' },
         },
       },
@@ -589,14 +600,15 @@ function selfTest() {
   check('the verifier still grades final state after a solver timeout', timedOut.graded === 'pass');
 
   const hidden = rowFor('verifier-assets-are-hidden-from-the-solver');
-  check('verifier assets are never materialized in the solver workspace', hidden.graded === 'pass');
+  check('verifier assets are never materialized in a solver-reachable sibling', hidden.graded === 'pass');
 
   const verifierTimeout = rowFor('verifier-timeout-grades-as-fail');
   check('a verifier that overruns its timeout grades fail', verifierTimeout.graded === 'fail' && verifierTimeout.verifier?.timedOut === true);
 
   check('the source checkout is unchanged by a run', checkoutBefore === checkoutAfter);
   check('workspaces live outside the source checkout', run.rows.every((row) => path.relative(REPO_ROOT, row.workspaceDir).startsWith('..')));
-  check('disposable task directories are removed after grading', run.rows.every((row) => !existsSync(row.workspaceDir)));
+  check('verifier dirs are not inside solver-reachable task directories', run.rows.every((row) => path.relative(path.dirname(row.workspaceDir), row.verifierDir).startsWith('..')));
+  check('disposable task directories are removed after grading', run.rows.every((row) => !existsSync(row.workspaceDir) && !existsSync(row.verifierDir)));
 
   const written = readFileSync(outPath, 'utf8').trim().split('\n');
   check('results are written as one JSON object per line', written.length === run.rows.length);
