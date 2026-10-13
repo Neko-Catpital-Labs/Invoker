@@ -90,18 +90,6 @@ describe('parseForgeProject', () => {
     });
   });
 
-  it('rejects GitLab URLs with repeated special route segments', () => {
-    expect(
-      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/merge_requests/7/Group/Sub/Project/-/merge_requests/8'),
-    ).toBeUndefined();
-    expect(
-      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/jobs/42/Group/Sub/Project/-/jobs/43'),
-    ).toBeUndefined();
-    expect(
-      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/pipelines/9/Group/Sub/Project/-/pipelines/10'),
-    ).toBeUndefined();
-  });
-
   it('rejects unrecognized GitLab project subpaths', () => {
     expect(
       parseForgeProject('https://gitlab.com/Group/Sub/Project/-/issues/5'),

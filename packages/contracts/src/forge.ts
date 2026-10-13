@@ -107,35 +107,8 @@ export type MergeGateProvider = ForgeProvider;
 const GITHUB_HOST = 'github.com';
 const DEFAULT_GITLAB_HOST = 'gitlab.com';
 
-function trimTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value[end - 1] === '/') end -= 1;
-  return value.slice(0, end);
-}
-
 function stripGitSuffix(path: string): string {
-  const trimmed = trimTrailingSlashes(path);
-  return trimmed.toLowerCase().endsWith('.git') ? trimmed.slice(0, -'.git'.length) : trimmed;
-}
-
-function stripHttpProtocol(value: string): string {
-  const lower = value.toLowerCase();
-  if (lower.startsWith('https://')) return value.slice('https://'.length);
-  if (lower.startsWith('http://')) return value.slice('http://'.length);
-  return value;
-}
-
-function isDecimal(value: string | undefined): value is string {
-  if (!value) return false;
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code < 48 || code > 57) return false;
-  }
-  return true;
-}
-
-function hasAtLeastOwnerAndProject(projectPath: string): boolean {
-  return projectPath.split('/').filter(Boolean).length >= 2;
+  return path.replace(/\/+$/g, '').replace(/\.git$/i, '');
 }
 
 function gitlabHostsFromEnv(): Set<string> {
@@ -143,7 +116,7 @@ function gitlabHostsFromEnv(): Set<string> {
   const raw = process.env.INVOKER_GITLAB_HOST?.trim();
   if (!raw) return hosts;
   for (const part of raw.split(',')) {
-    const host = trimTrailingSlashes(stripHttpProtocol(part.trim().toLowerCase()));
+    const host = part.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
     if (host) hosts.add(host);
   }
   return hosts;
@@ -217,46 +190,45 @@ function parseGitHubProject(host: string, pathname: string): ForgeProject | unde
 }
 
 function parseGitLabProject(host: string, pathname: string): ForgeProject | undefined {
-  const segments = pathname.split('/').filter(Boolean);
-  const routeIndex = segments.indexOf('-');
-  if (routeIndex >= 0) {
-    if (routeIndex < 2) return undefined;
-    const route = segments[routeIndex + 1];
-    const id = segments[routeIndex + 2];
-    const tail = segments.slice(routeIndex + 3);
-    if (!isDecimal(id) || tail.includes('-')) return undefined;
-
-    const projectPath = stripGitSuffix(segments.slice(0, routeIndex).join('/'));
-    if (!hasAtLeastOwnerAndProject(projectPath)) return undefined;
-    if (route === 'merge_requests') {
-      return {
-        kind: 'gitlab',
-        host,
-        projectPath,
-        reviewId: id,
-      };
-    }
-    if (route === 'jobs') {
-      return {
-        kind: 'gitlab',
-        host,
-        projectPath,
-        jobId: id,
-      };
-    }
-    if (route === 'pipelines') {
-      return {
-        kind: 'gitlab',
-        host,
-        projectPath,
-        pipelineId: id,
-      };
-    }
-    return undefined;
+  const mrMatch = /^(.+?)\/-\/merge_requests\/(\d+)(?:\/.*)?$/i.exec(pathname);
+  if (mrMatch) {
+    const projectPath = stripGitSuffix(mrMatch[1]);
+    if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
+    return {
+      kind: 'gitlab',
+      host,
+      projectPath,
+      reviewId: mrMatch[2],
+    };
   }
 
+  const jobMatch = /^(.+?)\/-\/jobs\/(\d+)(?:\/.*)?$/i.exec(pathname);
+  if (jobMatch) {
+    const projectPath = stripGitSuffix(jobMatch[1]);
+    if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
+    return {
+      kind: 'gitlab',
+      host,
+      projectPath,
+      jobId: jobMatch[2],
+    };
+  }
+
+  const pipelineMatch = /^(.+?)\/-\/pipelines\/(\d+)(?:\/.*)?$/i.exec(pathname);
+  if (pipelineMatch) {
+    const projectPath = stripGitSuffix(pipelineMatch[1]);
+    if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
+    return {
+      kind: 'gitlab',
+      host,
+      projectPath,
+      pipelineId: pipelineMatch[2],
+    };
+  }
+
+  if (/(^|\/)-(\/|$)/.test(pathname)) return undefined;
   const projectPath = stripGitSuffix(pathname);
-  if (!hasAtLeastOwnerAndProject(projectPath)) return undefined;
+  if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
   return {
     kind: 'gitlab',
     host,
