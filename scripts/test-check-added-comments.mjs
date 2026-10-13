@@ -350,7 +350,7 @@ assert.equal(commentIndexForCodeLine('const half = total / 2 // half'), 23);
   assert.equal(
     collectAddedCommentViolations(diff, 'diff', () => new Map([[2, '.js']])).length,
     1,
-    'skills/admin-bypass-sweep/SKILL.md is no longer exempt, so a new fence comment there is flagged',
+    'skills/admin-bypass-sweep/SKILL.md is not exempt, so a new fence comment there is flagged',
   );
 }
 
