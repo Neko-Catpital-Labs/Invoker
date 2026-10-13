@@ -87,6 +87,40 @@ describe('GitHubMergeGateProvider', () => {
     });
   });
 
+  describe('fetchFailedJobLog', () => {
+    it('targets the repository from GitHub Actions details URLs', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') return mockSpawnResult('failed log', 0);
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await expect(provider.fetchFailedJobLog({
+        detailsUrl: 'https://github.com/owner/repo/actions/runs/123',
+        cwd: '/tmp/worktree',
+      })).resolves.toBe('failed log');
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        ['run', 'view', '123', '--log-failed', '--repo', 'owner/repo'],
+        expect.objectContaining({ cwd: '/tmp/worktree' }),
+      );
+
+      await expect(provider.fetchFailedJobLog({
+        detailsUrl: 'https://github.com/other/project/actions/runs/456/job/789',
+        cwd: '/tmp/worktree',
+      })).resolves.toBe('failed log');
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        ['run', 'view', '--log-failed', '--job', '789', '--repo', 'other/project'],
+        expect.objectContaining({ cwd: '/tmp/worktree' }),
+      );
+    });
+  });
+
   describe('createReview', () => {
     it('logs createReview without dumping PR body or create stdout JSON', async () => {
       const { spawn } = await import('node:child_process');
