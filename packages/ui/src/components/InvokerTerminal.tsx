@@ -140,6 +140,7 @@ interface InvokerTerminalProps {
   repoError?: string | null;
   turnError?: string | null;
   onRetryTurn?: () => void;
+  onCancelTurn?: () => void;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
@@ -570,6 +571,7 @@ export function InvokerTerminal({
   repoError = null,
   turnError = null,
   onRetryTurn,
+  onCancelTurn,
   onPresetChange,
   onConfirmationModeChange,
   onRepoInputChange,
@@ -1127,25 +1129,37 @@ export function InvokerTerminal({
                     </div>
                   )}
                 </div>
-                <button
-                  type="submit"
-                  aria-label="Send"
-                  disabled={sendButtonDisabled}
-                  className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
-                >
-                  {busy || binding ? (
-                    <span
-                      data-testid="invoker-terminal-send-spinner"
-                      aria-hidden="true"
-                      className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-500 border-t-gray-100"
-                    />
-                  ) : (
-                    <SendIcon
-                      data-testid="invoker-terminal-send-icon"
-                      className="h-4 w-4"
-                    />
-                  )}
-                </button>
+                {busy && !binding ? (
+                  <button
+                    type="button"
+                    aria-label="Cancel"
+                    data-testid="invoker-terminal-cancel"
+                    onClick={() => onCancelTurn?.()}
+                    className="inline-flex h-8 shrink-0 items-center justify-center rounded-sm border border-border bg-secondary px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    Cancel
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    aria-label="Send"
+                    disabled={sendButtonDisabled}
+                    className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
+                  >
+                    {binding ? (
+                      <span
+                        data-testid="invoker-terminal-send-spinner"
+                        aria-hidden="true"
+                        className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-500 border-t-gray-100"
+                      />
+                    ) : (
+                      <SendIcon
+                        data-testid="invoker-terminal-send-icon"
+                        className="h-4 w-4"
+                      />
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </form>

@@ -67,6 +67,7 @@ import type {
   BundledSkillsInstallMode,
   InvokerSetupRequest,
   InAppPlanRequest,
+  InAppPlanningCancelRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningDeleteRequest,
@@ -303,6 +304,7 @@ import {
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
 import {
+  cancelPlanningChatTurn,
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
@@ -1578,6 +1580,14 @@ function startHeadlessMode(): void {
           plannerReplyOverride,
           onRawPlannerOutput: emitPlanningChatStreamToWeb,
           repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+        });
+      });
+
+      registerStandaloneOwnerCapability('invoker:planning-chat-cancel', async (payload) => {
+        return cancelPlanningChatTurn(payload.args[0] as InAppPlanningCancelRequest, {
+          sessions: planningChatSessions,
+          planningSessionStore: readOnlyMode ? undefined : persistence,
+          onRawPlannerOutput: emitPlanningChatStreamToWeb,
         });
       });
 

@@ -220,6 +220,11 @@ export function createMockInvoker(
       confirmationMode: 'require',
       draftPlanAvailable: false,
     })),
+    planningChatCancel: vi.fn(async () => ({
+      ok: true,
+      cancelled: false,
+      sessionId: 'session-1',
+    })),
     planningChatSubmit: vi.fn(async () => ({
       ok: true,
       planName: 'Mock Plan',

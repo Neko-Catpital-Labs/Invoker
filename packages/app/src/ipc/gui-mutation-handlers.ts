@@ -7,6 +7,7 @@ import { CommandError, IpcChannels, makeEnvelope, resolveInvokerInstanceProfile 
 import type {
   BundledSkillsInstallMode,
   InAppPlanRequest,
+  InAppPlanningCancelRequest,
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningDiscardDraftRequest,
@@ -100,6 +101,7 @@ import { persistShutdownDiagnostic } from '../shutdown-diagnostic.js';
 import { createCachedActionGraphSnapshotReader } from '../action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
 import {
+  cancelPlanningChatTurn,
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
@@ -1079,6 +1081,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:planning-chat-list':
       case 'invoker:plan-from-goal':
       case 'invoker:planning-chat-send':
+      case 'invoker:planning-chat-cancel':
       case 'invoker:planning-chat-submit':
       case 'invoker:planning-chat-reset':
       case 'invoker:planning-chat-discard-draft':
@@ -1538,6 +1541,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       plannerReplyOverrideSidecarDraft,
       onRawPlannerOutput: emitPlanningChatStream,
       repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-cancel', async (request: unknown) => {
+    return cancelPlanningChatTurn(request as InAppPlanningCancelRequest, {
+      sessions: planningChatSessions,
+      planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput: emitPlanningChatStream,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {

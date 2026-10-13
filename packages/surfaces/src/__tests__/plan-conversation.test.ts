@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, buildPlanSystemPrompt, extractYamlPlan, globToRegex, isDangerousCommand, isConfirmation, redactEmbeddedPlanFence } from '../slack/plan-conversation.js';
+import {
+  PlanConversation,
+  PlanningTurnCancelledError,
+  buildPlanSystemPrompt,
+  extractYamlPlan,
+  globToRegex,
+  isDangerousCommand,
+  isConfirmation,
+  redactEmbeddedPlanFence,
+} from '../slack/plan-conversation.js';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -498,7 +507,10 @@ describe('PlanConversation', () => {
     expect(mockSpawn).toHaveBeenCalledWith(
       'agent',
       ['--print', expect.any(String)],
-      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
+      expect.objectContaining({
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      }),
     );
   });
 
@@ -880,6 +892,29 @@ describe('PlanConversation', () => {
     const err = await promise.then(() => null, (e) => e as Error);
     expect(err?.message).toContain('omp exited with code 1');
     expect(err?.message).not.toContain('Cursor');
+  });
+
+  it('abortActiveTurn kills the in-flight planner and rejects with Cancelled.', async () => {
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.pid = 4242;
+    proc.exitCode = null;
+    proc.signalCode = null;
+    proc.kill = vi.fn(() => {
+      proc.exitCode = 1;
+      setTimeout(() => proc.emit('close', 1), 0);
+      return true;
+    });
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conversation.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    expect(conversation.abortActiveTurn()).toBe(true);
+    await expect(promise).rejects.toBeInstanceOf(PlanningTurnCancelledError);
+    await expect(promise).rejects.toMatchObject({ message: 'Cancelled.' });
+    expect(proc.kill).toHaveBeenCalled();
+    expect(conversation.abortActiveTurn()).toBe(false);
   });
 });
 

@@ -10,12 +10,16 @@
  * client-side when the user sends a confirmation message.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository, PlanningDraft } from '@invoker/data-store';
-import { formatCodexPlannerStdout } from '@invoker/execution-engine';
+import {
+  childProcessHasExited,
+  formatCodexPlannerStdout,
+  terminateChildProcessGroup,
+} from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import {
   buildPlanningHandoffInstructions,
@@ -106,6 +110,19 @@ class RetryableEmptyPlannerOutputError extends Error {
     super('planner exited 0 with no output');
     this.name = 'RetryableEmptyPlannerOutputError';
   }
+}
+
+/** User/host cancelled the in-flight planner subprocess before it finished. */
+export class PlanningTurnCancelledError extends Error {
+  constructor() {
+    super('Cancelled.');
+    this.name = 'PlanningTurnCancelledError';
+  }
+}
+
+export function isPlanningTurnCancelledError(error: unknown): boolean {
+  return error instanceof PlanningTurnCancelledError
+    || (error instanceof Error && error.name === 'PlanningTurnCancelledError');
 }
 
 function delay(ms: number): Promise<void> {
@@ -565,6 +582,9 @@ export class PlanConversation {
   private harnessSessionDriver?: HarnessSessionDriver;
   private _harnessSessionId?: string;
   private onHarnessSessionId?: (sessionId: string) => void;
+  private activePlannerChild: ChildProcess | null = null;
+  private activePlannerReject: ((error: Error) => void) | null = null;
+  private activePlannerAbortRequested = false;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -1142,6 +1162,23 @@ export class PlanConversation {
 
   // ── Planner CLI Subprocess ─────────────────────────────
 
+  /**
+   * Kill the in-flight planner process tree, if any. Rejects the active
+   * spawn promise with {@link PlanningTurnCancelledError}.
+   */
+  abortActiveTurn(): boolean {
+    if (!this.activePlannerChild && !this.activePlannerReject) return false;
+    this.activePlannerAbortRequested = true;
+    const child = this.activePlannerChild;
+    const reject = this.activePlannerReject;
+    this.activePlannerReject = null;
+    if (child) {
+      void terminateChildProcessGroup(child, () => childProcessHasExited(child));
+    }
+    reject?.(new PlanningTurnCancelledError());
+    return true;
+  }
+
   async spawnPlanner(prompt: string, turn?: number): Promise<string> {
     if (this.harnessSessionDriver) {
       return this.spawnPlannerWithDriver(prompt, this.harnessSessionDriver, turn);
@@ -1205,6 +1242,7 @@ export class PlanConversation {
       try {
         return await this.spawnPlannerAttempt(prompt, command, args, plannerLabel, attempt + 1, totalAttempts);
       } catch (err) {
+        if (isPlanningTurnCancelledError(err)) throw err;
         if (err instanceof RetryableEmptyPlannerOutputError) {
           lastStderrTail = err.stderrTail;
           const isLast = attempt >= totalAttempts - 1;
@@ -1220,6 +1258,14 @@ export class PlanConversation {
     throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
   }
 
+  private clearActivePlannerChild(child: ChildProcess): void {
+    if (this.activePlannerChild === child) {
+      this.activePlannerChild = null;
+      this.activePlannerReject = null;
+      this.activePlannerAbortRequested = false;
+    }
+  }
+
   private spawnPlannerAttempt(
     prompt: string,
     command: string,
@@ -1230,11 +1276,27 @@ export class PlanConversation {
   ): Promise<string> {
     const spawnStart = Date.now();
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
       const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
+        detached: process.platform !== 'win32',
       });
+
+      const settle = (action: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        this.clearActivePlannerChild(child);
+        action();
+      };
+
+      this.activePlannerChild = child;
+      this.activePlannerReject = (error) => settle(() => reject(error));
+      this.activePlannerAbortRequested = false;
 
       let stdout = '';
       let stderr = '';
@@ -1264,31 +1326,37 @@ export class PlanConversation {
         this.log('plan-conversation', 'info', `[PERF] cursor_stderr chunk #${stderrChunks}: +${chunkStr.length} bytes (total=${stderr.length}, elapsed=${Date.now() - spawnStart}ms), preview="${chunkStr.slice(0, 200).replace(/\n/g, '\\n')}"`);
       });
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         this.log('plan-conversation', 'error', `[PERF] cursor_timeout: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, stderrTail="${stderr.slice(-500).replace(/\n/g, '\\n')}"`);
-        try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
+        void terminateChildProcessGroup(child, () => childProcessHasExited(child) || settled);
+        settle(() => reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`)));
       }, this.timeoutMs);
 
       child.on('close', (code) => {
-        clearTimeout(timer);
         this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, attempt=${attemptNumber}/${totalAttempts}`);
+        if (this.activePlannerAbortRequested) {
+          settle(() => reject(new PlanningTurnCancelledError()));
+          return;
+        }
         if (code === 0) {
           const trimmed = stdout.trim();
           if (trimmed) {
-            resolve(trimmed);
+            settle(() => resolve(trimmed));
           } else {
-            reject(new RetryableEmptyPlannerOutputError(stderr));
+            settle(() => reject(new RetryableEmptyPlannerOutputError(stderr)));
           }
-        } else {
-          const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
-          reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
+          return;
         }
+        const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
+        settle(() => reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`)));
       });
 
       child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
+        if (this.activePlannerAbortRequested) {
+          settle(() => reject(new PlanningTurnCancelledError()));
+          return;
+        }
+        settle(() => reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`)));
       });
     });
   }

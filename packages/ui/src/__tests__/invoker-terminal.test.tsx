@@ -352,6 +352,24 @@ describe('Invoker terminal (component)', () => {
     ]);
   });
 
+  it('shows Cancel while busy and invokes onCancelTurn', () => {
+    const onCancelTurn = vi.fn();
+    render(<InvokerTerminal {...terminalProps({ busy: true, onCancelTurn })} />);
+
+    const cancel = screen.getByTestId('invoker-terminal-cancel');
+    expect(cancel).toHaveAttribute('aria-label', 'Cancel');
+    expect(screen.queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
+    fireEvent.click(cancel);
+    expect(onCancelTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the send spinner while binding instead of Cancel', () => {
+    render(<InvokerTerminal {...terminalProps({ busy: true, binding: true })} />);
+
+    expect(screen.queryByTestId('invoker-terminal-cancel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-send-spinner')).toBeInTheDocument();
+  });
+
   it('renders separate harness and model selectors while emitting configured preset keys', () => {
     const onPresetChange = vi.fn();
     render(<InvokerTerminal
@@ -799,6 +817,30 @@ describe('Invoker terminal (component)', () => {
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
+  });
+
+  it('Cancel while busy calls planningChatCancel with the active turn id', async () => {
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => {}) as any) as any;
+    mock.api.planningChatCancel = vi.fn(async () => ({
+      ok: true,
+      cancelled: true,
+      sessionId: 'session-1',
+      turnId: 'turn-cancel-ui',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('hi');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    const turnId = vi.mocked(mock.api.planningChatSend).mock.calls[0][0].turnId;
+    expect(turnId).toEqual(expect.any(String));
+
+    fireEvent.click(await screen.findByTestId('invoker-terminal-cancel'));
+    await waitFor(() => expect(mock.api.planningChatCancel).toHaveBeenCalledTimes(1));
+    expect(mock.api.planningChatCancel).toHaveBeenCalledWith({
+      turnId,
+    });
   });
 
   it('shows concise planning activity while busy and removes it when the final reply arrives', async () => {

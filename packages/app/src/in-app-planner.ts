@@ -5,6 +5,8 @@ import { trimPreservingEscapeSequences } from './embedded-terminal-manager.js';
 import type {
   InAppPlanRequest,
   InAppPlanResponse,
+  InAppPlanningCancelRequest,
+  InAppPlanningCancelResponse,
   InAppPlanningChatLine,
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
@@ -57,6 +59,7 @@ import {
 } from '@invoker/planning-core';
 import { detectDefaultBranchRemote } from '@invoker/workflow-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
+import { isPlanningTurnCancelledError } from '@invoker/surfaces';
 import { filterPlanningPresets, type InvokerConfig } from './config.js';
 import {
   ensurePlanningWorktreeReady,
@@ -156,6 +159,8 @@ export type InAppPlanningChatSessions = Map<string, InAppPlanningChatSession>;
 export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
   return new Map();
 }
+
+export const PLANNING_TURN_CANCELLED_MESSAGE = 'Cancelled.';
 
 function isModuleResolutionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -1311,24 +1316,32 @@ export async function sendPlanningChatMessage(
           draftPlanText: review.planText,
         } as Extract<InAppPlanningChatResponse, { ok: true }>);
       } catch (error) {
-        const failureMessage = error instanceof Error ? error.message : String(error);
-        activeSession.activeTurnStatus = 'failed';
-        activeSession.activeTurnError = failureMessage;
-        if (isAuthenticationError(error)) {
-          activeSession.status = 'planner_error';
-          appendSessionMessage(
-            activeSession,
-            'system',
-            'Authentication failed. The planner could not complete this turn. Re-authenticate and try again.',
-            'error',
-          );
+        const cancelled = isPlanningTurnCancelledError(error);
+        const failureMessage = cancelled
+          ? PLANNING_TURN_CANCELLED_MESSAGE
+          : error instanceof Error ? error.message : String(error);
+        const alreadyCancelled = activeSession.activeTurnStatus === 'failed'
+          && activeSession.activeTurnError === PLANNING_TURN_CANCELLED_MESSAGE
+          && activeSession.activeTurnId === turnId;
+        if (!alreadyCancelled) {
+          activeSession.activeTurnStatus = 'failed';
+          activeSession.activeTurnError = failureMessage;
+          if (!cancelled && isAuthenticationError(error)) {
+            activeSession.status = 'planner_error';
+            appendSessionMessage(
+              activeSession,
+              'system',
+              'Authentication failed. The planner could not complete this turn. Re-authenticate and try again.',
+              'error',
+            );
+          }
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          deps.onRawPlannerOutput?.({
+            sessionId: activeSession.id,
+            turnId,
+            turn: { status: 'failed', error: failureMessage },
+          });
         }
-        persistPlanningSession(activeSession, deps.planningSessionStore, false);
-        deps.onRawPlannerOutput?.({
-          sessionId: activeSession.id,
-          turnId,
-          turn: { status: 'failed', error: failureMessage },
-        });
         return {
           ok: false,
           sessionId: activeSession.id,
@@ -1347,6 +1360,52 @@ export async function sendPlanningChatMessage(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export function cancelPlanningChatTurn(
+  request: InAppPlanningCancelRequest,
+  deps: {
+    sessions: InAppPlanningChatSessions;
+    planningSessionStore?: InAppPlanningSessionStore;
+    onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
+  },
+): InAppPlanningCancelResponse {
+  const sessionId = typeof request?.sessionId === 'string' ? request.sessionId.trim() : '';
+  const requestedTurnId = typeof request?.turnId === 'string' ? request.turnId.trim() : '';
+  if (!sessionId && !requestedTurnId) {
+    return { ok: false, error: 'Planning session id or turn id is required.' };
+  }
+
+  let session = sessionId ? deps.sessions.get(sessionId) : undefined;
+  if (!session && requestedTurnId) {
+    session = [...deps.sessions.values()].find((entry) => (
+      entry.activeTurnStatus === 'running' && entry.activeTurnId === requestedTurnId
+    ));
+  }
+  if (!session) {
+    if (sessionId) {
+      return { ok: false, sessionId, error: `Planning session "${sessionId}" was not found.` };
+    }
+    return { ok: true, cancelled: false, turnId: requestedTurnId || undefined };
+  }
+  if (session.activeTurnStatus !== 'running' || !session.activeTurnId) {
+    return { ok: true, cancelled: false, sessionId: session.id };
+  }
+  if (requestedTurnId && session.activeTurnId !== requestedTurnId) {
+    return { ok: true, cancelled: false, sessionId: session.id, turnId: session.activeTurnId };
+  }
+
+  const turnId = session.activeTurnId;
+  session.conversation.abortActiveTurn();
+  session.activeTurnStatus = 'failed';
+  session.activeTurnError = PLANNING_TURN_CANCELLED_MESSAGE;
+  persistPlanningSession(session, deps.planningSessionStore, false);
+  deps.onRawPlannerOutput?.({
+    sessionId: session.id,
+    turnId,
+    turn: { status: 'failed', error: PLANNING_TURN_CANCELLED_MESSAGE },
+  });
+  return { ok: true, cancelled: true, sessionId: session.id, turnId };
 }
 
 export async function submitPlanningChatDraft(

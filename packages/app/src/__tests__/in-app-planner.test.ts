@@ -15,7 +15,9 @@ vi.mock('../system-diagnostics.js', async (importOriginal) => {
 
 import {
   PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
+  PLANNING_TURN_CANCELLED_MESSAGE,
   buildPlanningTerminalSummaryBridge,
+  cancelPlanningChatTurn,
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
@@ -1288,6 +1290,100 @@ tasks:
     if (!result.ok) throw new Error(result.error);
     expect(result.turnId).toBe('turn-explicit');
     expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancelPlanningChatTurn marks a running turn cancelled and aborts the planner', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const events: Array<{ turnId?: string; error?: string }> = [];
+    const created = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+      turnId: 'turn-cancel',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello back',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    if (!session) throw new Error('expected session');
+
+    session.activeTurnId = 'turn-cancel';
+    session.activeTurnStatus = 'running';
+    const abort = vi.spyOn(session.conversation, 'abortActiveTurn').mockReturnValue(true);
+
+    const cancelled = cancelPlanningChatTurn(
+      { sessionId: created.sessionId, turnId: 'turn-cancel' },
+      {
+        sessions,
+        onRawPlannerOutput: (event) => {
+          if (event.turn?.status === 'failed') {
+            events.push({ turnId: event.turnId, error: event.turn.error });
+          }
+        },
+      },
+    );
+
+    expect(cancelled).toEqual({
+      ok: true,
+      cancelled: true,
+      sessionId: created.sessionId,
+      turnId: 'turn-cancel',
+    });
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(session.activeTurnStatus).toBe('failed');
+    expect(session.activeTurnError).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(session.messages.some((line) => line.role === 'user' && line.text === 'hello')).toBe(true);
+    expect(events).toEqual([{ turnId: 'turn-cancel', error: PLANNING_TURN_CANCELLED_MESSAGE }]);
+  });
+
+  it('cancelPlanningChatTurn is a no-op when no turn is running', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const created = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello back',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+
+    const result = cancelPlanningChatTurn({ sessionId: created.sessionId }, { sessions });
+    expect(result).toEqual({ ok: true, cancelled: false, sessionId: created.sessionId });
+  });
+
+  it('cancelPlanningChatTurn finds a running turn by turnId when sessionId is omitted', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const created = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+      turnId: 'turn-by-id',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello back',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    if (!session) throw new Error('expected session');
+    session.activeTurnId = 'turn-by-id';
+    session.activeTurnStatus = 'running';
+    vi.spyOn(session.conversation, 'abortActiveTurn').mockReturnValue(true);
+
+    const cancelled = cancelPlanningChatTurn({ turnId: 'turn-by-id' }, { sessions });
+    expect(cancelled).toEqual({
+      ok: true,
+      cancelled: true,
+      sessionId: created.sessionId,
+      turnId: 'turn-by-id',
+    });
   });
 
   it('records a failed turn and a retry with the same turnId re-runs without duplicating the user line', async () => {

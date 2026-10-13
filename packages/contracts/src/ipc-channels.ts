@@ -979,6 +979,15 @@ export type InAppPlanningDeleteSubmittedResponse =
   | { ok: true; deletedSessionIds: string[] }
   | { ok: false; error: string };
 
+export interface InAppPlanningCancelRequest {
+  sessionId?: string;
+  turnId?: string;
+}
+
+export type InAppPlanningCancelResponse =
+  | { ok: true; cancelled: boolean; sessionId?: string; turnId?: string }
+  | { ok: false; error: string; sessionId?: string };
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -1000,6 +1009,10 @@ export const IpcChannels = {
   'invoker:planning-chat-send': {} as {
     request: [request: InAppPlanningChatRequest];
     response: InAppPlanningChatResponse;
+  },
+  'invoker:planning-chat-cancel': {} as {
+    request: [request: InAppPlanningCancelRequest];
+    response: InAppPlanningCancelResponse;
   },
   'invoker:planning-chat-submit': {} as {
     request: [request: InAppPlanningSubmitRequest];

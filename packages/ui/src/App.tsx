@@ -3117,6 +3117,30 @@ export function App() {
     selectedPlanningPresetKey,
   ]);
 
+  const handleCancelPlanningTurn = useCallback(async () => {
+    const session = activePlanningSession;
+    if (!session.busy || !session.activeTurnId) return;
+    if (!invoker?.planningChatCancel) return;
+    let backendSessionId = session.id.startsWith('local-') ? undefined : session.id;
+    if (!backendSessionId) {
+      for (const [streamSessionId, targetSessionId] of planningStreamSessionAliasesRef.current) {
+        if (targetSessionId === session.id) {
+          backendSessionId = streamSessionId;
+          break;
+        }
+      }
+    }
+    try {
+      await invoker.planningChatCancel({
+        ...(backendSessionId ? { sessionId: backendSessionId } : {}),
+        turnId: session.activeTurnId,
+      });
+    } catch (err) {
+      console.error('[planning] planningChatCancel transport failure', err);
+      void refreshPlanningSessionsNow();
+    }
+  }, [activePlanningSession, invoker, refreshPlanningSessionsNow]);
+
   const makeFreshLocalPlanningSession = useCallback((): PlanningSessionView => {
     const index = nextPlanningSessionLocalIdRef.current;
     nextPlanningSessionLocalIdRef.current += 1;
@@ -4809,6 +4833,7 @@ export function App() {
             repoError={activePlanningSession.repoError ?? null}
             turnError={activePlanningSession.activeTurnStatus === 'failed' ? activePlanningSession.activeTurnError ?? 'The planner turn failed.' : null}
             onRetryTurn={() => void handleRetryPlanningTurn()}
+            onCancelTurn={() => void handleCancelPlanningTurn()}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
             onPresetChange={handlePlanningPresetChange}
