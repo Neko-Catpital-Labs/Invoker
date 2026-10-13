@@ -24,6 +24,7 @@ export const INVOKER_CONDITION = 'invoker';
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 const BUILT_CLI_ENTRY = path.join(REPO_ROOT, 'packages', 'cli', 'dist', 'index.js');
+const CLI_NODE_MODULES = path.join(REPO_ROOT, 'packages', 'cli', 'node_modules');
 
 const USAGE = [
   'usage: e2e-eval-invoker-agent.mjs --manifest <path> [--task <id>] [--out <results.jsonl>] [--keep]',
@@ -136,7 +137,7 @@ export default defineConfig({
 });
 `);
   const build = spawnSync(path.join(REPO_ROOT, 'node_modules/.bin/tsup'), ['--config', configPath], {
-    cwd: REPO_ROOT,
+    cwd: buildRoot,
     env: process.env,
     encoding: 'utf8',
     timeout: 120_000,
@@ -147,7 +148,10 @@ export default defineConfig({
     throw new Error(`failed to build temporary CLI bundle: ${truncate(`${build.stdout ?? ''}${build.stderr ?? ''}`)}`);
   }
   const linkedNodeModules = path.join(buildRoot, 'node_modules');
-  if (!existsSync(linkedNodeModules)) symlinkSync(path.join(REPO_ROOT, 'packages/cli/node_modules'), linkedNodeModules, 'dir');
+  if (!existsSync(CLI_NODE_MODULES)) {
+    throw new Error(`cannot build temporary CLI bundle: ${CLI_NODE_MODULES} does not exist; run the repo install first`);
+  }
+  if (!existsSync(linkedNodeModules)) symlinkSync(CLI_NODE_MODULES, linkedNodeModules, 'dir');
   return writeTempCliIndex(outDir);
 }
 
