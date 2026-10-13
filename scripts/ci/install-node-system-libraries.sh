@@ -24,8 +24,9 @@ apt_get_with_lock_retry() {
     if "$@" 2> >(tee "$stderr_file" >&2); then
       rm -f "$stderr_file"
       return 0
+    else
+      status=$?
     fi
-    status=$?
     if [ "$attempt" -ge "$apt_lock_retries" ] || ! grep -Eq 'Could not get lock|Unable to acquire the dpkg frontend lock|Could not open lock file' "$stderr_file"; then
       rm -f "$stderr_file"
       return "$status"
