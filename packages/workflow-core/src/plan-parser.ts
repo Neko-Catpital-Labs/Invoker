@@ -447,6 +447,16 @@ export function parsePlan(yamlContent: string): PlanDefinition {
         throw new PlanParseError(error instanceof Error ? error.message : String(error));
       }
     })();
+    const executionAgent = (() => {
+      const agent = task.executionAgent?.trim();
+      if (agent && !isValidAgentName(agent)) {
+        throw new PlanParseError(
+          `Task "${task.id}" executionAgent "${task.executionAgent}" contains invalid characters. ` +
+          'Agent names must not contain shell metacharacters (;$`|&<>), newlines, or control characters.',
+        );
+      }
+      return agent || undefined;
+    })();
 
     return {
       id: task.id,
@@ -474,16 +484,8 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       featureBranch: task.featureBranch,
       dockerImage: task.dockerImage,
       poolId: task.poolId,
-      executionAgent: (() => {
-        const agent = task.executionAgent?.trim();
-        if (agent && !isValidAgentName(agent)) {
-          throw new PlanParseError(
-            `Task "${task.id}" executionAgent "${task.executionAgent}" contains invalid characters. ` +
-            'Agent names must not contain shell metacharacters (;$`|&<>), newlines, or control characters.',
-          );
-        }
-        return agent || undefined;
-      })(),
+      executionAgent,
+      ...(executionAgent ? { executionAgentSource: 'explicit' as const } : {}),
       executionModel: task.executionModel?.trim() || undefined,
       maxTurns: task.maxTurns,
       priority: validatePriority(`Task "${task.id}"`, task.priority) ?? planPriority,

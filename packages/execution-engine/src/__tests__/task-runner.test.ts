@@ -206,7 +206,7 @@ describe('TaskRunner', () => {
     });
     await done;
   });
-  it('uses the forced execution agent before task and default agents', async () => {
+  it('uses the forced execution agent for generated task agents but preserves explicit task agents', async () => {
     const runner = new TaskRunner({
       orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
       persistence: { updateTask: vi.fn() } as any,
@@ -216,10 +216,12 @@ describe('TaskRunner', () => {
       cwd: '/tmp',
     });
 
-    const task = makeTask({ config: { executionAgent: 'codex' } });
+    const explicitTask = makeTask({ config: { executionAgent: 'codex' } });
+    const defaultedTask = makeTask({ config: { executionAgent: 'omp', executionAgentSource: 'default' } });
 
-    expect(runner.resolveExecutionAgent(task)).toBe('claude');
-    expect(runner.resolveExecutionModel(task)).toBeUndefined();
+    expect(runner.resolveExecutionAgent(explicitTask)).toBe('codex');
+    expect(runner.resolveExecutionAgent(defaultedTask)).toBe('claude');
+    expect(runner.resolveExecutionModel(defaultedTask)).toBeUndefined();
   });
   it('rejects incompatible fix models before spawning the agent', async () => {
     const runner = new TaskRunner({
