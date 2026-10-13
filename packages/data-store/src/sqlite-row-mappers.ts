@@ -125,7 +125,6 @@ export function mapRowToTask(row: any): TaskState {
     fixPrompt: row.fix_prompt ?? undefined,
     fixContext: row.fix_context ?? undefined,
     executionAgent: row.execution_agent ?? undefined,
-    executionAgentSource: row.execution_agent ? row.execution_agent_source ?? undefined : undefined,
   } as const;
   let config: unknown;
   switch (runnerKind) {

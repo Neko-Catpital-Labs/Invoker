@@ -127,7 +127,6 @@ const TASK_COLUMNS = [
   'pool_member_id',
   'docker_image',
   'execution_agent',
-  'execution_agent_source',
   'execution_model',
   'agent_name',
   'task_state_version',

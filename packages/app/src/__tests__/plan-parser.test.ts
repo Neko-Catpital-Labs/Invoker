@@ -1011,11 +1011,8 @@ tasks:
 `;
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].executionAgent).toBe('codex');
-    expect(plan.tasks[0].executionAgentSource).toBe('explicit');
     expect(plan.tasks[1].executionAgent).toBe('claude');
-    expect(plan.tasks[1].executionAgentSource).toBe('explicit');
     expect(plan.tasks[2].executionAgent).toBeUndefined();
-    expect(plan.tasks[2].executionAgentSource).toBeUndefined();
   });
 
   it('trims whitespace from executionAgent and treats empty as undefined', () => {
@@ -1034,9 +1031,7 @@ tasks:
 `;
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].executionAgent).toBe('codex');
-    expect(plan.tasks[0].executionAgentSource).toBe('explicit');
     expect(plan.tasks[1].executionAgent).toBeUndefined();
-    expect(plan.tasks[1].executionAgentSource).toBeUndefined();
   });
 
   it('applies defaultExecutionAgent from config when agent task omits executionAgent', () => {
@@ -1058,11 +1053,8 @@ tasks:
 `;
     const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
     expect(plan.tasks[0].executionAgent).toBe('codex');
-    expect(plan.tasks[0].executionAgentSource).toBe('default');
     expect(plan.tasks[1].executionAgent).toBeUndefined();
-    expect(plan.tasks[1].executionAgentSource).toBeUndefined();
     expect(plan.tasks[2].executionAgent).toBe('claude');
-    expect(plan.tasks[2].executionAgentSource).toBe('explicit');
   });
 
   it('parses executionModel from task definitions', () => {

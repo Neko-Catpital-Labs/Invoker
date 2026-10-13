@@ -53,7 +53,7 @@ export function applyPlanExecutionAgentDefault(plan: PlanDefinition, executionAg
       if (task.executionAgent?.trim() || !taskNeedsDefaultExecutionAgent(task)) {
         return task;
       }
-      return { ...task, executionAgent: defaultExecutionAgent, executionAgentSource: 'default' };
+      return { ...task, executionAgent: defaultExecutionAgent };
     }),
   };
 }
@@ -614,8 +614,6 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       }
     })();
 
-    const executionAgent = task.executionAgent?.trim() || undefined;
-
     return {
       id: task.id,
       description: task.description,
@@ -628,8 +626,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       featureBranch: task.featureBranch,
       dockerImage: task.dockerImage,
       poolId: task.poolId,
-      executionAgent,
-      executionAgentSource: executionAgent ? 'explicit' as const : undefined,
+      executionAgent: task.executionAgent?.trim() || undefined,
       executionModel: task.executionModel?.trim() || undefined,
       maxTurns: task.maxTurns,
       priority: task.priority,

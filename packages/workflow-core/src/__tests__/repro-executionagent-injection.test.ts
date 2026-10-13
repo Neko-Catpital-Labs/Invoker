@@ -91,7 +91,6 @@ tasks:
 
     const plan = parsePlan(yamlContent);
     expect(plan.tasks[0].executionAgent).toBe('claude');
-    expect(plan.tasks[0].executionAgentSource).toBe('explicit');
   });
 
   it('parsePlan should accept executionAgent with hyphen', () => {
@@ -107,6 +106,5 @@ tasks:
 
     const plan = parsePlan(yamlContent);
     expect(plan.tasks[0].executionAgent).toBe('my-custom-agent');
-    expect(plan.tasks[0].executionAgentSource).toBe('explicit');
   });
 });

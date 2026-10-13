@@ -216,7 +216,6 @@ export function editTaskAgentImpl(host: TaskEditHost, taskId: string, agentName:
   const agentChanges: TaskStateChanges = {
     config: {
       executionAgent: agentName,
-      executionAgentSource: 'explicit',
       executionModel: preservedExecutionModel,
     },
   };
