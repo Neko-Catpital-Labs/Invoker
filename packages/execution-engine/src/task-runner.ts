@@ -428,6 +428,10 @@ export class TaskRunner {
   }
 
   resolveExecutionAgent(task: Pick<TaskState, 'config'>): string {
+    const explicitTaskAgent = task.config.executionAgentSource === 'explicit'
+      ? task.config.executionAgent?.trim()
+      : undefined;
+    if (explicitTaskAgent) return explicitTaskAgent;
     const forced = this.getForcedExecutionAgent()?.trim();
     if (forced) return forced;
     return task.config.executionAgent?.trim() || this.getDefaultExecutionAgent();

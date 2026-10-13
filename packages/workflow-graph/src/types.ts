@@ -37,6 +37,7 @@ export interface TaskFreshnessSpec {
 }
 
 export const BUILT_IN_LOCAL_EXECUTION_POOL_ID = 'local-worktree';
+export type ExecutionAgentSource = 'explicit' | 'default';
 
 export interface BaseTaskConfig {
   readonly workflowId?: string;
@@ -58,6 +59,7 @@ export interface BaseTaskConfig {
   readonly reproCommand?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   readonly executionAgent?: string;
+  readonly executionAgentSource?: ExecutionAgentSource;
   /** Agent-specific model selector passed through without central validation. */
   readonly executionModel?: string;
   /** Finite agent turn budget (Claude `--max-turns`) when set. */
@@ -139,6 +141,22 @@ export function assertResolvedTaskConfig(config: unknown): asserts config is Tas
   const runnerKind = candidate.runnerKind;
   const poolId = candidate.poolId;
   const hasConcretePool = typeof poolId === 'string' && poolId.trim().length > 0;
+  const executionAgent = candidate.executionAgent;
+  const executionAgentSource = candidate.executionAgentSource;
+
+  if (
+    executionAgentSource !== undefined
+    && executionAgentSource !== 'explicit'
+    && executionAgentSource !== 'default'
+  ) {
+    throw new Error(`Task config executionAgentSource=${JSON.stringify(executionAgentSource)} is invalid`);
+  }
+  if (
+    executionAgentSource !== undefined
+    && (typeof executionAgent !== 'string' || executionAgent.trim().length === 0)
+  ) {
+    throw new Error('Task config cannot declare executionAgentSource without executionAgent');
+  }
 
   if (hasConcretePool) {
     if (runnerKind !== undefined && runnerKind !== 'worktree' && runnerKind !== 'ssh') {

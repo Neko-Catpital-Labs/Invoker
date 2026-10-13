@@ -206,7 +206,7 @@ describe('TaskRunner', () => {
     });
     await done;
   });
-  it('uses the forced execution agent before task and default agents', async () => {
+  it('preserves explicit task agents when a forced execution agent is configured', async () => {
     const runner = new TaskRunner({
       orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
       persistence: { updateTask: vi.fn() } as any,
@@ -216,10 +216,28 @@ describe('TaskRunner', () => {
       cwd: '/tmp',
     });
 
-    const task = makeTask({ config: { executionAgent: 'codex' } });
+    const task = makeTask({ config: { executionAgent: 'codex', executionAgentSource: 'explicit' } });
 
-    expect(runner.resolveExecutionAgent(task)).toBe('claude');
+    expect(runner.resolveExecutionAgent(task)).toBe('codex');
     expect(runner.resolveExecutionModel(task)).toBeUndefined();
+  });
+
+  it('uses the forced execution agent for generated or absent task agents', async () => {
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
+      executionDefaultsProvider: () => ({ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }),
+      forceExecutionAgentProvider: () => ' claude ',
+      cwd: '/tmp',
+    });
+
+    const generatedTask = makeTask({ config: { executionAgent: 'codex', executionAgentSource: 'default' } });
+    const absentTask = makeTask();
+
+    expect(runner.resolveExecutionAgent(generatedTask)).toBe('claude');
+    expect(runner.resolveExecutionAgent(absentTask)).toBe('claude');
+    expect(runner.resolveExecutionModel(generatedTask)).toBeUndefined();
   });
   it('rejects incompatible fix models before spawning the agent', async () => {
     const runner = new TaskRunner({
