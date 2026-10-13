@@ -206,6 +206,26 @@ describe('PR status worker', () => {
     });
   });
 
+  it('refunds the in-memory retry budget when force-agent resolution fails', async () => {
+    const event = makeEvent();
+    const harness = makeRepairHarness();
+    const policy = {
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 1,
+      getForceExecutionAgent: vi.fn(() => {
+        throw new Error('force agent unavailable');
+      }),
+    };
+
+    await expect(queueReviewGateCiRepair(policy, event)).rejects.toThrow('force agent unavailable');
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.attemptLedger.get(autoFixAttemptLedgerKeyFromLifecycleEvent(event))).toBe(0);
+  });
+
   it('does not publish a CI repair intent for pending checks or merge-conflict-only polls', async () => {
     const publish = vi.fn();
     const host = {
