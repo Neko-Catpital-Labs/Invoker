@@ -1345,7 +1345,7 @@ describe('autoFixOnFailure', () => {
     const persistence = {
       updateTask: vi.fn(),
       getTaskOutput: vi.fn(() => 'test output'),
-      appendTaskOutput,
+      appendTaskOutput: vi.fn(),
       logEvent,
     };
     const taskExecutor = {
