@@ -428,7 +428,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(pushAttempts).toBe(2);
       expect(spawnMock.mock.calls).toContainEqual([
         'git',
-        ['fetch', '--end-of-options', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        ['fetch', '--end-of-options', 'origin'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       ]);
     });
@@ -473,7 +473,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(pushAttempts).toBe(2);
       expect(spawnMock.mock.calls).toContainEqual([
         'git',
-        ['fetch', '--end-of-options', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        ['fetch', '--end-of-options', 'origin'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       ]);
     });

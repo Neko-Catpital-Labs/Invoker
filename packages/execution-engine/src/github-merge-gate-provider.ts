@@ -352,7 +352,6 @@ export class GitHubMergeGateProvider implements ForgeProvider {
         'fetch',
         '--end-of-options',
         'origin',
-        `+refs/heads/${safeBranch}:refs/remotes/origin/${safeBranch}`,
       ], cwd);
       await this.exec('git', pushArgs, cwd);
     }
