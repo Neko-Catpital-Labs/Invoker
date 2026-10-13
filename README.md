@@ -107,7 +107,7 @@ PR maintenance uses the same owner-host worker path. Enable `prMaintenance` to l
 
 ## Install
 
-Requires Node.js 26.x. One command installs CLI + UI, runs doctor, installs skills under `~/.invoker`, and turns on `pr-status` / `autofix` / `auto-approve` (skips Slack, remote machines, and harness MCP wiring):
+Requires Node.js 26.x. One command installs CLI + UI, runs doctor, and turns on `pr-status` / `autofix` / `auto-approve` (skips Slack, remote machines, and harness skill/MCP wiring):
 
 ```bash
 npx @neko-catpital-labs/invoker-cli@latest install
@@ -127,7 +127,7 @@ invoker-cli install
 
 If you need Node installed first, optional wrapper: `curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/bootstrap.sh | bash` (ensures Node 26, then runs the same `npx @neko-catpital-labs/invoker-cli@latest install`). Desktop packages only: `curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash`. Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
 
-`invoker-cli install` installs first-party helper skills under `~/.invoker`. It does **not** modify Cursor / Claude / Codex / OMP configs by default. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in non-interactively (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
+`invoker-cli install` enables default workers (`pr-status`, `autofix`, `auto-approve`). It does **not** install skills or modify Cursor / Claude / Codex / OMP configs by default. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in non-interactively (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
 
 After harness registration, ask in Codex, Claude, Cursor, or OMP to plan and run durable work through Invoker. The `invoker-chat-submit` skill and MCP tools prepare a review, wait for one approval, submit, and watch status without a slash command.
 

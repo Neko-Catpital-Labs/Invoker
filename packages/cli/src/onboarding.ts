@@ -1157,9 +1157,11 @@ function printBundledSkillsResult(
   status: ReturnType<typeof installBundledSkills>,
   registeredHarnesses: boolean,
 ): void {
-  const installedTargets = status.targets.filter((target) => target.installed).map((target) => target.name);
-  io.print(`Skills: installed ${status.bundledSkillNames.length} bundled skill(s) under Invoker home (${installedTargets.join(', ') || 'no targets'}).`);
   if (registeredHarnesses) {
+    const installedTargets = status.targets.filter((target) => target.installed).map((target) => target.name);
+    io.print(
+      `Skills: installed ${status.bundledSkillNames.length} bundled skill(s) into harnesses (${installedTargets.join(', ') || 'no targets'}).`,
+    );
     const registeredMcp = (status.mcpTargets ?? []).filter((target) => target.installed).map((target) => target.name);
     io.print(
       registeredMcp.length > 0
@@ -1167,8 +1169,8 @@ function printBundledSkillsResult(
         : 'Skills MCP: harness registration requested, but no available harness MCP targets were updated.',
     );
   } else {
-    io.print('Skills MCP: harness registration skipped (no Cursor/Claude/Codex/OMP config changes).');
-    io.print(`Skills MCP: ${HARNESS_REGISTRATION_HINT}`);
+    io.print('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
+    io.print(`Skills: ${HARNESS_REGISTRATION_HINT}`);
   }
   if (status.lastInstallError) {
     io.print(`Skills MCP: skipped — ${status.lastInstallError}`);
