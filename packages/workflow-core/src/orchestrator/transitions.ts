@@ -467,6 +467,7 @@ export function handleSpawnExperimentsImpl(
   const parentDockerImage =
     parentTask?.config.runnerKind === 'docker' ? parentTask.config.dockerImage : undefined;
   const parentExecutionAgent = parentTask?.config.executionAgent;
+  const parentExecutionAgentSource = parentTask?.config.executionAgentSource;
   const parentExecutionModel = parentTask?.config.executionModel;
   const parentMaxTurns = parentTask?.config.maxTurns;
   const parentDepIds = (parentTask?.dependencies ?? []).filter(
@@ -487,6 +488,7 @@ export function handleSpawnExperimentsImpl(
     poolId: parentPoolId,
     dockerImage: parentDockerImage,
     executionAgent: parentExecutionAgent,
+    executionAgentSource: parentExecutionAgent ? parentExecutionAgentSource : undefined,
     executionModel: parentExecutionModel,
     maxTurns: parentMaxTurns,
   }));
@@ -506,6 +508,7 @@ export function handleSpawnExperimentsImpl(
       poolId: parentPoolId,
       dockerImage: parentDockerImage,
       executionAgent: parentExecutionAgent,
+      executionAgentSource: parentExecutionAgent ? parentExecutionAgentSource : undefined,
       executionModel: parentExecutionModel,
       maxTurns: parentMaxTurns,
     },

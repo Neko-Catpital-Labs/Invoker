@@ -37,6 +37,7 @@ export interface TaskFreshnessSpec {
 }
 
 export const BUILT_IN_LOCAL_EXECUTION_POOL_ID = 'local-worktree';
+export type ExecutionAgentSource = 'explicit' | 'default';
 
 export interface BaseTaskConfig {
   readonly workflowId?: string;
@@ -58,6 +59,8 @@ export interface BaseTaskConfig {
   readonly reproCommand?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   readonly executionAgent?: string;
+  /** Whether executionAgent came from the plan author or a generated configured default. */
+  readonly executionAgentSource?: ExecutionAgentSource;
   /** Agent-specific model selector passed through without central validation. */
   readonly executionModel?: string;
   /** Finite agent turn budget (Claude `--max-turns`) when set. */
@@ -138,6 +141,14 @@ export function assertResolvedTaskConfig(config: unknown): asserts config is Tas
   const candidate = config as Record<string, unknown>;
   const runnerKind = candidate.runnerKind;
   const poolId = candidate.poolId;
+  const executionAgentSource = candidate.executionAgentSource;
+  if (
+    executionAgentSource !== undefined
+    && executionAgentSource !== 'explicit'
+    && executionAgentSource !== 'default'
+  ) {
+    throw new Error(`Task config executionAgentSource=${JSON.stringify(executionAgentSource)} must be "explicit" or "default"`);
+  }
   const hasConcretePool = typeof poolId === 'string' && poolId.trim().length > 0;
 
   if (hasConcretePool) {
