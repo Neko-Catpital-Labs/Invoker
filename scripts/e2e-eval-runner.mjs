@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -49,17 +49,48 @@ export function assertSafeRelativePath(candidate, label) {
   if (segments.some((segment) => segment === '..')) {
     throw new EvalManifestError(`${label}: file path must not escape the fixture, got "${candidate}"`);
   }
+  if (segments.every((segment) => segment === '' || segment === '.')) {
+    throw new EvalManifestError(`${label}: file path must name a file, got "${candidate}"`);
+  }
   return candidate;
+}
+
+function isInsideDirectory(rootDir, candidate) {
+  const relative = path.relative(rootDir, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 export function assertOutsideRepoCheckout(candidate, label) {
   const resolved = path.resolve(candidate);
-  const relative = path.relative(REPO_ROOT, resolved);
-  const insideRepo = relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-  if (insideRepo) {
+  if (isInsideDirectory(REPO_ROOT, resolved)) {
     throw new EvalManifestError(`${label}: refusing to write inside the source checkout (${resolved})`);
   }
   return resolved;
+}
+
+function prepareMaterializedDestination(rootDir, relativePath) {
+  const root = path.resolve(rootDir);
+  const destination = path.resolve(root, relativePath);
+  if (!isInsideDirectory(root, destination) || destination === root) {
+    throw new EvalManifestError(`materializeFiles: file path must resolve inside the target root, got "${relativePath}"`);
+  }
+
+  const parent = path.dirname(destination);
+  mkdirSync(parent, { recursive: true });
+
+  const realRoot = realpathSync(root);
+  const realParent = realpathSync(parent);
+  if (!isInsideDirectory(realRoot, realParent)) {
+    throw new EvalManifestError(`materializeFiles: file path must resolve inside the target root, got "${relativePath}"`);
+  }
+  if (existsSync(destination)) {
+    const realDestination = realpathSync(destination);
+    if (!isInsideDirectory(realRoot, realDestination) || realDestination === realRoot) {
+      throw new EvalManifestError(`materializeFiles: file path must resolve inside the target root, got "${relativePath}"`);
+    }
+  }
+
+  return destination;
 }
 
 function requirePositiveInteger(value, label, fallback) {
@@ -206,10 +237,9 @@ export function loadManifest(manifestPath) {
   return normalizeManifest(parsed, resolved);
 }
 
-function materializeFiles(rootDir, files) {
-  for (const [relativePath, contents] of Object.entries(files)) {
-    const destination = path.join(rootDir, relativePath);
-    mkdirSync(path.dirname(destination), { recursive: true });
+export function materializeFiles(rootDir, files) {
+  for (const [relativePath, contents] of Object.entries(files ?? {})) {
+    const destination = prepareMaterializedDestination(rootDir, relativePath);
     writeFileSync(destination, contents);
   }
 }
@@ -536,6 +566,11 @@ function selfTest() {
     raw.tasks[0].fixture = { files: { '../escape.txt': 'no' } };
     normalizeManifest(raw, 'escaping-fixture');
   });
+  expectManifestError('a fixture path that names only the workspace root', () => {
+    const raw = clone();
+    raw.tasks[0].fixture = { files: { './': 'no' } };
+    normalizeManifest(raw, 'root-fixture');
+  });
   expectManifestError('an absolute fixture path', () => {
     const raw = clone();
     raw.tasks[0].fixture = { files: { '/etc/passwd': 'no' } };
@@ -561,6 +596,29 @@ function selfTest() {
 
   const manifest = normalizeManifest(base, 'self-test');
   check('the self-test manifest normalizes', manifest.tasks.length === base.tasks.length);
+
+  expectManifestError('a runtime fixture path that resolves outside its root', () => {
+    const task = { ...manifest.tasks[0], fixtureFiles: { '../escape.txt': 'no' } };
+    const runRoot = createRunRoot();
+    try {
+      runTask(task, { runRoot, runId: 'runtime-containment-check' });
+    } finally {
+      rmSync(runRoot, { recursive: true, force: true });
+    }
+  });
+  expectManifestError('a runtime fixture path that resolves through a symlink outside its root', () => {
+    const runRoot = createRunRoot();
+    const root = path.join(runRoot, 'root');
+    const outside = path.join(runRoot, 'outside');
+    try {
+      mkdirSync(root, { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      symlinkSync(outside, path.join(root, 'link'), 'dir');
+      materializeFiles(root, { 'link/escape.txt': 'no' });
+    } finally {
+      rmSync(runRoot, { recursive: true, force: true });
+    }
+  });
 
   const checkoutBefore = gitSnapshot();
   const runRoot = createRunRoot();

@@ -13,6 +13,7 @@ import {
   RESULT_SCHEMA_VERSION,
   assertOutsideRepoCheckout,
   loadManifest,
+  materializeFiles as materializeRunnerFiles,
   normalizeManifest,
 } from './e2e-eval-runner.mjs';
 
@@ -36,13 +37,7 @@ export function truncate(text) {
   return `${value.slice(0, MAX_CAPTURED_OUTPUT)}\n[truncated ${value.length - MAX_CAPTURED_OUTPUT} bytes]`;
 }
 
-export function materializeFiles(rootDir, files) {
-  for (const [relativePath, contents] of Object.entries(files ?? {})) {
-    const destination = path.join(rootDir, relativePath);
-    mkdirSync(path.dirname(destination), { recursive: true });
-    writeFileSync(destination, contents);
-  }
-}
+export const materializeFiles = materializeRunnerFiles;
 
 export function runCommandSync(spec, { cwd, env, timeoutMs }) {
   const startedAt = Date.now();
