@@ -64,9 +64,9 @@ tasks:
 YAML
 
 set +e
-bash "$ROOT/corpus/skills/plan-to-invoker/scripts/check-planning-completeness.sh" "$miss"
+bash "$ROOT/skills/plan-to-invoker/scripts/check-planning-completeness.sh" "$miss"
 miss_ec=$?
-bash "$ROOT/corpus/skills/plan-to-invoker/scripts/check-planning-completeness.sh" "$ok"
+bash "$ROOT/skills/plan-to-invoker/scripts/check-planning-completeness.sh" "$ok"
 ok_ec=$?
 set -e
 
