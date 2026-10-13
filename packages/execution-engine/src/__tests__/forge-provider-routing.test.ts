@@ -174,4 +174,63 @@ describe('forge provider routing', () => {
       execution: expect.objectContaining({ reviewStatus: 'gitlab pending review' }),
     }));
   });
+
+  it('polls through the provider recorded on the review artifact before the workflow URL', async () => {
+    const github = createProvider('github');
+    const gitlab = createProvider('gitlab');
+    const registry = createRegistry(github, gitlab);
+    const reviewGate = {
+      activeGeneration: 2,
+      completion: { required: 'all' as const, status: 'approved' as const },
+      artifacts: [{
+        id: 'gitlab-review',
+        provider: 'gitlab',
+        providerId: 'group/project!7',
+        required: true,
+        status: 'open' as const,
+        generation: 2,
+      }],
+    };
+    const task = makeTask({
+      id: 'merge-gitlab',
+      status: 'review_ready',
+      config: { isMergeNode: true, workflowId: 'wf-gitlab' },
+      execution: {
+        generation: 2,
+        selectedAttemptId: 'attempt-1',
+        workspacePath: '/repo/worktree',
+        reviewGate,
+      },
+    });
+    const persistence = {
+      loadWorkflow: vi.fn().mockReturnValue({
+        id: 'wf-gitlab',
+        repoUrl: 'https://github.com/group/project',
+      }),
+      updateTask: vi.fn(),
+    };
+
+    await checkMergeGateStatuses({
+      orchestrator: {
+        getAllTasks: () => [task],
+        getTask: (id: string) => (id === task.id ? task : undefined),
+        recordTaskHeartbeat: vi.fn(),
+        approve: vi.fn(),
+      } as any,
+      persistence: persistence as any,
+      cwd: '/repo',
+      logger: createLogger(),
+      mergeGateProvider: github,
+      reviewProviderRegistry: registry,
+      executeTasks: vi.fn(),
+      reviewGateCiFailureInFlight: new Set(),
+      reviewGateMergeConflictInFlight: new Set(),
+    });
+
+    expect(gitlab.checkApproval).toHaveBeenCalledWith({
+      identifier: 'group/project!7',
+      cwd: '/repo/worktree',
+    });
+    expect(github.checkApproval).not.toHaveBeenCalled();
+  });
 });
