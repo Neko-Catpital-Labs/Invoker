@@ -122,6 +122,11 @@ function gitlabHostsFromEnv(): Set<string> {
   return hosts;
 }
 
+function hostWithoutPort(host: string): string {
+  if (host.startsWith('[')) return host.replace(/\]:\d+$/, ']');
+  return host.replace(/:\d+$/, '');
+}
+
 function parseScpOrUrl(raw: string): { host: string; pathname: string } | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
@@ -240,7 +245,10 @@ export function parseForgeProject(url: string): ForgeProject | undefined {
   }
 
   const gitlabHosts = gitlabHostsFromEnv();
-  if (gitlabHosts.has(parts.host)) {
+  if (
+    gitlabHosts.has(parts.host) ||
+    gitlabHosts.has(hostWithoutPort(parts.host))
+  ) {
     return parseGitLabProject(parts.host, parts.pathname);
   }
 
