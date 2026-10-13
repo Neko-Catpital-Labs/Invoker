@@ -44,11 +44,76 @@ const MANUAL_ONLY_SPECS = new Set([
   'drift/drift-battery.spec.ts',
 ]);
 
-function shardFiles(job) {
+function splitFiles(value) {
+  return String(value ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+function shardSplit(shard) {
+  const hasIndex = shard?.shard_index != null && String(shard.shard_index).trim() !== '';
+  const hasTotal = shard?.shard_total != null && String(shard.shard_total).trim() !== '';
+  if (!hasIndex && !hasTotal) return null;
+  const index = Number(shard.shard_index);
+  const total = Number(shard.shard_total);
+  if (!Number.isInteger(index) || !Number.isInteger(total) || index < 1 || total < 1 || index > total) {
+    return { invalid: true, rawIndex: shard.shard_index, rawTotal: shard.shard_total };
+  }
+  return { index, total };
+}
+
+function shardFileRefs(job) {
   if (!job?.strategy?.matrix?.include) return [];
-  return job.strategy.matrix.include.flatMap((shard) =>
-    String(shard.files ?? '').trim().split(/\s+/).filter(Boolean),
-  );
+  return job.strategy.matrix.include.flatMap((shard) => {
+    const split = shardSplit(shard);
+    return splitFiles(shard.files).map((file) => ({
+      file,
+      shardName: String(shard.name ?? ''),
+      split,
+    }));
+  });
+}
+
+function splitCompletenessErrors(refs) {
+  const errors = [];
+  const refsByFile = new Map();
+  for (const ref of refs) {
+    const group = refsByFile.get(ref.file) ?? [];
+    group.push(ref);
+    refsByFile.set(ref.file, group);
+  }
+
+  for (const [file, fileRefs] of refsByFile) {
+    const splitRefs = fileRefs.filter((ref) => ref.split);
+    if (splitRefs.length === 0) continue;
+    const invalid = splitRefs.filter((ref) => ref.split.invalid);
+    if (invalid.length) {
+      errors.push(`${file} has invalid shard split metadata in ${invalid.map((ref) => ref.shardName).join(', ')}`);
+      continue;
+    }
+    if (splitRefs.length !== fileRefs.length) {
+      errors.push(`${file} mixes sharded and unsharded matrix entries`);
+      continue;
+    }
+    const totals = new Set(splitRefs.map((ref) => ref.split.total));
+    if (totals.size !== 1) {
+      errors.push(`${file} mixes shard totals: ${[...totals].join(', ')}`);
+      continue;
+    }
+    const total = splitRefs[0].split.total;
+    const indexes = new Set(splitRefs.map((ref) => ref.split.index));
+    const expected = Array.from({ length: total }, (_value, index) => index + 1);
+    const missing = expected.filter((index) => !indexes.has(index));
+    const duplicateIndexes = [...new Set(
+      splitRefs
+        .map((ref) => ref.split.index)
+        .filter((index, position, values) => values.indexOf(index) !== position),
+    )];
+    if (missing.length || duplicateIndexes.length) {
+      errors.push(
+        `${file} shard split must cover 1..${total}; missing=${missing.join(',') || 'none'} duplicate=${duplicateIndexes.join(',') || 'none'}`,
+      );
+    }
+  }
+  return errors;
 }
 
 function discoverSpecFiles(e2eDir) {
@@ -87,10 +152,11 @@ function unsafePlaywrightArtifactUploadPaths(workflow) {
 
 function checkInventory({ workflowPath, e2eDir, manualOnlySpecs }) {
   const workflow = YAML.parse(readFileSync(workflowPath, 'utf8'));
-  const listed = [
-    ...shardFiles(workflow.jobs?.playwright),
-    ...shardFiles(workflow.jobs?.['playwright-nightly-perf']),
+  const listedRefs = [
+    ...shardFileRefs(workflow.jobs?.playwright),
+    ...shardFileRefs(workflow.jobs?.['playwright-nightly-perf']),
   ];
+  const listed = [...new Set(listedRefs.map((ref) => ref.file))].sort();
   const allDiscovered = discoverSpecFiles(e2eDir);
   const allDiscoveredSet = new Set(allDiscovered);
   const discovered = allDiscovered
@@ -109,7 +175,13 @@ function checkInventory({ workflowPath, e2eDir, manualOnlySpecs }) {
     .map((file) => `e2e/${file}`);
   const missing = discovered.filter((file) => !listedSet.has(file));
   const extra = listed.filter((file) => !discoveredSet.has(file) && !manualListedSet.has(file));
-  const duplicates = [...new Set(listed.filter((file, index) => listed.indexOf(file) !== index))];
+  const splitErrors = splitCompletenessErrors(listedRefs);
+  const unshardedRefs = listedRefs.filter((ref) => !ref.split);
+  const duplicates = [...new Set(
+    unshardedRefs
+      .map((ref) => ref.file)
+      .filter((file, index, files) => files.indexOf(file) !== index),
+  )];
   const gitArtifactPaths = unsafePlaywrightArtifactUploadPaths(workflow);
 
   const ok = !(
@@ -118,6 +190,7 @@ function checkInventory({ workflowPath, e2eDir, manualOnlySpecs }) {
     || missing.length
     || extra.length
     || duplicates.length
+    || splitErrors.length
     || gitArtifactPaths.length
   );
   return {
@@ -127,6 +200,7 @@ function checkInventory({ workflowPath, e2eDir, manualOnlySpecs }) {
     missing,
     extra,
     duplicates,
+    splitErrors,
     gitArtifactPaths,
     discoveredCount: discovered.length,
     manualCount: manualOnlySpecs.size,
@@ -142,6 +216,7 @@ function reportResult(result, label) {
     if (result.missing.length) console.error(`  Missing from shards: ${result.missing.join(', ')}`);
     if (result.extra.length) console.error(`  Extra in shards: ${result.extra.join(', ')}`);
     if (result.duplicates.length) console.error(`  Duplicate shard entries: ${result.duplicates.join(', ')}`);
+    if (result.splitErrors.length) console.error(`  Invalid shard splits: ${result.splitErrors.join('; ')}`);
     if (result.gitArtifactPaths.length) console.error(`  Playwright artifacts must not be uploaded from .git: ${result.gitArtifactPaths.join(', ')}`);
     return;
   }
