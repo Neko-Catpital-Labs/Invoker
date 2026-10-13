@@ -911,12 +911,24 @@ function commandForJob(jobId, job, matrix) {
   if (jobId === 'ui-vitest') return 'pnpm --filter @invoker/ui test';
   if (jobId === 'playwright' || jobId === 'playwright-nightly-perf') {
     const labelPrefix = jobId === 'playwright' ? 'ci-playwright' : 'ci-playwright-nightly-perf';
-    const command = [
+    const envVars = [
       'env',
       `INVOKER_PLAYWRIGHT_RUN_LABEL=${shellSingleQuote(`${labelPrefix}-${matrix.name}`)}`,
       'INVOKER_PLAYWRIGHT_WORKERS=1',
       `INVOKER_PLAYWRIGHT_FILES=${shellSingleQuote(String(matrix.files ?? '').trim().replace(/\s+/g, ' '))}`,
       `INVOKER_PLAYWRIGHT_ARGS=${shellSingleQuote('--reporter=line')}`,
+    ];
+    if (matrix.shard_index != null && matrix.shard_total != null) {
+      envVars.push(
+        `INVOKER_PLAYWRIGHT_SHARD_INDEX=${shellSingleQuote(String(matrix.shard_index))}`,
+        `INVOKER_PLAYWRIGHT_SHARD_TOTAL=${shellSingleQuote(String(matrix.shard_total))}`,
+      );
+    }
+    if (matrix.fully_parallel != null) {
+      envVars.push(`INVOKER_PLAYWRIGHT_FULLY_PARALLEL=${shellSingleQuote(String(matrix.fully_parallel))}`);
+    }
+    const command = [
+      ...envVars,
       'bash scripts/test-suites/optional/40-playwright-app.sh',
     ].join(' ');
     return withBuildPrefix(command, true);
