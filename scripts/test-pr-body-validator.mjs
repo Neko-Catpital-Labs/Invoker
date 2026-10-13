@@ -992,6 +992,28 @@ assert(
   `policy lane with the tooling-policy review unit must accept a .github/-only CI repair, got: ${ciRepairPolicyErrors.join('; ')}`,
 );
 
+const corpusSkillRehomeFiles = [
+  'corpus/skills/admin-bypass-sweep/SKILL.md',
+  'corpus/skills/chat-submit/scripts/check-contract.sh',
+  'corpus/skills/plan-to-invoker/fixtures/positive/01-minimal-verification.yaml',
+  'corpus/skills/verify/references/features/home.md',
+  'packages/shell/src/bundled-skills.ts',
+  'scripts/test-submit-workflow-chain.sh',
+  'scripts/test-suites/required/14-verify-catalog-check.sh',
+];
+const corpusSkillRehomeErrors = await validatePrBody(
+  validMinimal.replace('- behavior', '- policy').replace('- routing', '- tooling-policy'),
+  { changedFiles: corpusSkillRehomeFiles },
+);
+assert(
+  corpusSkillRehomeErrors.length === 0,
+  `policy lane with the tooling-policy review unit must accept the corpus skill rehome, got: ${corpusSkillRehomeErrors.join('; ')}`,
+);
+assert(
+  JSON.stringify(scopeKindsForChangedFiles(corpusSkillRehomeFiles)) === JSON.stringify(['policy']),
+  'corpus skills and the bundled-skill loader classify as policy for PR body scope checks',
+);
+
 const refactorBody = `## Summary
 
 Route code first.

@@ -137,7 +137,9 @@ export function classifyReviewUnitsForPath(filePath) {
   if (/(benchmark|performance)/.test(lowerPath)) return ['proof'];
   if (/visual-proof/.test(lowerPath) && path.includes('/e2e/')) return ['proof'];
   if (
-    path === 'skills/make-pr/SKILL.md'
+    path.startsWith('corpus/skills/')
+    || path === 'packages/shell/src/bundled-skills.ts'
+    || path === 'skills/make-pr/SKILL.md'
     || path.startsWith('skills/chat-submit/')
     || path.startsWith('skills/plan-to-invoker/')
     || path.startsWith('skills/workflow-chain-submit/')

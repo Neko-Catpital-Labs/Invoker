@@ -40,6 +40,12 @@ const stillToolingPolicy = [
   'scripts/create-pr.mjs',
   'scripts/review-unit-rules.mjs',
   '.github/workflows/ci.yml',
+  'corpus/skills/admin-bypass-sweep/SKILL.md',
+  'corpus/skills/chat-submit/SKILL.md',
+  'corpus/skills/chat-submit/scripts/check-contract.sh',
+  'corpus/skills/plan-to-invoker/references/local-vs-remote-mcp.md',
+  'corpus/skills/verify/tests/fires_example.md',
+  'packages/shell/src/bundled-skills.ts',
   'skills/make-pr/SKILL.md',
   'skills/chat-submit/SKILL.md',
   'skills/chat-submit/scripts/check-contract.sh',
@@ -76,6 +82,30 @@ assert.deepEqual(
   validateReviewUnitChangedFiles({ declaredReviewUnit: 'routing', changedFiles: newPackageFiles, context: 'test' }),
   [],
   'a new-package PR may declare its source review unit without colliding with its manifests',
+);
+
+const corpusSkillRehomeFiles = [
+  'corpus/skills/admin-bypass-sweep/SKILL.md',
+  'corpus/skills/chat-submit/scripts/check-contract.sh',
+  'corpus/skills/plan-to-invoker/fixtures/positive/01-minimal-verification.yaml',
+  'corpus/skills/verify/references/features/home.md',
+  'packages/shell/src/bundled-skills.ts',
+  'scripts/test-submit-workflow-chain.sh',
+  'scripts/test-suites/required/14-verify-catalog-check.sh',
+];
+assert.deepEqual(
+  reviewUnitsForChangedFiles(corpusSkillRehomeFiles),
+  ['tooling-policy'],
+  'the corpus skill rehome plus its loader/test path updates is one tooling-policy review unit',
+);
+assert.deepEqual(
+  validateReviewUnitChangedFiles({
+    declaredReviewUnit: 'tooling-policy',
+    changedFiles: corpusSkillRehomeFiles,
+    context: 'test',
+  }),
+  [],
+  'a corpus skill rehome should not be split only because skill docs and helper scripts moved together',
 );
 
 const depBumpFiles = ['package.json', 'pnpm-lock.yaml'];
@@ -135,13 +165,13 @@ const mixedFiles = validateSingleReviewUnitFiles({
 assert.equal(mixedFiles.length, 1, 'files from two review units fail');
 assert.match(mixedFiles[0], /lists files from routing, activation-surface; split into one review unit per task\./);
 
-const lintScript = new URL('../skills/plan-to-invoker/scripts/lint-review-units.mjs', import.meta.url).pathname;
+const lintScript = new URL('../corpus/skills/plan-to-invoker/scripts/lint-review-units.mjs', import.meta.url).pathname;
 function lintPlan(planPath) {
   const result = spawnSync(process.execPath, [lintScript, planPath], { encoding: 'utf8' });
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
-const spanningFixture = new URL('../skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml', import.meta.url).pathname;
+const spanningFixture = new URL('../corpus/skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml', import.meta.url).pathname;
 const spanning = lintPlan(spanningFixture);
 assert.equal(spanning.status, 1, `a task whose Files span review units must fail:\n${spanning.stdout}${spanning.stderr}`);
 assert.match(spanning.stderr, /lists files from .*; split into one review unit per task\./);
