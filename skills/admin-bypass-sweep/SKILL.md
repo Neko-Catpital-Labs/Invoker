@@ -1,5 +1,6 @@
 ---
 name: admin-bypass-sweep
+category: core
 description: >
   MANUAL, HUMAN-ONLY skill. Force-merges every open PR labeled admin-bypass
   directly to master, bypassing Mergify's queue and required checks via
