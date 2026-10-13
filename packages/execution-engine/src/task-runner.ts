@@ -428,9 +428,11 @@ export class TaskRunner {
   }
 
   resolveExecutionAgent(task: Pick<TaskState, 'config'>): string {
+    const taskAgent = task.config.executionAgent?.trim();
+    if (taskAgent && task.config.executionAgentSource !== 'default') return taskAgent;
     const forced = this.getForcedExecutionAgent()?.trim();
     if (forced) return forced;
-    return task.config.executionAgent?.trim() || this.getDefaultExecutionAgent();
+    return taskAgent || this.getDefaultExecutionAgent();
   }
 
   resolveExecutionModel(task: Pick<TaskState, 'config'>): string | undefined {

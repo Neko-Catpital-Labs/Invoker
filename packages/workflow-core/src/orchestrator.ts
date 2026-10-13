@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ExternalGatePolicy, TaskStatus, TaskHeartbeatSource, TaskFreshnessSpec } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ExternalGatePolicy, TaskStatus, TaskHeartbeatSource, TaskFreshnessSpec, ExecutionAgentSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { applyTaskConfigPatch, BUILT_IN_LOCAL_EXECUTION_POOL_ID, createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass, computeWorkflowRollup } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -476,6 +476,7 @@ export interface PlanDefinition {
     dockerImage?: string;
     poolId?: string;
     executionAgent?: string;
+    executionAgentSource?: ExecutionAgentSource;
     executionModel?: string;
     maxTurns?: number;
     priority?: number;
@@ -576,6 +577,7 @@ export interface GraphMutationNodeDef {
   poolId?: string;
   dockerImage?: string;
   executionAgent?: string;
+  executionAgentSource?: ExecutionAgentSource;
   executionModel?: string;
   maxTurns?: number;
   isReconciliation?: boolean;
@@ -599,6 +601,7 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   runnerKind?: RunnerKind;
   executionAgent?: string;
+  executionAgentSource?: ExecutionAgentSource;
   executionModel?: string;
     maxTurns?: number;
 }
@@ -919,12 +922,18 @@ export class Orchestrator {
     }
   }
 
-  private mergeNodeExecutionAgentConfig(workflowTasks: readonly TaskState[]): { executionAgent?: string } {
+  private mergeNodeExecutionAgentConfig(workflowTasks: readonly TaskState[]): { executionAgent?: string; executionAgentSource?: ExecutionAgentSource } {
     const declared = workflowTasks
-      .map((task) => task.config.executionAgent?.trim())
-      .find((agent): agent is string => Boolean(agent));
-    const executionAgent = declared || this.defaultExecutionAgentProvider?.()?.trim();
-    return executionAgent ? { executionAgent } : {};
+      .map((task) => {
+        const agent = task.config.executionAgent?.trim();
+        return agent ? { agent, source: task.config.executionAgentSource } : undefined;
+      })
+      .find((entry): entry is { agent: string; source: ExecutionAgentSource | undefined } => Boolean(entry));
+    if (declared) {
+      return { executionAgent: declared.agent, executionAgentSource: declared.source ?? 'explicit' };
+    }
+    const executionAgent = this.defaultExecutionAgentProvider?.()?.trim();
+    return executionAgent ? { executionAgent, executionAgentSource: 'default' } : {};
   }
 
   /**
@@ -1568,6 +1577,7 @@ export class Orchestrator {
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
         executionAgent: taskDef.executionAgent,
+        executionAgentSource: taskDef.executionAgent ? taskDef.executionAgentSource ?? 'explicit' : undefined,
         executionModel: taskDef.executionModel,
         maxTurns: taskDef.maxTurns,
         priority: taskDef.priority ?? DEFAULT_TASK_PRIORITY,
@@ -3053,6 +3063,9 @@ export class Orchestrator {
         command: rt.command,
         prompt: rt.prompt,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
+        executionAgentSource: rt.executionAgent !== undefined
+          ? rt.executionAgentSource ?? 'explicit'
+          : task.config.executionAgentSource,
         executionModel: rt.executionModel ?? task.config.executionModel,
         maxTurns: rt.maxTurns ?? task.config.maxTurns,
       } as const;
