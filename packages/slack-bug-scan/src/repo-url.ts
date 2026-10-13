@@ -8,7 +8,10 @@ export function extractRepoUrlFromText(text: string | undefined): string | undef
   const match = GIT_URL_PATTERN.exec(text);
   if (!match) return undefined;
   const candidate = match[0];
-  if (parseForgeProject(candidate)) return candidate;
+  const project = parseForgeProject(candidate);
+  if (project && !project.reviewId && !project.jobId && !project.runId && !project.pipelineId) {
+    return candidate;
+  }
   if (/\.git$/i.test(candidate) || /^git@/i.test(candidate)) return candidate;
   return undefined;
 }
