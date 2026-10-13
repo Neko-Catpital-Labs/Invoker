@@ -217,6 +217,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       requiresManualApproval: nodeDef.requiresManualApproval,
       isMergeNode,
       ...(nodeDef.executionAgent ? { executionAgent: nodeDef.executionAgent } : {}),
+      ...(nodeDef.executionAgent ? { executionAgentSource: nodeDef.executionAgentSource ?? 'explicit' } : {}),
       ...(nodeDef.executionModel ? { executionModel: nodeDef.executionModel } : {}),
       ...(nodeDef.maxTurns !== undefined ? { maxTurns: nodeDef.maxTurns } : {}),
     } as const;

@@ -95,6 +95,8 @@ export const SCHEMA_DDL = `
         completed_at TEXT,
         execution_generation INTEGER DEFAULT 0,
         docker_image TEXT,
+        execution_agent TEXT,
+        execution_agent_source TEXT,
         execution_model TEXT,
 
         FOREIGN KEY (workflow_id) REFERENCES workflows(id)
@@ -688,6 +690,7 @@ export const COLUMN_MIGRATIONS = [
   // execution_agent / agent_name: interchangeable agent support
   'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
   'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
+  'ALTER TABLE tasks ADD COLUMN execution_agent_source TEXT',
   'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
   // durable audit pointers for most-recent agent session/name
   'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
