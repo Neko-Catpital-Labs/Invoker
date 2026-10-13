@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { normalizeBranchForGithubCli } from './github-branch-ref.js';
+import { normalizeSafeGitBranchRef } from './github-branch-ref.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import type {
   ForgeFetchFailedJobLogOptions,
@@ -133,12 +133,12 @@ export class GitHubMergeGateProvider implements ForgeProvider {
       formatMergeGatePrLog({ bodyBytes }),
     );
     const remoteNames = await listRemoteNamesForGithubCli(this.exec.bind(this), cwd);
-    const ghBase = normalizeBranchForGithubCli(baseBranch, remoteNames);
-    const ghHead = normalizeBranchForGithubCli(featureBranch, remoteNames);
+    const ghBase = normalizeSafeGitBranchRef(baseBranch, remoteNames);
+    const ghHead = normalizeSafeGitBranchRef(featureBranch, remoteNames);
     const targetRepo = await this.resolveTargetRepo(cwd);
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 
-    await this.pushFeatureBranch(cwd, featureBranch);
+    await this.pushFeatureBranch(cwd, ghHead);
 
     const existing = await this.findExistingOpenPullRequest(cwd, targetRepo, ghHead);
     console.log(
@@ -342,15 +342,17 @@ export class GitHubMergeGateProvider implements ForgeProvider {
   }
 
   private async pushFeatureBranch(cwd: string, featureBranch: string): Promise<void> {
-    const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+    const safeBranch = normalizeSafeGitBranchRef(featureBranch);
+    const pushArgs = ['push', '--force', '--end-of-options', 'origin', `${safeBranch}:refs/heads/${safeBranch}`];
     try {
       await this.exec('git', pushArgs, cwd);
     } catch (err) {
       if (!isGitRefLockRace(err)) throw err;
       await this.exec('git', [
         'fetch',
+        '--end-of-options',
         'origin',
-        `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
+        `+refs/heads/${safeBranch}:refs/remotes/origin/${safeBranch}`,
       ], cwd);
       await this.exec('git', pushArgs, cwd);
     }

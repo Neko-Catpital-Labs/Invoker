@@ -318,7 +318,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.identifier).toBe('42');
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
-        ['push', '--force', 'origin', 'feature/test:refs/heads/feature/test'],
+        ['push', '--force', '--end-of-options', 'origin', 'feature/test:refs/heads/feature/test'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
       expect(spawnMock).toHaveBeenCalledWith(
@@ -428,7 +428,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(pushAttempts).toBe(2);
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
-        ['fetch', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        ['fetch', '--end-of-options', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });
@@ -473,7 +473,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(pushAttempts).toBe(2);
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
-        ['fetch', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        ['fetch', '--end-of-options', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });

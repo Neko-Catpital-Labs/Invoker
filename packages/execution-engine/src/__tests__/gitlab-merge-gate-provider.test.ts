@@ -83,6 +83,30 @@ describe('GitLabMergeGateProvider', () => {
     );
   });
 
+  it('rejects feature branches that would be parsed as git options', async () => {
+    const { spawn } = await import('node:child_process');
+    const spawnMock = vi.mocked(spawn);
+
+    spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'remote') return mockSpawnResult('origin\n', 0);
+      return mockSpawnResult('{}', 0);
+    }) as any);
+
+    await expect(provider.createReview({
+      baseBranch: 'main',
+      featureBranch: '--upload-pack=touch /tmp/invoker-codeql',
+      title: 'Test MR',
+      cwd: '/tmp/repo',
+      body: '## Summary\n\nbody',
+    })).rejects.toThrow('Invalid Git branch');
+
+    expect(spawnMock).not.toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['push']),
+      expect.anything(),
+    );
+  });
+
   it('maps approvals and failed pipelines onto MergeGateApprovalStatus', async () => {
     const { spawn } = await import('node:child_process');
     const spawnMock = vi.mocked(spawn);

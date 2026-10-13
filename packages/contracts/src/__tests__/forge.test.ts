@@ -102,6 +102,15 @@ describe('parseForgeProject', () => {
     ).toBeUndefined();
   });
 
+  it('rejects GitLab URLs with repeated route markers', () => {
+    expect(
+      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/merge_requests/7/-/jobs/42'),
+    ).toBeUndefined();
+    expect(
+      parseForgeProject('https://gitlab.com/Group/Sub/Project/-/jobs/42/-/pipelines/9'),
+    ).toBeUndefined();
+  });
+
   it('accepts INVOKER_GITLAB_HOST self-managed hosts', () => {
     process.env.INVOKER_GITLAB_HOST = 'git.example.com';
     expect(parseForgeProject('https://git.example.com/team/app/-/merge_requests/3')).toEqual({

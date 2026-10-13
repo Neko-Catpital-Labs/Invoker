@@ -15,7 +15,7 @@ import type {
 } from '@invoker/contracts';
 import { parseForgeProject } from '@invoker/contracts';
 
-import { normalizeBranchForGithubCli } from './github-branch-ref.js';
+import { normalizeSafeGitBranchRef } from './github-branch-ref.js';
 import { isGitRefLockRace } from './git-utils.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
@@ -62,11 +62,11 @@ export class GitLabMergeGateProvider implements ForgeProvider {
   }): Promise<MergeGateProviderResult> {
     const { baseBranch, featureBranch, title, cwd, body } = opts;
     const remoteNames = await listRemoteNames(this.exec.bind(this), cwd);
-    const targetBranch = normalizeBranchForGithubCli(baseBranch, remoteNames);
-    const sourceBranch = normalizeBranchForGithubCli(featureBranch, remoteNames);
+    const targetBranch = normalizeSafeGitBranchRef(baseBranch, remoteNames);
+    const sourceBranch = normalizeSafeGitBranchRef(featureBranch, remoteNames);
     const project = await this.resolveTargetProject(cwd);
 
-    await this.pushFeatureBranch(cwd, featureBranch);
+    await this.pushFeatureBranch(cwd, sourceBranch);
 
     const existing = await this.findExistingOpenMergeRequest(cwd, project, sourceBranch);
     if (existing.length > 0) {
@@ -306,15 +306,17 @@ export class GitLabMergeGateProvider implements ForgeProvider {
   }
 
   private async pushFeatureBranch(cwd: string, featureBranch: string): Promise<void> {
-    const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+    const safeBranch = normalizeSafeGitBranchRef(featureBranch);
+    const pushArgs = ['push', '--force', '--end-of-options', 'origin', `${safeBranch}:refs/heads/${safeBranch}`];
     try {
       await this.exec('git', pushArgs, cwd);
     } catch (err) {
       if (!isGitRefLockRace(err)) throw err;
       await this.exec('git', [
         'fetch',
+        '--end-of-options',
         'origin',
-        `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
+        `+refs/heads/${safeBranch}:refs/remotes/origin/${safeBranch}`,
       ], cwd);
       await this.exec('git', pushArgs, cwd);
     }
