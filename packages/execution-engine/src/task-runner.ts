@@ -243,7 +243,6 @@ export interface TaskRunnerConfig {
     executionAgent?: string;
     executionModel?: string;
   };
-  forceExecutionAgentProvider?: () => string | undefined;
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
     imageName?: string;
@@ -304,7 +303,6 @@ export class TaskRunner {
   /** @internal */ getRepoProvisionCommands: () => Record<string, string>;
   /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
-  private getForcedExecutionAgent: () => string | undefined;
   /** @internal */ dockerConfig: { imageName?: string; secretsFile?: string };
   /** @internal */ executionAgentRegistry?: AgentRegistry;
   /** @internal */ logger: Logger;
@@ -421,15 +419,12 @@ export class TaskRunner {
       ...configuredExecutionPools(),
     });
     this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
-    this.getForcedExecutionAgent = config.forceExecutionAgentProvider ?? (() => undefined);
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
     this.logger = config.logger ?? NOOP_LOGGER;
   }
 
   resolveExecutionAgent(task: Pick<TaskState, 'config'>): string {
-    const forced = this.getForcedExecutionAgent()?.trim();
-    if (forced) return forced;
     return task.config.executionAgent?.trim() || this.getDefaultExecutionAgent();
   }
 

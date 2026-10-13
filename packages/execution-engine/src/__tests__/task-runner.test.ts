@@ -206,21 +206,6 @@ describe('TaskRunner', () => {
     });
     await done;
   });
-  it('uses the forced execution agent before task and default agents', async () => {
-    const runner = new TaskRunner({
-      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
-      persistence: { updateTask: vi.fn() } as any,
-      executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
-      executionDefaultsProvider: () => ({ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }),
-      forceExecutionAgentProvider: () => ' claude ',
-      cwd: '/tmp',
-    });
-
-    const task = makeTask({ config: { executionAgent: 'codex' } });
-
-    expect(runner.resolveExecutionAgent(task)).toBe('claude');
-    expect(runner.resolveExecutionModel(task)).toBeUndefined();
-  });
   it('rejects incompatible fix models before spawning the agent', async () => {
     const runner = new TaskRunner({
       orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
