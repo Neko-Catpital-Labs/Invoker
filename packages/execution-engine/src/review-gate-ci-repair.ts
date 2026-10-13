@@ -683,8 +683,10 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: attemptDecision.reason };
   }
 
-  const forcedAgent = options.getForceExecutionAgent?.()?.trim();
-  const configuredAgent = forcedAgent || options.getAutoFixAgent?.()?.trim();
+  const configuredForceAgent = options.getForceExecutionAgent?.()?.trim();
+  const configuredAgent = configuredForceAgent && configuredForceAgent.length > 0
+    ? configuredForceAgent
+    : options.getAutoFixAgent?.()?.trim();
   const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
   options.logger.debug?.(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-attempt-consumed`, {
     module: 'review-gate-ci-repair',
