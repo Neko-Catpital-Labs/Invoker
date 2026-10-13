@@ -270,7 +270,7 @@ function readSolverSummary(workspaceDir) {
       exitCode: null,
       signal: null,
       timedOut: false,
-      spawnError: solverPath ? `missing solver result at ${solverPath}` : 'missing invoker workspace',
+      spawnError: workspaceDir ? `missing solver result at ${solverPath}` : 'missing invoker workspace',
       durationMs: null,
       stdout: '',
       stderr: '',
@@ -421,6 +421,14 @@ function selfTest() {
       ...checkRows(direct.rows, { expectedCondition: DIRECT_CONDITION }),
       ...checkRows(invoker.rows, { expectedCondition: INVOKER_CONDITION }),
     ];
+    const missingWorkspaceSummary = readSolverSummary('');
+    if (missingWorkspaceSummary.spawnError !== 'missing invoker workspace') {
+      failures.push(`empty workspace: expected missing invoker workspace, got ${missingWorkspaceSummary.spawnError}`);
+    }
+    const missingSolverSummary = readSolverSummary(runRoot);
+    if (!missingSolverSummary.spawnError?.startsWith(`missing solver result at ${runRoot}`)) {
+      failures.push(`missing solver result: expected path under ${runRoot}, got ${missingSolverSummary.spawnError}`);
+    }
     const taskIds = new Set(rows.map((row) => row.taskId));
     for (const taskId of taskIds) {
       const taskRows = rows.filter((row) => row.taskId === taskId);
