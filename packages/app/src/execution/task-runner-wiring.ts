@@ -27,6 +27,7 @@ export interface TaskRunnerWiringDeps {
   executionAgentRegistry?: AgentRegistry;
   repoRoot: string;
   invokerConfig: InvokerConfig;
+  forceExecutionAgentProvider?: () => string | undefined;
   logger: Logger;
   taskHandles: TaskHandleMap;
   enqueueTaskOutput: (taskId: string, data: string) => void;
@@ -99,6 +100,7 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     worktreeTargetsProvider: () => loadConfig().worktreeTargets ?? {},
     executionPoolsProvider: () => loadConfig().executionPools ?? {},
     executionDefaultsProvider: () => resolveDefaultTaskExecutionSettings(loadConfig()),
+    forceExecutionAgentProvider: deps.forceExecutionAgentProvider,
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
         publishReviewGateCiFailedLifecycleEvent(trigger, {
