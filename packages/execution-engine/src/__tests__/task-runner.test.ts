@@ -206,6 +206,38 @@ describe('TaskRunner', () => {
     });
     await done;
   });
+
+  it('uses the forced execution agent before task and default agents', () => {
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+      persistence: {} as any,
+      executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
+      executionDefaultsProvider: () => ({ executionAgent: 'codex' }),
+      forceExecutionAgentProvider: () => '  claude  ',
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      config: { executionAgent: 'omp' },
+    });
+
+    expect(runner.resolveExecutionAgent(task)).toBe('claude');
+  });
+
+  it('falls back to task and default agents when the forced execution agent is empty', () => {
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+      persistence: {} as any,
+      executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
+      executionDefaultsProvider: () => ({ executionAgent: 'codex' }),
+      forceExecutionAgentProvider: () => '   ',
+      cwd: '/tmp',
+    });
+
+    expect(runner.resolveExecutionAgent(makeTask({ config: { executionAgent: 'omp' } }))).toBe('omp');
+    expect(runner.resolveExecutionAgent(makeTask())).toBe('codex');
+  });
+
   it('rejects incompatible fix models before spawning the agent', async () => {
     const runner = new TaskRunner({
       orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,

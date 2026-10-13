@@ -10,6 +10,7 @@ import {
 import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
 import {
   ciFailureActionKey,
+  parseReviewGateCiRepairWorkflowMutationArgs,
   queueReviewGateCiRepair,
   SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
 } from '../review-gate-ci-repair.js';
@@ -204,6 +205,34 @@ describe('PR status worker', () => {
         workerRetryBudget: 1,
       }),
     });
+  });
+
+  it('uses the forced execution agent for queued CI repairs', async () => {
+    const event = makeEvent();
+    const harness = makeRepairHarness();
+    const policy = {
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 1,
+      getAutoFixAgent: () => 'codex',
+      getForceExecutionAgent: () => '  claude  ',
+      getAutoFixExecutionModel: () => 'gpt-5-codex',
+    };
+
+    await expect(queueReviewGateCiRepair(policy, event)).resolves.toMatchObject({
+      decision: 'queued',
+      reason: 'queued',
+      intentId: 42,
+    });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    const [, , , args] = harness.submit.mock.calls[0] ?? [];
+    expect(parseReviewGateCiRepairWorkflowMutationArgs(args)).toMatchObject({
+      agentName: 'claude',
+    });
+    expect(parseReviewGateCiRepairWorkflowMutationArgs(args).executionModel).toBeUndefined();
   });
 
   it('does not publish a CI repair intent for pending checks or merge-conflict-only polls', async () => {

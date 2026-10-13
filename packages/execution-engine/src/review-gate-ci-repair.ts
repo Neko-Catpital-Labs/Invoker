@@ -87,6 +87,7 @@ export interface ReviewGateCiRepairPolicyOptions {
   logger: Logger;
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
+  getForceExecutionAgent?: () => string | undefined;
   getAutoFixExecutionModel?: () => string | undefined;
   getAutoFixPoolId?: () => string | undefined;
   attemptLedger: AutoFixAttemptLedger;
@@ -682,8 +683,15 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: attemptDecision.reason };
   }
 
-  const configuredAgent = options.getAutoFixAgent?.()?.trim();
-  const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+  const configuredAutoFixAgent = options.getAutoFixAgent?.()?.trim();
+  const autoFixAgent = configuredAutoFixAgent && configuredAutoFixAgent.length > 0
+    ? configuredAutoFixAgent
+    : undefined;
+  const configuredForceAgent = options.getForceExecutionAgent?.()?.trim();
+  const forceAgent = configuredForceAgent && configuredForceAgent.length > 0
+    ? configuredForceAgent
+    : undefined;
+  const selectedAgent = forceAgent ?? autoFixAgent;
   options.logger.debug?.(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-attempt-consumed`, {
     module: 'review-gate-ci-repair',
     taskId: event.taskId,
@@ -694,7 +702,9 @@ export async function queueReviewGateCiRepair(
     attemptsAfter: attemptDecision.attemptsAfter,
     workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
   });
-  const configuredExecutionModel = options.getAutoFixExecutionModel?.()?.trim();
+  const configuredExecutionModel = (!forceAgent || forceAgent === autoFixAgent)
+    ? options.getAutoFixExecutionModel?.()?.trim()
+    : undefined;
   const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
     ? configuredExecutionModel
     : undefined;
