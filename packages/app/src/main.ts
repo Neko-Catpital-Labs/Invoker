@@ -1398,6 +1398,7 @@ function startHeadlessMode(): void {
             getAutoFixAgent: () => invokerConfig.autoFixAgent,
             getForceExecutionAgent: () => resolveForceExecution(loadConfig())?.executionAgent,
             getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+            executionAgentRegistry: agentRegistry,
             attemptLedger: autoFixAttemptLedger,
           },
         }),

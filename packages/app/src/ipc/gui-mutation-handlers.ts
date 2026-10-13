@@ -916,6 +916,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
               getAutoFixAgent: () => invokerConfig.autoFixAgent,
               getForceExecutionAgent: () => resolveForceExecution(loadConfig())?.executionAgent,
               getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+              executionAgentRegistry: agentRegistry,
               attemptLedger: autoFixAttemptLedger,
             },
           }),

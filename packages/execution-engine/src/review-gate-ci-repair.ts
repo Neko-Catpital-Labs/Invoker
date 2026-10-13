@@ -34,6 +34,8 @@ import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
 } from './lifecycle-events.js';
+import { assertExecutionModelSupported } from './agent.js';
+import type { AgentRegistry } from './agent-registry.js';
 import {
   classifyFailedChecks,
   type FailedCheckLogFetcher,
@@ -90,6 +92,7 @@ export interface ReviewGateCiRepairPolicyOptions {
   getForceExecutionAgent?: () => string | undefined;
   getAutoFixExecutionModel?: () => string | undefined;
   getAutoFixPoolId?: () => string | undefined;
+  executionAgentRegistry?: AgentRegistry;
   attemptLedger: AutoFixAttemptLedger;
   getRetryBudget?: (task: TaskState) => number;
   /** Optional failed-check log fetcher used to skip non-fixable infra failures. */
@@ -663,6 +666,33 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: 'worker-retry-budget-exhausted' };
   }
 
+  const forcedAgent = options.getForceExecutionAgent?.()?.trim();
+  const configuredAgent = forcedAgent || options.getAutoFixAgent?.()?.trim();
+  const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+  const configuredExecutionModel = options.getAutoFixExecutionModel?.()?.trim();
+  const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
+    ? configuredExecutionModel
+    : undefined;
+  if (selectedAgent && executionModel && options.executionAgentRegistry) {
+    try {
+      assertExecutionModelSupported(options.executionAgentRegistry.getOrThrow(selectedAgent), executionModel);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      recordCiFailureAction(options, event, 'failed', 'Failed to queue CI repair workflow', {
+        reason: 'invalid-execution-model',
+        error: errorMessage,
+        workerRetryBudget: retryBudgetLabel(workerRetryBudget),
+      }, undefined, selectedAgent, executionModel);
+      logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+        reason: 'invalid-execution-model',
+        agent: selectedAgent,
+        executionModel,
+        error: errorMessage,
+      });
+      return { decision: 'failed', reason: 'invalid-execution-model' };
+    }
+  }
+
   const attemptLedgerKey = autoFixAttemptLedgerKeyFromLifecycleEvent(event);
   const attemptDecision = options.attemptLedger.consume(
     attemptLedgerKey,
@@ -683,9 +713,6 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: attemptDecision.reason };
   }
 
-  const forcedAgent = options.getForceExecutionAgent?.()?.trim();
-  const configuredAgent = forcedAgent || options.getAutoFixAgent?.()?.trim();
-  const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
   options.logger.debug?.(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-attempt-consumed`, {
     module: 'review-gate-ci-repair',
     taskId: event.taskId,
@@ -696,10 +723,6 @@ export async function queueReviewGateCiRepair(
     attemptsAfter: attemptDecision.attemptsAfter,
     workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
   });
-  const configuredExecutionModel = options.getAutoFixExecutionModel?.()?.trim();
-  const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
-    ? configuredExecutionModel
-    : undefined;
   const configuredPoolId = options.getAutoFixPoolId?.()?.trim();
   const poolId = configuredPoolId && configuredPoolId.length > 0 ? configuredPoolId : undefined;
   const singlePrPayload: ReviewGateCiRepairWorkflowMutationArgs = {

@@ -18,6 +18,7 @@ import {
   DEFAULT_PR_STATUS_WORKER_INTERVAL_MS,
   createPrStatusWorker,
 } from '../workers/pr-status-worker.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 const logger = {
   info: vi.fn(),
@@ -27,6 +28,13 @@ const logger = {
   trace: vi.fn(),
   child: vi.fn(),
 };
+
+function fakeCodexProbeRunner() {
+  return {
+    status: 0,
+    stdout: JSON.stringify({ models: [{ slug: 'gpt-5-codex', display_name: 'GPT-5 Codex' }] }),
+  };
+}
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
@@ -202,6 +210,37 @@ describe('PR status worker', () => {
       payload: expect.objectContaining({
         channel: SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
         workerRetryBudget: 1,
+      }),
+    });
+  });
+
+  it('rejects an auto-fix model that is incompatible with the forced repair agent', async () => {
+    const event = makeEvent();
+    const harness = makeRepairHarness();
+    const policy = {
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 1,
+      getForceExecutionAgent: () => 'claude',
+      getAutoFixExecutionModel: () => 'gpt-5-codex',
+      executionAgentRegistry: registerBuiltinAgents({ codex: { probeRunner: fakeCodexProbeRunner } }),
+    };
+    const actionKey = `ci-failure:${ciFailureActionKey(event)}`;
+
+    await expect(queueReviewGateCiRepair(policy, event)).resolves.toMatchObject({
+      decision: 'failed',
+      reason: 'invalid-execution-model',
+    });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.attemptLedger.get(autoFixAttemptLedgerKeyFromLifecycleEvent(event))).toBe(0);
+    expect(harness.actions.get(actionKey)).toMatchObject({
+      status: 'failed',
+      payload: expect.objectContaining({
+        reason: 'invalid-execution-model',
+        error: expect.stringContaining('Execution model "gpt-5-codex" is not supported for execution agent "claude".'),
       }),
     });
   });

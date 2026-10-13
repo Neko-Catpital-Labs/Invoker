@@ -220,6 +220,29 @@ describe('TaskRunner', () => {
     );
   });
 
+  it('rejects a task model that is incompatible with the forced execution agent', () => {
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
+      executionAgentRegistry: registerBuiltinAgents({ codex: { probeRunner: fakeCodexProbeRunner } }),
+      executionDefaultsProvider: () => ({ executionAgent: 'codex' }),
+      forceExecutionAgentProvider: () => 'claude',
+      cwd: '/tmp',
+    });
+
+    expect(() => runner.resolveExecutionModel(makeTask({
+      config: {
+        workflowId: 'wf-1',
+        prompt: 'Do the thing',
+        executionAgent: 'codex',
+        executionModel: 'gpt-5-codex',
+      },
+    }))).toThrow(
+      'Execution model "gpt-5-codex" is not supported for execution agent "claude".',
+    );
+  });
+
   it('sends attemptId and executionGeneration in work requests and preserves them in responses', async () => {
     const handleWorkerResponse = vi.fn();
     let seenRequest: any;

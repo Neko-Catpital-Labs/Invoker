@@ -47,7 +47,7 @@ import {
   resolveRemoteBranchOwnerPath,
   resolveSelectedRemoteTargetId,
 } from './conflict-resolver.js';
-import { DEFAULT_EXECUTION_AGENT } from './agent.js';
+import { DEFAULT_EXECUTION_AGENT, assertExecutionModelSupported } from './agent.js';
 import {
   buildValidatedFallbackPrBody,
   isInvokerRepoUrl,
@@ -433,14 +433,25 @@ export class TaskRunner {
     return task.config.executionAgent?.trim() || this.getDefaultExecutionAgent();
   }
 
+  private assertExecutionModelSupportedForAgent(agentName: string, executionModel: string): void {
+    if (!this.executionAgentRegistry) return;
+    assertExecutionModelSupported(this.executionAgentRegistry.getOrThrow(agentName), executionModel);
+  }
+
   resolveExecutionModel(task: Pick<TaskState, 'config'>): string | undefined {
+    const effectiveAgent = this.resolveExecutionAgent(task);
     const explicitModel = task.config.executionModel?.trim();
-    if (explicitModel) return explicitModel;
+    if (explicitModel) {
+      this.assertExecutionModelSupportedForAgent(effectiveAgent, explicitModel);
+      return explicitModel;
+    }
     const defaults = this.getExecutionDefaults();
     const defaultAgent = this.getDefaultExecutionAgent();
     const defaultModel = defaults.executionModel?.trim();
     if (!defaultModel) return undefined;
-    return this.resolveExecutionAgent(task) === defaultAgent ? defaultModel : undefined;
+    if (effectiveAgent !== defaultAgent) return undefined;
+    this.assertExecutionModelSupportedForAgent(effectiveAgent, defaultModel);
+    return defaultModel;
   }
 
   /**

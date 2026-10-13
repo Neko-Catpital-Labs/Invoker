@@ -1057,7 +1057,7 @@ tasks:
     expect(plan.tasks[2].executionAgent).toBe('claude');
   });
 
-  it('applies forceExecution.executionAgent to command and prompt tasks, over a pinned agent', () => {
+  it('preserves configured executionAgent pins when forceExecution.executionAgent is configured', () => {
     writeFileSync(isolatedConfigPath, JSON.stringify({
       defaultBranch: 'main',
       defaultExecutionAgent: 'codex',
@@ -1079,7 +1079,7 @@ tasks:
     executionAgent: codex
 `;
     const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
-    expect(plan.tasks.map((task) => task.executionAgent)).toEqual(['claude', 'claude', 'claude']);
+    expect(plan.tasks.map((task) => task.executionAgent)).toEqual([undefined, 'codex', 'codex']);
   });
 
   it('keeps a pinned executionAgent when forceExecution.executionAgent is absent', () => {
