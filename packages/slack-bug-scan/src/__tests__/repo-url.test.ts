@@ -15,6 +15,14 @@ describe('slack-bug-scan repo url extraction', () => {
       .toBe('https://gitlab.com/Group/Sub/Project');
   });
 
+  it('rejects forge page urls when extracting a repository url', () => {
+    expect(extractRepoUrlFromText('review: https://github.com/acme/widgets/pull/12')).toBeUndefined();
+    expect(extractRepoUrlFromText('run: https://github.com/acme/widgets/actions/runs/34')).toBeUndefined();
+    expect(extractRepoUrlFromText('mr: https://gitlab.com/Group/Sub/Project/-/merge_requests/56')).toBeUndefined();
+    expect(extractRepoUrlFromText('job: https://gitlab.com/Group/Sub/Project/-/jobs/78')).toBeUndefined();
+    expect(extractRepoUrlFromText('pipeline: https://gitlab.com/Group/Sub/Project/-/pipelines/90')).toBeUndefined();
+  });
+
   it('returns undefined when no url is present', () => {
     expect(extractRepoUrlFromText('just a random channel about snacks')).toBeUndefined();
     expect(extractRepoUrlFromText(undefined)).toBeUndefined();
