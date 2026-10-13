@@ -108,7 +108,25 @@ const GITHUB_HOST = 'github.com';
 const DEFAULT_GITLAB_HOST = 'gitlab.com';
 
 function stripGitSuffix(path: string): string {
-  return path.replace(/\/+$/g, '').replace(/\.git$/i, '');
+  let end = path.length;
+  while (end > 0 && path[end - 1] === '/') end -= 1;
+  const withoutTrailingSlashes = path.slice(0, end);
+  return withoutTrailingSlashes.toLowerCase().endsWith('.git')
+    ? withoutTrailingSlashes.slice(0, -4)
+    : withoutTrailingSlashes;
+}
+
+function stripLeadingSlashes(path: string): string {
+  let start = 0;
+  while (start < path.length && path[start] === '/') start += 1;
+  return path.slice(start);
+}
+
+function stripHttpProtocol(value: string): string {
+  const lower = value.toLowerCase();
+  if (lower.startsWith('https://')) return value.slice('https://'.length);
+  if (lower.startsWith('http://')) return value.slice('http://'.length);
+  return value;
 }
 
 function gitlabHostsFromEnv(): Set<string> {
@@ -116,35 +134,38 @@ function gitlabHostsFromEnv(): Set<string> {
   const raw = process.env.INVOKER_GITLAB_HOST?.trim();
   if (!raw) return hosts;
   for (const part of raw.split(',')) {
-    const host = part.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const host = stripGitSuffix(stripHttpProtocol(part.trim())).toLowerCase();
     if (host) hosts.add(host);
   }
   return hosts;
 }
 
 function hostWithoutPort(host: string): string {
-  return host.replace(/:\d+$/, '');
+  const portSeparator = host.lastIndexOf(':');
+  if (portSeparator < 0) return host;
+  const maybePort = host.slice(portSeparator + 1);
+  return isDecimalId(maybePort) ? host.slice(0, portSeparator) : host;
 }
 
 function parseScpOrUrl(raw: string): { host: string; pathname: string } | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
 
-  const scpLike = /^git@([^:]+):(.+)$/i.exec(trimmed);
-  if (scpLike) {
-    return { host: scpLike[1].toLowerCase(), pathname: scpLike[2] };
-  }
-
-  const sshUrl = /^ssh:\/\/(?:git@)?([^/]+)\/(.+)$/i.exec(trimmed);
-  if (sshUrl) {
-    return { host: sshUrl[1].toLowerCase(), pathname: sshUrl[2] };
+  const scpPrefix = 'git@';
+  if (trimmed.toLowerCase().startsWith(scpPrefix)) {
+    const rest = trimmed.slice(scpPrefix.length);
+    const separator = rest.indexOf(':');
+    if (separator > 0 && separator < rest.length - 1) {
+      return { host: rest.slice(0, separator).toLowerCase(), pathname: rest.slice(separator + 1) };
+    }
+    return undefined;
   }
 
   try {
     const parsed = new URL(trimmed);
     if (!parsed.host || !['http:', 'https:', 'ssh:'].includes(parsed.protocol)) return undefined;
     if (parsed.search || parsed.hash) return undefined;
-    const pathname = parsed.pathname.replace(/^\/+/, '');
+    const pathname = stripLeadingSlashes(parsed.pathname);
     if (!pathname) return undefined;
     return { host: parsed.host.toLowerCase(), pathname };
   } catch {
@@ -153,80 +174,93 @@ function parseScpOrUrl(raw: string): { host: string; pathname: string } | undefi
 }
 
 function parseGitHubProject(host: string, pathname: string): ForgeProject | undefined {
-  const pullMatch = /^([^/]+)\/([^/]+?)(?:\.git)?\/pull\/(\d+)(?:\/.*)?$/i.exec(pathname);
-  if (pullMatch) {
+  const segments = stripGitSuffix(pathname).split('/').filter(Boolean);
+  const owner = segments[0];
+  const repo = segments[1] ? stripGitSuffix(segments[1]) : undefined;
+  if (!owner || !repo) return undefined;
+
+  if (segments[2] === 'pull' && isDecimalId(segments[3] ?? '')) {
     return {
       kind: 'github',
       host,
-      projectPath: `${pullMatch[1]}/${pullMatch[2]}`.toLowerCase(),
-      reviewId: pullMatch[3],
+      projectPath: `${owner}/${repo}`.toLowerCase(),
+      reviewId: segments[3],
     };
   }
 
-  const actionsMatch =
-    /^([^/]+)\/([^/]+?)(?:\.git)?\/actions\/runs\/(\d+)(?:\/(?:attempts\/\d+\/)?jobs?\/(\d+))?/i.exec(
-      pathname,
-    );
-  if (actionsMatch) {
+  if (segments[2] === 'actions' && segments[3] === 'runs' && isDecimalId(segments[4] ?? '')) {
+    const jobId = githubActionsJobId(segments.slice(5));
     return {
       kind: 'github',
       host,
-      projectPath: `${actionsMatch[1]}/${actionsMatch[2]}`.toLowerCase(),
-      runId: actionsMatch[3],
-      ...(actionsMatch[4] ? { jobId: actionsMatch[4] } : {}),
+      projectPath: `${owner}/${repo}`.toLowerCase(),
+      runId: segments[4],
+      ...(jobId ? { jobId } : {}),
     };
   }
 
-  const repoMatch = /^([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(pathname);
-  if (repoMatch) {
+  if (segments.length === 2) {
     return {
       kind: 'github',
       host,
-      projectPath: `${repoMatch[1]}/${repoMatch[2]}`.toLowerCase(),
+      projectPath: `${owner}/${repo}`.toLowerCase(),
     };
   }
 
   return undefined;
 }
 
+function githubActionsJobId(segments: string[]): string | undefined {
+  if (segments[0] === 'job' || segments[0] === 'jobs') {
+    return isDecimalId(segments[1] ?? '') ? segments[1] : undefined;
+  }
+  if (segments[0] === 'attempts' && isDecimalId(segments[1] ?? '')) {
+    const label = segments[2];
+    if (label === 'job' || label === 'jobs') {
+      return isDecimalId(segments[3] ?? '') ? segments[3] : undefined;
+    }
+  }
+  return undefined;
+}
+
 function parseGitLabProject(host: string, pathname: string): ForgeProject | undefined {
-  const mrMatch = /^(.+?)\/-\/merge_requests\/(\d+)(?:\/.*)?$/i.exec(pathname);
-  if (mrMatch) {
-    const projectPath = stripGitSuffix(mrMatch[1]);
+  const trimmedPath = stripGitSuffix(pathname);
+  const segments = trimmedPath.split('/');
+  const sentinelIndex = segments.indexOf('-');
+  if (sentinelIndex >= 0) {
+    const projectPath = stripGitSuffix(segments.slice(0, sentinelIndex).join('/'));
     if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
-    return {
-      kind: 'gitlab',
-      host,
-      projectPath,
-      reviewId: mrMatch[2],
-    };
+
+    const kind = segments[sentinelIndex + 1];
+    const id = segments[sentinelIndex + 2];
+    if (!id || !isDecimalId(id)) return undefined;
+    if (kind === 'merge_requests') {
+      return {
+        kind: 'gitlab',
+        host,
+        projectPath,
+        reviewId: id,
+      };
+    }
+    if (kind === 'jobs') {
+      return {
+        kind: 'gitlab',
+        host,
+        projectPath,
+        jobId: id,
+      };
+    }
+    if (kind === 'pipelines') {
+      return {
+        kind: 'gitlab',
+        host,
+        projectPath,
+        pipelineId: id,
+      };
+    }
+    return undefined;
   }
 
-  const jobMatch = /^(.+?)\/-\/jobs\/(\d+)(?:\/.*)?$/i.exec(pathname);
-  if (jobMatch) {
-    const projectPath = stripGitSuffix(jobMatch[1]);
-    if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
-    return {
-      kind: 'gitlab',
-      host,
-      projectPath,
-      jobId: jobMatch[2],
-    };
-  }
-
-  const pipelineMatch = /^(.+?)\/-\/pipelines\/(\d+)(?:\/.*)?$/i.exec(pathname);
-  if (pipelineMatch) {
-    const projectPath = stripGitSuffix(pipelineMatch[1]);
-    if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
-    return {
-      kind: 'gitlab',
-      host,
-      projectPath,
-      pipelineId: pipelineMatch[2],
-    };
-  }
-
-  if (/(^|\/)-(\/|$)/.test(pathname)) return undefined;
   const projectPath = stripGitSuffix(pathname);
   if (projectPath.split('/').filter(Boolean).length < 2) return undefined;
   return {
@@ -234,6 +268,14 @@ function parseGitLabProject(host: string, pathname: string): ForgeProject | unde
     host,
     projectPath,
   };
+}
+
+function isDecimalId(value: string): boolean {
+  if (!value) return false;
+  for (const char of value) {
+    if (char < '0' || char > '9') return false;
+  }
+  return true;
 }
 
 export function parseForgeProject(url: string): ForgeProject | undefined {

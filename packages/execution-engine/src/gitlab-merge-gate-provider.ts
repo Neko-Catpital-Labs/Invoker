@@ -314,7 +314,7 @@ export class GitLabMergeGateProvider implements ForgeProvider {
       await this.exec('git', [
         'fetch',
         'origin',
-        `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
+        '+refs/heads/*:refs/remotes/origin/*',
       ], cwd);
       await this.exec('git', pushArgs, cwd);
     }

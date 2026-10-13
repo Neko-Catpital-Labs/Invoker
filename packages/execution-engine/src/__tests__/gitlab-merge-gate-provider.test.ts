@@ -127,4 +127,50 @@ describe('GitLabMergeGateProvider', () => {
     expect(status.checks?.state).toBe('failure');
     expect(status.checks?.failed[0]?.detailsUrl).toContain('/-/jobs/42');
   });
+
+  it('refreshes branch refs without interpolating the feature branch into git fetch', async () => {
+    const { spawn } = await import('node:child_process');
+    const spawnMock = vi.mocked(spawn);
+    let pushAttempts = 0;
+
+    spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'remote') return mockSpawnResult('origin\n', 0);
+      if (cmd === 'git' && args[0] === 'push') {
+        pushAttempts += 1;
+        if (pushAttempts === 1) {
+          return mockSpawnResult(
+            '',
+            1,
+            "remote rejected: cannot lock ref 'refs/heads/feature/test': is at 1111111 but expected 2222222",
+          );
+        }
+        return mockSpawnResult('', 0);
+      }
+      if (cmd === 'git' && args[0] === 'fetch') return mockSpawnResult('', 0);
+      if (cmd === 'glab' && args.some((arg) => String(arg).includes('state=opened'))) {
+        return mockSpawnResult('[]', 0);
+      }
+      if (cmd === 'glab' && args.includes('--method') && args.includes('POST')) {
+        return mockSpawnResult(JSON.stringify({
+          web_url: 'https://gitlab.com/Group/Sub/Project/-/merge_requests/3',
+          iid: 3,
+        }), 0);
+      }
+      return mockSpawnResult('{}', 0);
+    }) as any);
+
+    await provider.createReview({
+      baseBranch: 'master',
+      featureBranch: 'feature/test',
+      title: 'Test MR',
+      cwd: '/tmp/repo',
+      body: '## Summary\n\nbody',
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      ['fetch', 'origin', '+refs/heads/*:refs/remotes/origin/*'],
+      expect.objectContaining({ cwd: '/tmp/repo' }),
+    );
+  });
 });

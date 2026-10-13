@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -127,6 +131,16 @@ describe('parseForgeProject', () => {
 
   it('rejects a GitHub path that is not owner/repo', () => {
     expect(parseForgeProject('https://github.com/acme/widgets/issues/1')).toBeUndefined();
+  });
+
+  it('keeps GitLab special path parsing out of nested wildcard regular expressions', () => {
+    const sourcePath = resolve(dirname(fileURLToPath(import.meta.url)), '../forge.ts');
+    const source = readFileSync(sourcePath, 'utf8');
+
+    expect(source).not.toContain('^(.+?)\\/-\\/merge_requests');
+    expect(source).not.toContain('^(.+?)\\/-\\/jobs');
+    expect(source).not.toContain('^(.+?)\\/-\\/pipelines');
+    expect(source).not.toContain('(^|\\/)');
   });
 });
 
