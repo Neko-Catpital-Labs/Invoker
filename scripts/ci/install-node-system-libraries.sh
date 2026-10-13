@@ -11,6 +11,30 @@ set -euo pipefail
 probe_soname="${CI_INSTALL_PROBE_SONAME:-}"
 fallback_package="${CI_INSTALL_FALLBACK_PACKAGE:-}"
 IFS=' ' read -r -a probe_commands <<< "${CI_INSTALL_PROBE_COMMANDS:-}"
+apt_lock_retries="${CI_INSTALL_APT_RETRIES:-6}"
+apt_lock_retry_delay_seconds="${CI_INSTALL_APT_RETRY_DELAY_SECONDS:-10}"
+
+apt_get_with_lock_retry() {
+  local attempt=1
+  local status=0
+  local stderr_file
+  stderr_file="$(mktemp "${RUNNER_TEMP:-/tmp}/apt-get-stderr.XXXXXX")"
+  while true; do
+    : > "$stderr_file"
+    if "$@" 2> >(tee "$stderr_file" >&2); then
+      rm -f "$stderr_file"
+      return 0
+    fi
+    status=$?
+    if [ "$attempt" -ge "$apt_lock_retries" ] || ! grep -Eq 'Could not get lock|Unable to acquire the dpkg frontend lock|Could not open lock file' "$stderr_file"; then
+      rm -f "$stderr_file"
+      return "$status"
+    fi
+    echo "::warning::apt-get lock is busy; retrying in ${apt_lock_retry_delay_seconds}s (${attempt}/${apt_lock_retries})."
+    sleep "$apt_lock_retry_delay_seconds"
+    attempt=$((attempt + 1))
+  done
+}
 
 has_library() {
   if [ -z "$probe_soname" ]; then
@@ -40,16 +64,16 @@ if [ -n "${CI_INSTALL_NO_APT_ERROR:-}" ] && ! command -v apt-get >/dev/null 2>&1
 fi
 
 if [ "$(id -u)" -eq 0 ]; then
-  apt-get update
+  apt_get_with_lock_retry apt-get update
   # shellcheck disable=SC2086
-  apt-get install -y $CI_INSTALL_PACKAGES
+  apt_get_with_lock_retry apt-get install -y $CI_INSTALL_PACKAGES
   exit 0
 fi
 
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-  sudo -n apt-get update
+  apt_get_with_lock_retry sudo -n apt-get update
   # shellcheck disable=SC2086
-  sudo -n apt-get install -y $CI_INSTALL_PACKAGES
+  apt_get_with_lock_retry sudo -n apt-get install -y $CI_INSTALL_PACKAGES
   exit 0
 fi
 
