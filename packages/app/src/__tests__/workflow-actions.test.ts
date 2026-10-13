@@ -1271,6 +1271,62 @@ describe('autoFixOnFailure', () => {
     );
   });
 
+  it('prefers forceExecution.executionAgent over config.autoFixAgent', async () => {
+    loadConfigMock.mockReturnValue({
+      forceExecution: { executionAgent: 'claude' },
+    });
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const logEvent = vi.fn();
+    const appendTaskOutput = vi.fn();
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1', executionAgent: 'omp' },
+        execution: { workspacePath: '/tmp/task-a' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
+      retryTask: vi.fn(() => started),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput,
+      logEvent,
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+      getAutoFixAgent: () => 'codex',
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-agent-selected',
+        selectedAgent: 'claude',
+        selectedAgentSource: 'force',
+        configuredAutoFixAgent: 'codex',
+      }),
+    );
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix Agent] selected=claude source=force'),
+    );
+  });
+
   it('ignores task executionAgent when config.autoFixAgent is empty and uses default agent', async () => {
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const logEvent = vi.fn();
@@ -1324,6 +1380,7 @@ describe('autoFixOnFailure', () => {
     });
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const logEvent = vi.fn();
+    const appendTaskOutput = vi.fn();
     const orchestrator = {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
@@ -1339,7 +1396,7 @@ describe('autoFixOnFailure', () => {
     const persistence = {
       updateTask: vi.fn(),
       getTaskOutput: vi.fn(() => 'test output'),
-      appendTaskOutput: vi.fn(),
+      appendTaskOutput,
       logEvent,
     };
     const taskExecutor = {
@@ -1365,6 +1422,10 @@ describe('autoFixOnFailure', () => {
         selectedAgent: 'claude',
         selectedAgentSource: 'force',
       }),
+    );
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('fallback=forceExecution.executionAgent->config->default'),
     );
   });
 
