@@ -14,7 +14,14 @@ function makeTempRoot(prefix: string): string {
 }
 
 function writeSkill(resourcesRoot: string, name: string, category?: string): void {
-  const skillDir = join(resourcesRoot, 'skills', name);
+  writeSkillAt(join(resourcesRoot, 'skills', name), name, category);
+}
+
+function writeSourceSkill(repoRoot: string, relativeRoot: string, name: string, category?: string): void {
+  writeSkillAt(join(repoRoot, relativeRoot, name), name, category);
+}
+
+function writeSkillAt(skillDir: string, name: string, category?: string): void {
   const categoryLine = category ? `category: ${category}\n` : '';
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(
@@ -88,6 +95,59 @@ describe('installBundledSkills pruning', () => {
       for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
         expect(existsSync(join(fakeHome, target, 'invoker-core-skill'))).toBe(true);
         expect(existsSync(join(fakeHome, target, 'invoker-optimization-skill'))).toBe(true);
+      }
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  it('prefers corpus skills for source checkouts when the corpus tree exists', () => {
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const fakeHome = makeTempRoot('invoker-bundled-fakehome-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    writeSourceSkill(repoRoot, 'skills', 'legacy-skill');
+    writeSourceSkill(repoRoot, 'corpus/skills', 'corpus-skill');
+
+    try {
+      installBundledSkills({
+        isPackaged: false,
+        repoRoot,
+        invokerHomeRoot,
+        isInstalled: () => true,
+      });
+
+      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
+        const targetRoot = join(fakeHome, target);
+        expect(existsSync(join(targetRoot, 'invoker-corpus-skill'))).toBe(true);
+        expect(existsSync(join(targetRoot, 'invoker-legacy-skill'))).toBe(false);
+      }
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  it('keeps using the legacy source skill tree when no corpus tree exists', () => {
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const fakeHome = makeTempRoot('invoker-bundled-fakehome-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    writeSourceSkill(repoRoot, 'skills', 'legacy-skill');
+
+    try {
+      installBundledSkills({
+        isPackaged: false,
+        repoRoot,
+        invokerHomeRoot,
+        isInstalled: () => true,
+      });
+
+      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
+        expect(existsSync(join(fakeHome, target, 'invoker-legacy-skill'))).toBe(true);
       }
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
