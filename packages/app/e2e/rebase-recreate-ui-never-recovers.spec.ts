@@ -5,6 +5,7 @@
  */
 import {
   test,
+  expect,
   E2E_REPO_URL,
   loadPlan,
   startPlan,
@@ -28,8 +29,8 @@ const FAILING_PLAN = {
 };
 
 test.describe('rebase-recreate: does the UI ever change', () => {
-  test('watch the queue chip for 60s after rebase-recreate, no early exit', async ({ page }) => {
-    test.setTimeout(90_000);
+  test('shows recreate activity and returns the queue chip to idle', async ({ page }) => {
+    test.setTimeout(30_000);
 
     await loadPlan(page, FAILING_PLAN);
     await startPlan(page);
@@ -50,12 +51,18 @@ test.describe('rebase-recreate: does the UI ever change', () => {
     );
     console.log(`[mutation] rebaseRecreate result: ${JSON.stringify(mutationResult)}`);
 
+    const initialTasks = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      return Array.isArray(result) ? result : result.tasks;
+    });
+    const initialTask = initialTasks.find((t: { id: string }) => t.id.endsWith('/a'));
+
     const startedAt = Date.now();
-    const deadline = startedAt + 60_000;
-    let lastChip = '';
-    let lastSlots = '';
-    let lastTaskStatus = '';
-    let changedAtLeastOnce = false;
+    const deadline = startedAt + 20_000;
+    let lastChip = chipBefore ?? '';
+    let lastSlots = slotsBefore ?? '';
+    let lastTaskStatus = initialTask?.status ?? '';
+    let sawRecreateActivity = false;
 
     while (Date.now() < deadline) {
       const elapsed = Date.now() - startedAt;
@@ -66,21 +73,39 @@ test.describe('rebase-recreate: does the UI ever change', () => {
         return Array.isArray(result) ? result : result.tasks;
       });
       const taskA = tasks.find((t: { id: string }) => t.id.endsWith('/a'));
+      const taskStatus = taskA?.status ?? 'missing';
 
-      if (chip !== lastChip || slots !== lastSlots || taskA.status !== lastTaskStatus) {
-        changedAtLeastOnce = true;
+      if (chip !== chipBefore || slots !== slotsBefore || taskStatus !== initialTask?.status) {
+        sawRecreateActivity = true;
+      }
+
+      if (chip !== lastChip || slots !== lastSlots || taskStatus !== lastTaskStatus) {
         console.log(
-          `[t=${elapsed}ms] CHANGED -> chip=${chip} slots=${slots} invoker-query-status=${taskA.status}`,
+          `[t=${elapsed}ms] CHANGED -> chip=${chip} slots=${slots} invoker-query-status=${taskStatus}`,
         );
         lastChip = chip ?? '';
         lastSlots = slots ?? '';
-        lastTaskStatus = taskA.status;
+        lastTaskStatus = taskStatus;
       }
 
-      await page.waitForTimeout(500);
+      if (
+        sawRecreateActivity &&
+        taskStatus === 'failed' &&
+        chip === 'Executing (0/1)' &&
+        slots === 'Slots (0/1)'
+      ) {
+        break;
+      }
+
+      await page.waitForTimeout(250);
     }
 
-    console.log(`[final t=60000ms] chip=${lastChip} slots=${lastSlots} invoker-query-status=${lastTaskStatus}`);
-    console.log(`[verdict] did the UI ever change after rebase-recreate: ${changedAtLeastOnce}`);
+    console.log(`[final t=${Date.now() - startedAt}ms] chip=${lastChip} slots=${lastSlots} invoker-query-status=${lastTaskStatus}`);
+    console.log(`[verdict] did the UI show recreate activity after rebase-recreate: ${sawRecreateActivity}`);
+
+    expect(sawRecreateActivity).toBe(true);
+    expect(lastTaskStatus).toBe('failed');
+    expect(lastChip).toBe('Executing (0/1)');
+    expect(lastSlots).toBe('Slots (0/1)');
   });
 });

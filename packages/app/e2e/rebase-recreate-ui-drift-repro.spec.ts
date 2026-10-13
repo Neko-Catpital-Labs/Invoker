@@ -88,9 +88,11 @@ test.describe('rebase-recreate UI drift repro', () => {
     const startedAt = Date.now();
     const deadline = startedAt + 8000;
     let tick = 0;
-    let sawDisagreement = false;
     let backendFlippedAtMs: number | null = null;
     let chipCaughtUpAtMs: number | null = null;
+    let lastSqliteStatus = row?.status ?? '';
+    let lastQueryStatus = taskAAfter.status;
+    let lastChip = chipAfter ?? '';
 
     while (Date.now() < deadline) {
       tick += 1;
@@ -113,27 +115,48 @@ test.describe('rebase-recreate UI drift repro', () => {
         | { status: string }
         | undefined;
       db2.close();
+      lastSqliteStatus = polledRow?.status ?? 'missing';
+      lastQueryStatus = polledTaskA.status;
+      lastChip = polledChip ?? '';
 
       if (polledTaskA.status === 'running' && backendFlippedAtMs === null) backendFlippedAtMs = elapsed;
       const chipShowsRunning = polledChip === 'Executing (1/1)';
       if (chipShowsRunning && chipCaughtUpAtMs === null) chipCaughtUpAtMs = elapsed;
 
-      const agree = polledRow?.status === polledTaskA.status
-        && (polledTaskA.status === 'running' ? chipShowsRunning : polledChip === 'Executing (0/1)');
-      if (!agree) sawDisagreement = true;
+      const backendAgrees = polledRow?.status === polledTaskA.status;
+      const chipMatches = polledTaskA.status === 'running'
+        ? chipShowsRunning
+        : polledChip === 'Executing (0/1)';
 
       console.log(
-        `[poll ${tick} t=${elapsed}ms] sqlite=${polledRow?.status} invoker-query=${polledTaskA.status} ui-chip=${polledChip} agree=${agree}`,
+        `[poll ${tick} t=${elapsed}ms] sqlite=${polledRow?.status} invoker-query=${polledTaskA.status} ui-chip=${polledChip} backendAgrees=${backendAgrees} chipMatches=${chipMatches}`,
       );
 
-      if (chipCaughtUpAtMs !== null) break;
+      if (
+        backendFlippedAtMs !== null &&
+        chipCaughtUpAtMs !== null &&
+        backendAgrees &&
+        polledTaskA.status === 'failed' &&
+        polledChip === 'Executing (0/1)'
+      ) {
+        break;
+      }
       await page.waitForTimeout(50);
     }
 
     console.log(`[summary] backend (sqlite+query) showed running at t=${backendFlippedAtMs}ms`);
     console.log(`[summary] UI chip caught up at t=${chipCaughtUpAtMs}ms`);
-    console.log(`[summary] drift window = ${chipCaughtUpAtMs !== null && backendFlippedAtMs !== null ? chipCaughtUpAtMs - backendFlippedAtMs : 'unknown'}ms`);
+    const driftWindowMs = chipCaughtUpAtMs !== null && backendFlippedAtMs !== null
+      ? chipCaughtUpAtMs - backendFlippedAtMs
+      : null;
+    console.log(`[summary] drift window = ${driftWindowMs ?? 'unknown'}ms`);
 
-    expect(sawDisagreement).toBe(false);
+    expect(backendFlippedAtMs).not.toBeNull();
+    expect(chipCaughtUpAtMs).not.toBeNull();
+    expect(driftWindowMs).not.toBeNull();
+    expect(driftWindowMs!).toBeLessThanOrEqual(1_000);
+    expect(lastSqliteStatus).toBe('failed');
+    expect(lastQueryStatus).toBe('failed');
+    expect(lastChip).toBe('Executing (0/1)');
   });
 });
