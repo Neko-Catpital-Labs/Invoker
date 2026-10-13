@@ -131,6 +131,8 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 `invoker-cli doctor --fix` can install some missing runtime tools on a best-effort basis using Homebrew on macOS, apt on Linux, or npm for npm-based CLIs. Authentication-dependent setup, such as `gh auth login` and provider CLI login, remains manual.
 
+The in-app planning harness picker only lists planner CLIs that are on Invoker’s process PATH (for example `cursor`, `codex`, `claude`). Install a tool, then restart Invoker so the picker refreshes; `invoker-cli doctor` shows which binaries Invoker can see.
+
 `invoker-cli run <plan.yaml>` defaults to `auto` mode: it submits the plan to a running desktop owner over IPC when one is reachable, and otherwise runs the plan in a standalone CLI database at `~/.invoker-cli`. Use `--live` to require the desktop owner, `--standalone` to force isolated CLI execution, `--db-dir <path>` to choose a different standalone database directory, and `--json` for a machine-readable result summary.
 
 ### Desktop UI
@@ -298,7 +300,7 @@ For app development with hot reload:
 pnpm run dev:hot
 ```
 
-GUI-launched workflows inherit the GUI app environment. On macOS, apps launched from Finder often have a narrower `PATH` than your terminal. If workflows need `pnpm`, `git`, `codex`, or `claude`, start Invoker from a terminal or make those tools available to GUI-launched apps.
+GUI-launched workflows inherit the GUI app environment. On macOS, apps launched from Finder often have a narrower `PATH` than your terminal. If workflows need `pnpm`, `git`, `codex`, or `claude`, start Invoker from a terminal or make those tools available to GUI-launched apps. The same PATH drives the planning harness picker: a CLI only visible in your shell will not appear as selectable until Invoker is restarted with that PATH.
 
 **Example plan:**
 
