@@ -81,6 +81,34 @@ describe('GitLabMergeGateProvider', () => {
       expect.arrayContaining(['--input', expect.stringContaining('create.json')]),
       expect.objectContaining({ cwd: '/tmp/repo' }),
     );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      ['push', '--force', 'origin', '--', 'feature/x:refs/heads/feature/x'],
+      expect.objectContaining({ cwd: '/tmp/repo' }),
+    );
+  });
+
+  it('rejects unsafe feature branch names before git push or fetch', async () => {
+    const { spawn } = await import('node:child_process');
+    const spawnMock = vi.mocked(spawn);
+
+    spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'remote') return mockSpawnResult('origin\n', 0);
+      return mockSpawnResult('{}', 0);
+    }) as any);
+
+    await expect(provider.createReview({
+      baseBranch: 'master',
+      featureBranch: '--upload-pack=/tmp/run-me',
+      title: 'Test MR',
+      cwd: '/tmp/repo',
+      body: '## Summary\n\nbody',
+    })).rejects.toThrow('Unsafe git branch name');
+
+    const gitMutations = spawnMock.mock.calls.filter(([cmd, args]) =>
+      cmd === 'git' && (args as string[])[0] !== 'remote'
+    );
+    expect(gitMutations).toEqual([]);
   });
 
   it('maps approvals and failed pipelines onto MergeGateApprovalStatus', async () => {

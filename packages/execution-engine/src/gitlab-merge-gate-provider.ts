@@ -16,7 +16,7 @@ import type {
 import { parseForgeProject } from '@invoker/contracts';
 
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isGitRefLockRace } from './git-utils.js';
+import { assertSafeGitBranchName, isGitRefLockRace } from './git-utils.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 const DEFAULT_GITLAB_CLI_TIMEOUT_MS = 60_000;
@@ -306,7 +306,8 @@ export class GitLabMergeGateProvider implements ForgeProvider {
   }
 
   private async pushFeatureBranch(cwd: string, featureBranch: string): Promise<void> {
-    const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+    assertSafeGitBranchName(featureBranch);
+    const pushArgs = ['push', '--force', 'origin', '--', `${featureBranch}:refs/heads/${featureBranch}`];
     try {
       await this.exec('git', pushArgs, cwd);
     } catch (err) {
@@ -314,6 +315,7 @@ export class GitLabMergeGateProvider implements ForgeProvider {
       await this.exec('git', [
         'fetch',
         'origin',
+        '--',
         `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
       ], cwd);
       await this.exec('git', pushArgs, cwd);

@@ -63,6 +63,26 @@ export function isGitRefLockRace(err: unknown): boolean {
     );
 }
 
+const UNSAFE_BRANCH_REF_CHARS = /[\x00-\x20\x7f~^:?*[\]\\]/;
+
+export function assertSafeGitBranchName(branch: string): void {
+  if (
+    !branch
+    || branch.trim() !== branch
+    || branch.startsWith('-')
+    || branch.startsWith('/')
+    || branch.endsWith('/')
+    || branch.endsWith('.')
+    || branch.includes('..')
+    || branch.includes('//')
+    || branch.includes('@{')
+    || branch.split('/').some((part) => part.startsWith('.') || part.endsWith('.lock'))
+    || UNSAFE_BRANCH_REF_CHARS.test(branch)
+  ) {
+    throw new Error(`Unsafe git branch name: ${JSON.stringify(branch)}`);
+  }
+}
+
 export function isTransientGitHubCliError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /\bi\/o timeout\b/i.test(message)
