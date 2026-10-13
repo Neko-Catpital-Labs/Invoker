@@ -921,6 +921,17 @@ jobs:
           - name: 1-of-9
             files: >-
               e2e/visual-proof.spec.ts
+            shard_index: 1
+            shard_total: 2
+            fully_parallel: '1'
+          - name: 1-of-9-visual-b
+            files: >-
+              e2e/visual-proof.spec.ts
+            shard_index: 2
+            shard_total: 2
+            fully_parallel: '1'
+          - name: 1-of-9-companion
+            files: >-
               e2e/edit-task-command.spec.ts
               e2e/headless-thundering-herd.spec.ts
               e2e/launching-stall-watchdog.spec.ts
@@ -1068,6 +1079,9 @@ jobs:
         env:
           INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-${{ matrix.name }}
           INVOKER_PLAYWRIGHT_WORKERS: '1'
+          INVOKER_PLAYWRIGHT_SHARD_INDEX: ${{ matrix.shard_index }}
+          INVOKER_PLAYWRIGHT_SHARD_TOTAL: ${{ matrix.shard_total }}
+          INVOKER_PLAYWRIGHT_FULLY_PARALLEL: ${{ matrix.fully_parallel }}
           INVOKER_PLAYWRIGHT_FILES: ${{ matrix.files }}
           INVOKER_PLAYWRIGHT_ARGS: --reporter=line
         run: bash scripts/test-suites/optional/40-playwright-app.sh
