@@ -102,6 +102,16 @@ describe('parseForgeProject', () => {
     ).toBeUndefined();
   });
 
+  it('rejects repeated GitLab routing markers without relying on regex backtracking', () => {
+    const repeatedMergeRequests = 'a/-/merge_requests/0/'.repeat(50);
+    const repeatedJobs = 'a/-/jobs/0/'.repeat(50);
+    const repeatedPipelines = 'a/-/pipelines/0/'.repeat(50);
+
+    expect(parseForgeProject(`https://gitlab.com/${repeatedMergeRequests}`)).toBeUndefined();
+    expect(parseForgeProject(`https://gitlab.com/${repeatedJobs}`)).toBeUndefined();
+    expect(parseForgeProject(`https://gitlab.com/${repeatedPipelines}`)).toBeUndefined();
+  });
+
   it('accepts INVOKER_GITLAB_HOST self-managed hosts', () => {
     process.env.INVOKER_GITLAB_HOST = 'git.example.com';
     expect(parseForgeProject('https://git.example.com/team/app/-/merge_requests/3')).toEqual({

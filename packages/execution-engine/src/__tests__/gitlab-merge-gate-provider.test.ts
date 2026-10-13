@@ -83,6 +83,68 @@ describe('GitLabMergeGateProvider', () => {
     );
   });
 
+  it('stops git option parsing when retrying a caller-supplied feature branch push', async () => {
+    const { spawn } = await import('node:child_process');
+    const spawnMock = vi.mocked(spawn);
+    let pushAttempts = 0;
+
+    spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'remote') return mockSpawnResult('origin', 0);
+      if (cmd === 'git' && args[0] === 'push') {
+        pushAttempts += 1;
+        if (pushAttempts === 1) {
+          return mockSpawnResult('', 1, [
+            'To gitlab.com:Group/Sub/Project.git',
+            " ! [remote rejected] --upload-pack=touch-pwned -> --upload-pack=touch-pwned (cannot lock ref 'refs/heads/--upload-pack=touch-pwned': reference already exists)",
+            "error: failed to push some refs to 'gitlab.com:Group/Sub/Project.git'",
+          ].join('\n'));
+        }
+        return mockSpawnResult('', 0);
+      }
+      if (cmd === 'git' && args[0] === 'fetch') return mockSpawnResult('', 0);
+      if (cmd === 'glab' && args.some((arg) => String(arg).includes('state=opened'))) {
+        return mockSpawnResult('[]', 0);
+      }
+      if (cmd === 'glab' && args.includes('--method') && args.includes('POST')) {
+        return mockSpawnResult(JSON.stringify({
+          web_url: 'https://gitlab.com/Group/Sub/Project/-/merge_requests/3',
+          iid: 3,
+        }), 0);
+      }
+      return mockSpawnResult('{}', 0);
+    }) as any);
+
+    await provider.createReview({
+      baseBranch: 'master',
+      featureBranch: '--upload-pack=touch-pwned',
+      title: 'Test MR',
+      cwd: '/tmp/repo',
+    });
+
+    expect(pushAttempts).toBe(2);
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      [
+        'push',
+        '--force',
+        '--',
+        'origin',
+        '--upload-pack=touch-pwned:refs/heads/--upload-pack=touch-pwned',
+      ],
+      expect.objectContaining({ cwd: '/tmp/repo' }),
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      [
+        'fetch',
+        '--',
+        'origin',
+        '+refs/heads/--upload-pack=touch-pwned:refs/remotes/origin/--upload-pack=touch-pwned',
+      ],
+      expect.objectContaining({ cwd: '/tmp/repo' }),
+    );
+  });
+
   it('maps approvals and failed pipelines onto MergeGateApprovalStatus', async () => {
     const { spawn } = await import('node:child_process');
     const spawnMock = vi.mocked(spawn);

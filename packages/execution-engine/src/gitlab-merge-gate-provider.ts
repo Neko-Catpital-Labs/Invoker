@@ -306,13 +306,20 @@ export class GitLabMergeGateProvider implements ForgeProvider {
   }
 
   private async pushFeatureBranch(cwd: string, featureBranch: string): Promise<void> {
-    const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+    const pushArgs = [
+      'push',
+      '--force',
+      '--',
+      'origin',
+      `${featureBranch}:refs/heads/${featureBranch}`,
+    ];
     try {
       await this.exec('git', pushArgs, cwd);
     } catch (err) {
       if (!isGitRefLockRace(err)) throw err;
       await this.exec('git', [
         'fetch',
+        '--',
         'origin',
         `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
       ], cwd);
