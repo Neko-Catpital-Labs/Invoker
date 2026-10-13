@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CHECKER="$ROOT/skills/plan-to-invoker/scripts/check-planning-completeness.sh"
+CHECKER="$ROOT/corpus/skills/plan-to-invoker/scripts/check-planning-completeness.sh"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 RECORDED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
