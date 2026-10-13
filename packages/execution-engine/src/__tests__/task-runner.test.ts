@@ -155,6 +155,22 @@ describe('TaskRunner', () => {
 
     expect(closeReview).toHaveBeenCalledWith({ identifier: 'scalar-pr', cwd: '/tmp/review-workspace' });
   });
+
+  it('uses forced execution agent ahead of task and default agents', () => {
+    const runner = new TaskRunner({
+      orchestrator: {} as any,
+      persistence: {} as any,
+      executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+      executionDefaultsProvider: () => ({ executionAgent: 'claude' }),
+      forceExecutionAgentProvider: () => ' omp ',
+      cwd: '/tmp',
+    });
+
+    expect(runner.resolveExecutionAgent(makeTask({
+      config: { executionAgent: 'codex' },
+    }))).toBe('omp');
+  });
+
   it('uses configured default execution settings when task overrides are absent', async () => {
     let seenRequest: any;
     let completeCallback: ((response: WorkResponse) => void) | undefined;

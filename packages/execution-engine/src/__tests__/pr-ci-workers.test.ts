@@ -206,6 +206,30 @@ describe('PR status worker', () => {
     });
   });
 
+  it('uses forceExecution agent ahead of the autofix agent for CI repair intents', async () => {
+    const event = makeEvent();
+    const harness = makeRepairHarness();
+    await expect(queueReviewGateCiRepair({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 1,
+      getAutoFixAgent: () => 'codex',
+      getForceExecutionAgent: () => ' omp ',
+    }, event)).resolves.toMatchObject({
+      decision: 'queued',
+      reason: 'queued',
+    });
+
+    expect(harness.submit).toHaveBeenCalledWith(
+      'wf-1',
+      'normal',
+      SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
+      [expect.objectContaining({ agentName: 'omp' })],
+    );
+  });
+
   it('does not publish a CI repair intent for pending checks or merge-conflict-only polls', async () => {
     const publish = vi.fn();
     const host = {
