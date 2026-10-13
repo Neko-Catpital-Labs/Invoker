@@ -258,8 +258,8 @@ export class GitHubMergeGateProvider implements ForgeProvider {
     if (!project || project.kind !== 'github' || !project.runId) return undefined;
     try {
       const args = project.jobId
-        ? ['run', 'view', '--log-failed', '--job', project.jobId]
-        : ['run', 'view', project.runId, '--log-failed'];
+        ? ['run', 'view', '--log-failed', '--job', project.jobId, '--repo', project.projectPath]
+        : ['run', 'view', project.runId, '--log-failed', '--repo', project.projectPath];
       return await this.exec('gh', args, opts.cwd);
     } catch {
       return undefined;
