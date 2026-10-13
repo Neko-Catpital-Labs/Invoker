@@ -176,6 +176,15 @@ assert(
 );
 assertStepBefore(jobs['build-artifacts'], 'Install native build tools', 'Install dependencies', 'build-artifacts');
 
+assert(
+  jobs['e2e-proof']['runs-on'] === 'ubuntu-latest',
+  'e2e-proof must use fresh GitHub-hosted capacity so self-hosted runner shutdown cannot fail before proof suites run',
+);
+assert(
+  jobs['e2e-proof-aggregate']['runs-on'] === 'ubuntu-latest',
+  'e2e-proof aggregate must use fresh GitHub-hosted capacity so aggregation is not blocked by self-hosted runner shutdown',
+);
+
 assert(jobs['quality-required'], 'Missing quality-required job');
 assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs');
 assert(
