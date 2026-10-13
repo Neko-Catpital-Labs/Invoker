@@ -300,6 +300,14 @@ function readSolverSummary(workspaceDir) {
   }
 }
 
+function removeInvokerTaskArtifacts({ taskRoot, workspaceDir }) {
+  const roots = [taskRoot];
+  if (workspaceDir) roots.push(assertOutsideRepoCheckout(workspaceDir, 'invoker workspace cleanup path'));
+  for (const root of new Set(roots.map((candidate) => path.resolve(candidate)))) {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 export function runInvokerTask(task, options = {}) {
   const runRoot = options.runRoot ?? createAdapterRunRoot('invoker-e2e-eval-invoker-');
   const runId = options.runId ?? randomUUID();
@@ -365,7 +373,7 @@ export function runInvokerTask(task, options = {}) {
     },
   });
 
-  if (options.keep !== true) rmSync(taskRoot, { recursive: true, force: true });
+  if (options.keep !== true) removeInvokerTaskArtifacts({ taskRoot, workspaceDir });
   return row;
 }
 
@@ -413,7 +421,6 @@ function selfTest() {
       runId,
       runRoot,
       outPath: path.join(runRoot, 'invoker.jsonl'),
-      keep: true,
     });
     const rows = [...direct.rows, ...invoker.rows].sort((a, b) =>
       a.taskId.localeCompare(b.taskId) || a.condition.localeCompare(b.condition));
@@ -435,6 +442,9 @@ function selfTest() {
       if (models.size !== 1 || budgets.size !== 1 || timeouts.size !== 1) {
         failures.push(`${taskId}: paired inputs differ`);
       }
+    }
+    if (invoker.rows.some((row) => existsSync(row.workspaceDir))) {
+      failures.push('invoker disposable workspaces were not removed after grading');
     }
     for (const row of rows) console.log(JSON.stringify(row));
     if (failures.length > 0) {
