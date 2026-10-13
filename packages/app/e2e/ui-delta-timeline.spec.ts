@@ -55,9 +55,11 @@ async function runTimelineRepro(): Promise<{
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
+      process.stdout.write(chunk);
     });
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
+      process.stderr.write(chunk);
     });
     child.on('error', reject);
     child.on('close', (code) => {
