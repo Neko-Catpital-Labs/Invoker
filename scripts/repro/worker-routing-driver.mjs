@@ -237,6 +237,7 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   );
   console.log('\n=== leg 5: unmapped broken PR (pr-orphan-broken.json) -> pr-orphan-repair ===');
   const err = await tickWorker(leg, createPrOrphanRepairWorker, {
+    INVOKER_GITHUB_TARGET_REPOS: 'fake/repo',
     INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
     INVOKER_PR_ORPHAN_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
     INVOKER_PR_ORPHAN_PLAN_DIR: join(leg.legDir, 'plans'),
