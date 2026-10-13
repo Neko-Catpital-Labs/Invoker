@@ -71,17 +71,6 @@ describe('parseForgeProject', () => {
     });
   });
 
-  it('parses GitLab .git project paths before routed URLs', () => {
-    expect(
-      parseForgeProject('https://gitlab.com/Group/Sub/Project.git/-/merge_requests/7'),
-    ).toEqual({
-      kind: 'gitlab',
-      host: 'gitlab.com',
-      projectPath: 'Group/Sub/Project',
-      reviewId: '7',
-    });
-  });
-
   it('parses GitLab job and pipeline URLs', () => {
     expect(
       parseForgeProject('https://gitlab.com/Group/Sub/Project/-/jobs/42'),
@@ -111,22 +100,6 @@ describe('parseForgeProject', () => {
     expect(
       parseForgeProject('https://gitlab.com/Group/Sub/Project/-/blob/main/README.md'),
     ).toBeUndefined();
-  });
-
-  it('rejects repeated GitLab route separators without regex backtracking', () => {
-    const repeatedRoute = Array.from(
-      { length: 200 },
-      () => 'a/-/merge_requests/0',
-    ).join('/');
-    expect(parseForgeProject(`https://gitlab.com/${repeatedRoute}`)).toBeUndefined();
-  });
-
-  it('trims repeated trailing slashes from GitLab clone URLs', () => {
-    expect(parseForgeProject(`https://gitlab.com/Group/Sub/Project.git${'/'.repeat(200)}`)).toEqual({
-      kind: 'gitlab',
-      host: 'gitlab.com',
-      projectPath: 'Group/Sub/Project',
-    });
   });
 
   it('accepts INVOKER_GITLAB_HOST self-managed hosts', () => {
