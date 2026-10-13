@@ -2,8 +2,7 @@ import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import {
-  GitHubMergeGateProvider,
-  ReviewProviderRegistry,
+  createDefaultReviewProviders,
   TaskRunner,
   type AgentRegistry,
   type Executor,
@@ -115,12 +114,7 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
         });
       },
     },
-    mergeGateProvider: new GitHubMergeGateProvider(),
-    reviewProviderRegistry: (() => {
-      const registry = new ReviewProviderRegistry();
-      registry.register(new GitHubMergeGateProvider());
-      return registry;
-    })(),
+    ...createDefaultReviewProviders(),
     callbacks: {
       onOutput: (taskId, data) => {
         deps.enqueueTaskOutput(taskId, data);

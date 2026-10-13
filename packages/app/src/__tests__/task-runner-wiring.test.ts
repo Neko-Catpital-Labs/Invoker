@@ -12,8 +12,7 @@ import {
 } from '../execution/task-runner-wiring.js';
 
 const taskRunnerConstructor = vi.fn();
-const gitHubMergeGateProviderConstructor = vi.fn();
-const reviewProviderRegistryRegister = vi.fn();
+const createDefaultReviewProvidersFn = vi.fn();
 
 vi.mock('@invoker/execution-engine', () => {
   class MockTaskRunner {
@@ -27,22 +26,21 @@ vi.mock('@invoker/execution-engine', () => {
     }
   }
 
-  class MockGitHubMergeGateProvider {
-    constructor() {
-      gitHubMergeGateProviderConstructor();
-    }
-  }
-
-  class MockReviewProviderRegistry {
-    register(provider: unknown) {
-      reviewProviderRegistryRegister(provider);
-    }
-  }
-
   return {
     TaskRunner: MockTaskRunner,
-    GitHubMergeGateProvider: MockGitHubMergeGateProvider,
-    ReviewProviderRegistry: MockReviewProviderRegistry,
+    createDefaultReviewProviders: () => {
+      const providers = {
+        mergeGateProvider: { name: 'github' },
+        reviewProviderRegistry: {
+          register: vi.fn(),
+          get: vi.fn(),
+          getOrThrow: vi.fn(),
+          list: vi.fn(() => []),
+        },
+      };
+      createDefaultReviewProvidersFn(providers);
+      return providers;
+    },
   };
 });
 
@@ -145,8 +143,7 @@ describe('task-runner-wiring', () => {
     expect(currentRunner).toBe(runner);
     expect(latestRunner).toBe(runner);
     expect(resolveSecretsFilePath).toHaveBeenCalledWith(expect.objectContaining({ defaultBranch: 'main' }));
-    expect(gitHubMergeGateProviderConstructor).toHaveBeenCalledTimes(2);
-    expect(reviewProviderRegistryRegister).toHaveBeenCalledTimes(1);
+    expect(createDefaultReviewProvidersFn).toHaveBeenCalledTimes(1);
 
     const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
     expect(config.cwd).toBe('/repo');
