@@ -43,7 +43,7 @@ const INVOKER_SKILLS_DIR = 'skills';
 const INVOKER_COMMANDS_DIR = 'commands';
 const INVOKER_MCP_SNIPPET_RELATIVE = path.join('mcp-servers', 'invoker.json');
 export const HARNESS_REGISTRATION_HINT =
-  'Harness MCP/skills stay opt-in. Snippet at ~/.invoker/mcp-servers/invoker.json — re-run setup and answer yes, or pass --register-harnesses.';
+  'Harness MCP/skills stay opt-in. Re-run setup and answer yes, or pass --register-harnesses.';
 
 interface BundledSkillsManifest {
   bundledHash: string;
@@ -355,15 +355,6 @@ function syncCommandTargets(params: {
 
 function resolveInvokerMcpSnippetPath(invokerHomeRoot: string): string {
   return path.join(invokerHomeRoot, INVOKER_MCP_SNIPPET_RELATIVE);
-}
-
-function writeInvokerMcpSnippet(invokerHomeRoot: string): void {
-  const snippetPath = resolveInvokerMcpSnippetPath(invokerHomeRoot);
-  mkdirSync(path.dirname(snippetPath), { recursive: true });
-  writeFileAtomic(
-    snippetPath,
-    `${JSON.stringify({ mcpServers: { [INVOKER_MCP_SERVER_NAME]: INVOKER_MCP_SERVER } }, null, 2)}\n`,
-  );
 }
 
 function removeInvokerMcpSnippet(invokerHomeRoot: string): void {
@@ -1211,7 +1202,6 @@ export function installBundledSkills(
     previousManifest,
     manifestCommandTargets,
   });
-  writeInvokerMcpSnippet(invokerHomeRoot);
 
   let mcpRecorded: NonNullable<BundledSkillsManifest['mcpTargets']> = {};
   let instructionRecorded: NonNullable<BundledSkillsManifest['instructionTargets']> = {};

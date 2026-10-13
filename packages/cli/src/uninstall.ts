@@ -164,7 +164,7 @@ export function uninstallCoverageTable(): UninstallCoverageRow[] {
     {
       area: 'invoker-cli install / setup skills + local MCP',
       coverage: 'supported',
-      note: 'Invoker home skills, commands, MCP snippet, manifest',
+      note: 'Invoker home skills, commands, leftover MCP snippet cleanup, manifest',
     },
     {
       area: 'setup --register-harnesses',

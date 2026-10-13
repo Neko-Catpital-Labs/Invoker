@@ -1167,7 +1167,7 @@ function printBundledSkillsResult(
         : 'Skills MCP: harness registration requested, but no available harness MCP targets were updated.',
     );
   } else {
-    io.print(`Skills MCP: wrote Invoker MCP snippet only (no Cursor/Claude/Codex/OMP config changes).`);
+    io.print('Skills MCP: harness registration skipped (no Cursor/Claude/Codex/OMP config changes).');
     io.print(`Skills MCP: ${HARNESS_REGISTRATION_HINT}`);
   }
   if (status.lastInstallError) {

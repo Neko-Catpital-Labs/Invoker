@@ -160,8 +160,7 @@ describe('bundled-skills', () => {
       expect(existsSync(join(invokerHomeRoot, 'skills', 'invoker-make-pr', 'scripts', 'check.sh'))).toBe(true);
       expect(existsSync(join(invokerHomeRoot, 'commands', 'invoker-plan-to-invoker.md'))).toBe(true);
       expect(existsSync(join(invokerHomeRoot, 'commands', 'invoker-loop-generator.md'))).toBe(true);
-      const snippet = JSON.parse(readFileSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'), 'utf-8'));
-      expect(snippet.mcpServers.invoker).toEqual({ type: 'stdio', command: 'invoker-cli', args: ['mcp'] });
+      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(false);
 
       for (const harnessPath of [
         join(fakeHome, '.codex', 'skills'),
@@ -206,7 +205,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it('re-running install is idempotent for the Invoker MCP snippet', () => {
+  it('re-running default install stays idempotent and never writes a home MCP snippet', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -221,9 +220,7 @@ describe('bundled-skills', () => {
       installBundledSkills(deps);
       installBundledSkills(deps);
 
-      const snippetPath = join(invokerHomeRoot, 'mcp-servers', 'invoker.json');
-      const first = readFileSync(snippetPath, 'utf-8');
-      expect(JSON.parse(first).mcpServers.invoker).toEqual({ type: 'stdio', command: 'invoker-cli', args: ['mcp'] });
+      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(false);
       expect(existsSync(join(fakeHome, '.codex', 'config.toml'))).toBe(false);
     } finally {
       if (originalHome === undefined) {
@@ -258,7 +255,7 @@ describe('bundled-skills', () => {
       });
 
       expect(readFileSync(configPath, 'utf-8')).toBe(preExisting);
-      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(false);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -308,7 +305,7 @@ describe('bundled-skills', () => {
       });
       const codexTarget = installed.mcpTargets.find((target) => target.id === 'codex');
       expect(readFileSync(configPath, 'utf-8')).toBe(mismatched);
-      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(false);
       expect(codexTarget?.installed).toBe(false);
     } finally {
       if (originalHome === undefined) {
@@ -860,7 +857,12 @@ describe('bundled-skills', () => {
       };
       installBundledSkills(deps);
       expect(existsSync(join(invokerHomeRoot, 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'mcp-servers', 'invoker.json'))).toBe(false);
+      mkdirSync(join(invokerHomeRoot, 'mcp-servers'), { recursive: true });
+      writeFileSync(
+        join(invokerHomeRoot, 'mcp-servers', 'invoker.json'),
+        `${JSON.stringify({ mcpServers: { invoker: { type: 'stdio', command: 'invoker-cli', args: ['mcp'] } } }, null, 2)}\n`,
+      );
 
       const uninstalled = installBundledSkills(deps, 'uninstall');
 
