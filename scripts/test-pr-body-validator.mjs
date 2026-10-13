@@ -885,7 +885,7 @@ assert(
 
 const prAuthoringPolicyErrors = await validatePrBody(validMinimal.replace('- behavior', '- policy').replace('- routing', '- tooling-policy'), {
   changedFiles: [
-    'corpus/skills/make-pr/SKILL.md',
+    'skills/make-pr/SKILL.md',
     'scripts/pr-body-template.md',
     'scripts/create-pr.mjs',
   ],
@@ -929,7 +929,7 @@ assert(
 
 const docsScopeErrors = await validatePrBody(validMinimal.replace('- behavior', '- docs'), {
   changedFiles: [
-    'corpus/skills/make-pr/SKILL.md',
+    'skills/make-pr/SKILL.md',
     'scripts/create-pr.mjs',
   ],
 });
