@@ -71,6 +71,7 @@ python3 scripts/test-session-token-rollup.py
 bash scripts/test-cron-pr-auto-label-matching.sh
 bash scripts/test-cron-prune-stale-workdirs.sh
 bash scripts/test-cron-session-token-push.sh
+bash scripts/test-ci-install-node-system-libraries.sh
 bash scripts/test-e2e-common-helper.sh
 bash scripts/test-plan-effectiveness-gate.sh
 bash scripts/test-remote-ci-verify-env-quoting.sh

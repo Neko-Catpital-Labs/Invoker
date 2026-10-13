@@ -12,6 +12,37 @@ probe_soname="${CI_INSTALL_PROBE_SONAME:-}"
 fallback_package="${CI_INSTALL_FALLBACK_PACKAGE:-}"
 IFS=' ' read -r -a probe_commands <<< "${CI_INSTALL_PROBE_COMMANDS:-}"
 
+apt_get_with_lock_retry() {
+  local attempt=1
+  local max_attempts="${CI_INSTALL_APT_LOCK_RETRIES:-6}"
+  local retry_delay="${CI_INSTALL_APT_LOCK_RETRY_DELAY_SECONDS:-2}"
+  local output_file
+  output_file="$(mktemp "${RUNNER_TEMP:-/tmp}/ci-apt-get.XXXXXX")"
+
+  while true; do
+    if "$@" >"$output_file" 2>&1; then
+      cat "$output_file"
+      rm -f "$output_file"
+      return 0
+    fi
+    local status="$?"
+
+    if [ "$attempt" -lt "$max_attempts" ] \
+      && grep -Eq 'Could not get lock|Unable to acquire the dpkg frontend lock|/var/lib/dpkg/lock' "$output_file"; then
+      cat "$output_file" >&2
+      echo "::warning::apt-get lock contention detected; retrying ($attempt/$max_attempts)." >&2
+      attempt=$((attempt + 1))
+      sleep "$retry_delay"
+      : >"$output_file"
+      continue
+    fi
+
+    cat "$output_file" >&2
+    rm -f "$output_file"
+    return "$status"
+  done
+}
+
 has_library() {
   if [ -z "$probe_soname" ]; then
     return 0
@@ -40,16 +71,16 @@ if [ -n "${CI_INSTALL_NO_APT_ERROR:-}" ] && ! command -v apt-get >/dev/null 2>&1
 fi
 
 if [ "$(id -u)" -eq 0 ]; then
-  apt-get update
+  apt_get_with_lock_retry apt-get update
   # shellcheck disable=SC2086
-  apt-get install -y $CI_INSTALL_PACKAGES
+  apt_get_with_lock_retry apt-get install -y $CI_INSTALL_PACKAGES
   exit 0
 fi
 
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-  sudo -n apt-get update
+  apt_get_with_lock_retry sudo -n apt-get update
   # shellcheck disable=SC2086
-  sudo -n apt-get install -y $CI_INSTALL_PACKAGES
+  apt_get_with_lock_retry sudo -n apt-get install -y $CI_INSTALL_PACKAGES
   exit 0
 fi
 
@@ -63,8 +94,8 @@ if [ -n "$fallback_package" ] && [ "${#missing_commands[@]}" -eq 0 ]; then
       -o "Dir::State::status=/var/lib/dpkg/status"
       -o "Dir::Cache=$fallback_dir/apt-cache"
     )
-    apt-get "${apt_options[@]}" update
-    apt-get "${apt_options[@]}" download "$fallback_package"
+    apt_get_with_lock_retry apt-get "${apt_options[@]}" update
+    apt_get_with_lock_retry apt-get "${apt_options[@]}" download "$fallback_package"
     dpkg-deb -x ./*.deb root
   )
   fallback_file="$(find "$fallback_dir/root" -type f -name "${probe_soname}*" -print -quit)"
