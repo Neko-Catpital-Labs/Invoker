@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SOURCE_ROOT = path.join(REPO_ROOT, 'skills');
+const SOURCE_ROOT = path.join(REPO_ROOT, 'corpus', 'skills');
 const SELECTABLE_CATEGORIES = ['core', 'optimization'];
 
 function listBundledSkillNames() {
