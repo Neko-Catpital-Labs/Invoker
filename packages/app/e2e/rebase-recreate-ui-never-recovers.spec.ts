@@ -5,6 +5,7 @@
  */
 import {
   test,
+  expect,
   E2E_REPO_URL,
   loadPlan,
   startPlan,
@@ -28,8 +29,8 @@ const FAILING_PLAN = {
 };
 
 test.describe('rebase-recreate: does the UI ever change', () => {
-  test('watch the queue chip for 60s after rebase-recreate, no early exit', async ({ page }) => {
-    test.setTimeout(90_000);
+  test('queue chip changes and settles after rebase-recreate', async ({ page }) => {
+    test.setTimeout(30_000);
 
     await loadPlan(page, FAILING_PLAN);
     await startPlan(page);
@@ -51,36 +52,49 @@ test.describe('rebase-recreate: does the UI ever change', () => {
     console.log(`[mutation] rebaseRecreate result: ${JSON.stringify(mutationResult)}`);
 
     const startedAt = Date.now();
-    const deadline = startedAt + 60_000;
-    let lastChip = '';
-    let lastSlots = '';
-    let lastTaskStatus = '';
-    let changedAtLeastOnce = false;
+    const deadline = startedAt + 20_000;
+    let lastChip = chipBefore ?? '';
+    let lastSlots = slotsBefore ?? '';
+    let lastTaskStatus = 'failed';
+    let sawActiveWork = false;
+    let sawSettledFailure = false;
 
     while (Date.now() < deadline) {
       const elapsed = Date.now() - startedAt;
-      const chip = await page.getByTestId('queue-chip-running').textContent();
-      const slots = await page.getByTestId('queue-chip-slots').textContent();
-      const tasks = await page.evaluate(async () => {
+      const { chip, slots, taskStatus } = await page.evaluate(async () => {
+        const chipText = document.querySelector('[data-testid="queue-chip-running"]')?.textContent ?? null;
+        const slotsText = document.querySelector('[data-testid="queue-chip-slots"]')?.textContent ?? null;
         const result = await window.invoker.getTasks();
-        return Array.isArray(result) ? result : result.tasks;
+        const tasks = Array.isArray(result) ? result : result.tasks;
+        const taskA = tasks.find((t: { id: string }) => t.id.endsWith('/a'));
+        return { chip: chipText, slots: slotsText, taskStatus: taskA?.status ?? 'missing' };
       });
-      const taskA = tasks.find((t: { id: string }) => t.id.endsWith('/a'));
 
-      if (chip !== lastChip || slots !== lastSlots || taskA.status !== lastTaskStatus) {
-        changedAtLeastOnce = true;
+      if (chip !== lastChip || slots !== lastSlots || taskStatus !== lastTaskStatus) {
         console.log(
-          `[t=${elapsed}ms] CHANGED -> chip=${chip} slots=${slots} invoker-query-status=${taskA.status}`,
+          `[t=${elapsed}ms] CHANGED -> chip=${chip} slots=${slots} invoker-query-status=${taskStatus}`,
         );
         lastChip = chip ?? '';
         lastSlots = slots ?? '';
-        lastTaskStatus = taskA.status;
+        lastTaskStatus = taskStatus;
       }
 
-      await page.waitForTimeout(500);
+      if (taskStatus === 'queued' || taskStatus === 'running' || chip === 'Executing (1/1)' || slots === 'Slots (1/1)') {
+        sawActiveWork = true;
+      }
+      if (sawActiveWork && taskStatus === 'failed' && chip === 'Executing (0/1)' && slots === 'Slots (0/1)') {
+        sawSettledFailure = true;
+        break;
+      }
+
+      await page.waitForTimeout(250);
     }
 
-    console.log(`[final t=60000ms] chip=${lastChip} slots=${lastSlots} invoker-query-status=${lastTaskStatus}`);
-    console.log(`[verdict] did the UI ever change after rebase-recreate: ${changedAtLeastOnce}`);
+    console.log(`[final t=${Date.now() - startedAt}ms] chip=${lastChip} slots=${lastSlots} invoker-query-status=${lastTaskStatus}`);
+    console.log(`[verdict] saw active work after rebase-recreate: ${sawActiveWork}`);
+    console.log(`[verdict] saw failed task settle back to idle chrome: ${sawSettledFailure}`);
+
+    expect(sawActiveWork).toBe(true);
+    expect(sawSettledFailure).toBe(true);
   });
 });

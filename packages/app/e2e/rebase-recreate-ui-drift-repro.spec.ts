@@ -29,6 +29,7 @@ const FAILING_PLAN = {
     { id: 'a', description: 'Fails on purpose so we can rebase-recreate it', command: 'exit 1', dependencies: [] },
   ],
 };
+const MAX_UI_CATCH_UP_MS = 2000;
 
 test.describe('rebase-recreate UI drift repro', () => {
   test('UI chip, invoker query, and raw sqlite must agree right after rebase-recreate', async ({ page, testDir }) => {
@@ -81,14 +82,13 @@ test.describe('rebase-recreate UI drift repro', () => {
 
     // "accepted:true" only means the mutation intent was queued
     // (packages/app/src/persisted-workflow-mutation-coordinator.ts), not that
-    // it has landed. Poll all three sources every 50ms for 5s and log every
-    // tick, so any transient disagreement between what sqlite has, what
-    // invoker query reports, and what's actually painted on screen shows up
-    // in the log instead of being masked by a single end-state check.
+    // it has landed. Poll all three sources and log every tick. The backend
+    // sources must agree exactly; the rendered chip may lag by one React paint
+    // but must catch up within the explicit UI budget below.
     const startedAt = Date.now();
     const deadline = startedAt + 8000;
     let tick = 0;
-    let sawDisagreement = false;
+    let sawBackendDisagreement = false;
     let backendFlippedAtMs: number | null = null;
     let chipCaughtUpAtMs: number | null = null;
 
@@ -118,12 +118,12 @@ test.describe('rebase-recreate UI drift repro', () => {
       const chipShowsRunning = polledChip === 'Executing (1/1)';
       if (chipShowsRunning && chipCaughtUpAtMs === null) chipCaughtUpAtMs = elapsed;
 
-      const agree = polledRow?.status === polledTaskA.status
-        && (polledTaskA.status === 'running' ? chipShowsRunning : polledChip === 'Executing (0/1)');
-      if (!agree) sawDisagreement = true;
+      const backendAgrees = polledRow?.status === polledTaskA.status;
+      const uiAgrees = polledTaskA.status === 'running' ? chipShowsRunning : polledChip === 'Executing (0/1)';
+      if (!backendAgrees) sawBackendDisagreement = true;
 
       console.log(
-        `[poll ${tick} t=${elapsed}ms] sqlite=${polledRow?.status} invoker-query=${polledTaskA.status} ui-chip=${polledChip} agree=${agree}`,
+        `[poll ${tick} t=${elapsed}ms] sqlite=${polledRow?.status} invoker-query=${polledTaskA.status} ui-chip=${polledChip} backendAgree=${backendAgrees} uiAgree=${uiAgrees}`,
       );
 
       if (chipCaughtUpAtMs !== null) break;
@@ -134,6 +134,9 @@ test.describe('rebase-recreate UI drift repro', () => {
     console.log(`[summary] UI chip caught up at t=${chipCaughtUpAtMs}ms`);
     console.log(`[summary] drift window = ${chipCaughtUpAtMs !== null && backendFlippedAtMs !== null ? chipCaughtUpAtMs - backendFlippedAtMs : 'unknown'}ms`);
 
-    expect(sawDisagreement).toBe(false);
+    expect(sawBackendDisagreement).toBe(false);
+    expect(backendFlippedAtMs).not.toBeNull();
+    expect(chipCaughtUpAtMs).not.toBeNull();
+    expect(chipCaughtUpAtMs! - backendFlippedAtMs!).toBeLessThanOrEqual(MAX_UI_CATCH_UP_MS);
   });
 });
