@@ -105,6 +105,12 @@ assert_equal "$head_before_apply" "$head_after_apply" "apply must not create a c
 [[ "$(cat unrelated-untracked.txt)" == untracked-change ]] || fail "apply must preserve unrelated untracked content"
 [[ "$(cat tracked.txt)" == tracked-clean ]] || fail "apply must preserve unrelated tracked content"
 
+clean_before="$(snapshot)"
+bash scripts/scrub-handoff-artifacts.sh > "$TEST_ROOT/clean.out" 2>&1
+clean_after="$(snapshot)"
+assert_equal 'scrub-handoff-artifacts-ok' "$(cat "$TEST_ROOT/clean.out")" "clean check must report success"
+assert_equal "$clean_before" "$clean_after" "clean check must preserve repository state"
+
 mkdir -p work
 printf 'candidate\n' > work/candidates.json
 head_before_residual="$(git rev-parse HEAD)"
