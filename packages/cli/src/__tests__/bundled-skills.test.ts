@@ -590,8 +590,8 @@ describe('bundled-skills', () => {
     process.env.HOME = cliHome;
 
     try {
-      writeSkill(repoRoot, 'plan-to-invoker');
-      writePlanToInvokerCommands(repoRoot);
+      writeSkill(join(repoRoot, 'corpus'), 'plan-to-invoker');
+      writePlanToInvokerCommands(join(repoRoot, 'corpus'));
 
       installBundledSkills({
         isPackaged: false,
@@ -602,6 +602,7 @@ describe('bundled-skills', () => {
 
       const manifest = JSON.parse(readFileSync(join(invokerHomeRoot, 'bundled-skills.json'), 'utf-8'));
       expect(manifest.sourceRepoRoot).toBe(repoRoot);
+      expect(existsSync(join(cliHome, '.codex', 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
