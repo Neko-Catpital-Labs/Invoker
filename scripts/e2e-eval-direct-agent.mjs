@@ -121,10 +121,10 @@ export function gradeFromVerifier(verifier, verifierTimeoutMs) {
 }
 
 export function classifyInfrastructureFailure({ solver, verifier, invoker }) {
+  if (invoker?.missingWorkspace) return { kind: 'invoker-missing-workspace', message: invoker.missingWorkspace };
   if (verifier?.spawnError) return { kind: 'verifier-spawn', message: verifier.spawnError };
   if (solver?.spawnError) return { kind: 'solver-spawn', message: solver.spawnError };
   if (invoker?.spawnError) return { kind: 'invoker-spawn', message: invoker.spawnError };
-  if (invoker?.missingWorkspace) return { kind: 'invoker-missing-workspace', message: invoker.missingWorkspace };
   if (invoker?.dbReadError) return { kind: 'invoker-db-read', message: invoker.dbReadError };
   return null;
 }
@@ -329,6 +329,12 @@ export function checkRows(rows, { expectedCondition, expectedCount = 3 } = {}) {
   const timeout = rows.find((row) => row.taskId === 'timeout-after-final-state');
   check('timeout task classified as solver-timeout', timeout?.interruptionRecovery?.kind === 'solver-timeout');
   check('timeout task recovered by verifier', timeout?.interruptionRecovery?.recoveredByVerifier === true);
+  const missingWorkspaceFailure = classifyInfrastructureFailure({
+    solver: null,
+    verifier: { spawnError: 'missing invoker workspace for smoke-task' },
+    invoker: { missingWorkspace: 'missing invoker workspace for smoke-task' },
+  });
+  check('missing invoker workspace classified before synthesized verifier spawn', missingWorkspaceFailure?.kind === 'invoker-missing-workspace');
   check('all smoke tasks passed verifier', rows.every((row) => row.passed === true));
   return failures;
 }
