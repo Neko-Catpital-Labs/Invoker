@@ -683,7 +683,13 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: attemptDecision.reason };
   }
 
-  const forcedAgent = options.getForceExecutionAgent?.()?.trim();
+  let forcedAgent: string | undefined;
+  try {
+    forcedAgent = options.getForceExecutionAgent?.()?.trim();
+  } catch (error) {
+    options.attemptLedger.refund(attemptLedgerKey);
+    throw error;
+  }
   const configuredAgent = forcedAgent || options.getAutoFixAgent?.()?.trim();
   const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
   options.logger.debug?.(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-attempt-consumed`, {
