@@ -917,14 +917,16 @@ describe('SQLiteAdapter', () => {
     it('persists optional executionModel through saveTask and loadTask', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('model-task', {
-        config: { executionAgent: 'omp', executionModel: 'claude' },
+        config: { executionAgent: 'omp', executionAgentSource: 'default', executionModel: 'claude' },
       }));
       adapter.saveTask('wf-1', makeTask('no-model-task', {
         config: { executionAgent: 'omp' },
       }));
 
       expect(adapter.loadTask('model-task')?.config.executionModel).toBe('claude');
+      expect(adapter.loadTask('model-task')?.config.executionAgentSource).toBe('default');
       expect(adapter.loadTask('no-model-task')?.config.executionModel).toBeUndefined();
+      expect(adapter.loadTask('no-model-task')?.config.executionAgentSource).toBeUndefined();
     });
 
     it('loads all workflows and tasks in one startup snapshot', () => {
