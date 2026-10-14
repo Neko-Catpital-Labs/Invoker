@@ -278,8 +278,16 @@ export async function pollMergeGateTask(
   task: TaskState,
   source: 'refresh' | 'manual check',
 ): Promise<void> {
+  if (!task.execution.reviewGate && task.execution.reviewId) {
+    await pollLegacyReviewIdTask(host, task, source);
+    return;
+  }
+
   const artifacts = getCurrentRequiredReviewArtifacts(task);
-  if (artifacts.length === 0) return;
+  if (artifacts.length === 0) {
+    await pollLegacyReviewIdTask(host, task, source);
+    return;
+  }
   const workflow = task.config.workflowId
     ? host.persistence.loadWorkflow?.(task.config.workflowId)
     : undefined;
@@ -341,6 +349,37 @@ export async function pollMergeGateTask(
       await maybePublishReviewGateCiFailure(host, current!, status, providerId);
       await maybePublishReviewGateMergeConflict(host, current!, status, providerId);
     }
+  }
+}
+
+async function pollLegacyReviewIdTask(
+  host: TaskRunnerReviewGateHost,
+  task: TaskState,
+  source: 'refresh' | 'manual check',
+): Promise<void> {
+  const reviewId = task.execution.reviewId;
+  if (!reviewId || !host.mergeGateProvider) return;
+
+  host.orchestrator.recordTaskHeartbeat?.(task.id, { at: new Date(), source: 'executor' });
+
+  const gateCwd = task.execution.workspacePath ?? host.cwd;
+  const status = await host.mergeGateProvider.checkApproval({
+    identifier: reviewId,
+    cwd: gateCwd,
+  });
+  const current = host.orchestrator.getTask(task.id) ?? task;
+
+  host.persistence.updateTask(task.id, {
+    ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
+    execution: { reviewStatus: status.statusText },
+  });
+  if (status.lifecycle === 'merged') {
+    await handleApprovedMergeGate(host, task.id, reviewId, source);
+  } else if (status.rejected) {
+    host.logger.info(`[merge-gate] PR ${reviewId} rejected (${source}): ${status.statusText}`);
+  } else if (status.lifecycle === 'open') {
+    await maybePublishReviewGateCiFailure(host, current, status, reviewId);
+    await maybePublishReviewGateMergeConflict(host, current, status, reviewId);
   }
 }
 
