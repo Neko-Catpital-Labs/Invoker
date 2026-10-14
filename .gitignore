@@ -60,3 +60,6 @@ user.bazelrc
 packages/invoker_worker/.venv/
 packages/invoker_worker/*.egg-info/
 .pytest_cache/
+
+# cursor plans
+.cursor/plans
