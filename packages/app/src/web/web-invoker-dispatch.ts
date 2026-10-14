@@ -87,6 +87,7 @@ export interface WebInvokerDispatchDeps {
   taskTerminals?: TaskTerminalAdapter;
   ownerCapabilities?: Pick<OwnerCapabilityRegistry, 'has' | 'invoke'>;
   planningTerminals?: WebPlanningTerminals;
+  isPlanningToolInstalled?: (command: string) => boolean;
   logger?: Logger;
 }
 
@@ -271,7 +272,9 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:get-execution-harnesses':
         return filterExecutionHarnesses(agentRegistry.listExecutionHarnesses(), deps.loadConfig());
       case 'invoker:get-planning-presets':
-        return listInAppPlanningPresets(deps.loadConfig());
+        return deps.isPlanningToolInstalled
+          ? listInAppPlanningPresets(deps.loadConfig(), { isInstalled: deps.isPlanningToolInstalled })
+          : listInAppPlanningPresets(deps.loadConfig());
       case 'invoker:get-execution-defaults':
         return resolveDefaultTaskExecutionSettings(deps.loadConfig());
       case 'invoker:get-system-diagnostics':
