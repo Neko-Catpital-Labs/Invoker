@@ -38,8 +38,29 @@ export function outputMatchesLoginFailure(text: string): boolean {
   const lower = text.toLowerCase();
   return LOGIN_FAILURE_SIGNATURES.some((signature) => {
     if (!EXACT_TOKEN_SIGNATURES.has(signature)) return lower.includes(signature);
-    return new RegExp(`\\b${signature}\\b`).test(lower);
+    return includesExactToken(lower, signature);
   });
+}
+
+function includesExactToken(text: string, token: string): boolean {
+  let start = text.indexOf(token);
+  while (start !== -1) {
+    const before = start === 0 ? '' : text[start - 1];
+    const afterIndex = start + token.length;
+    const after = afterIndex >= text.length ? '' : text[afterIndex];
+    if (!isWordChar(before) && !isWordChar(after)) return true;
+    start = text.indexOf(token, start + token.length);
+  }
+  return false;
+}
+
+function isWordChar(value: string): boolean {
+  if (!value) return false;
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || code === 95;
 }
 
 export type AgentLoginProbeVerdict = 'ok' | 'login_failed' | 'unchecked';
