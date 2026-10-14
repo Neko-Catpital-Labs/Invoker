@@ -138,6 +138,7 @@ describe('planning chat send main-process cost', () => {
       sessions,
       planningCommandBuilder: vi.fn(() => ({ command: 'planner', args: ['prompt'] })),
       planningSessionStore,
+      isInstalled: () => true,
       plannerReplyOverride: async () => 'Captured the planning-send baseline without drafting a plan.',
     });
 

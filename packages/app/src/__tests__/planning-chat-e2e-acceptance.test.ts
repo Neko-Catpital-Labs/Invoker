@@ -133,6 +133,7 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> locked r
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         repoPool,
         planningSessionStore: adapter,
       });
@@ -151,6 +152,7 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> locked r
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         repoPool,
         planningSessionStore: adapter,
       });
@@ -169,6 +171,7 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> locked r
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         repoPool,
         planningSessionStore: adapter,
       });
@@ -189,6 +192,7 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> locked r
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         repoPool,
         planningSessionStore: adapter,
       });
@@ -232,6 +236,7 @@ describe('planning chat E2E acceptance: explore -> draft -> critique -> locked r
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         repoPool,
         planningSessionStore: adapter,
       });
@@ -290,6 +295,7 @@ describe('planning chat incident ad665bff: valid sidecar after repository answer
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         planningSessionStore: adapter,
         workingDir,
       });
@@ -311,6 +317,7 @@ describe('planning chat incident ad665bff: valid sidecar after repository answer
         loadGeneratedPlan,
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         planningSessionStore: adapter,
         workingDir,
       });
