@@ -1181,7 +1181,7 @@ test.describe('Visual proof capture', () => {
     await expect(transcript).toContainText('cursor: session expired');
     const streamStatus = page.getByTestId('invoker-terminal-planner-stream');
     await expect(streamStatus).toHaveAttribute('data-state', 'failed');
-    await expect(streamStatus).toContainText('Planning stopped. Try again when ready.');
+    await expect(streamStatus).toContainText('Planning stopped');
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
 
     await captureScreenshot(page, 'planner-retry-exhausted-error');

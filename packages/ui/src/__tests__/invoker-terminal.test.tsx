@@ -445,16 +445,17 @@ describe('Invoker terminal (component)', () => {
     expect(harness.querySelectorAll('option')).toHaveLength(0);
   });
 
-  it('announces the turn error and only renders Retry when a handler is provided', () => {
+  it('announces the turn error in-thread and only renders Retry when a handler is provided', () => {
     const { rerender } = render(<InvokerTerminal
       {...terminalProps({
         turnError: 'Planner was interrupted before it could answer.',
       })}
     />);
 
-    const errorBar = screen.getByTestId('invoker-terminal-turn-error');
-    expect(errorBar).toHaveAttribute('role', 'alert');
-    expect(errorBar).toHaveTextContent('Planner was interrupted before it could answer.');
+    const errorBanner = screen.getByTestId('invoker-terminal-turn-error');
+    expect(errorBanner).toHaveAttribute('role', 'alert');
+    expect(errorBanner).toHaveTextContent('Planning was interrupted');
+    expect(errorBanner).toHaveTextContent('Planner was interrupted before it could answer.');
     expect(screen.queryByTestId('invoker-terminal-retry-turn')).not.toBeInTheDocument();
 
     const onRetryTurn = vi.fn();
@@ -467,6 +468,36 @@ describe('Invoker terminal (component)', () => {
 
     fireEvent.click(screen.getByTestId('invoker-terminal-retry-turn'));
     expect(onRetryTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses consecutive identical system errors into one banner with a count', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        lines: [
+          { id: 1, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+          { id: 2, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+          { id: 3, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+        ],
+      })}
+    />);
+
+    expect(screen.getAllByTestId('invoker-terminal-error-banner')).toHaveLength(1);
+    expect(screen.getByTestId('invoker-terminal-error-count')).toHaveTextContent('3×');
+    expect(screen.getByText("Cursor isn't signed in")).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-copy-command')).toBeInTheDocument();
+  });
+
+  it('renders a right-aligned user bubble without a You label', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        lines: [{ id: 1, text: 'Plan a feature', role: 'user' }],
+      })}
+    />);
+
+    const bubble = screen.getByTestId('invoker-terminal-user-bubble');
+    expect(bubble.className).toContain('justify-end');
+    expect(bubble).toHaveTextContent('Plan a feature');
+    expect(screen.queryByText('You')).not.toBeInTheDocument();
   });
 
   it('preserves a still-valid model when switching harnesses', () => {
@@ -944,7 +975,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       const panel = screen.getByTestId('invoker-terminal-planner-stream');
       expect(panel).toHaveAttribute('data-state', 'failed');
-      expect(panel).toHaveTextContent('Planning stopped. Try again when ready.');
+      expect(panel).toHaveTextContent('Planning stopped');
+      expect(panel).not.toHaveTextContent('Try again when ready.');
       expect(screen.getByTestId('invoker-terminal-planner-stream-idle')).toBeInTheDocument();
       expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
     });
@@ -1117,7 +1149,7 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
-  it('renders chat role labels and fenced YAML in a mono code panel', async () => {
+  it('renders user bubbles and fenced YAML without You/System/Invoker labels', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
@@ -1135,12 +1167,15 @@ describe('Invoker terminal (component)', () => {
       expect(transcript).toHaveTextContent('I drafted the plan.');
       expect(transcript).toHaveTextContent('name: Fence Plan');
     });
-    expect(transcript).toHaveTextContent('You');
-    expect(transcript).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('invoker-terminal-user-bubble')).toHaveTextContent('draft it');
+    expect(screen.getByTestId('invoker-terminal-assistant-message')).toBeInTheDocument();
     expect(transcript.querySelector('pre code')).toBeTruthy();
     expect(transcript.querySelector('pre')?.className ?? '').toContain('font-mono');
-    expect(screen.queryByText('you ›')).not.toBeInTheDocument();
-    expect(screen.queryByText('invoker ›')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('You')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('System')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('Invoker')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('you ›')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('invoker ›')).not.toBeInTheDocument();
   });
 
   it('does not render reasoning details when a response includes reasoning', async () => {
@@ -1695,9 +1730,9 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('continue without losing context');
 
     await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-        'This planning chat lost its server session. Start a new chat to continue planning.',
-      );
+      const transcript = screen.getByTestId('invoker-terminal-transcript');
+      expect(transcript).toHaveTextContent('This planning chat lost its server session.');
+      expect(transcript).toHaveTextContent('Start a new chat to continue planning.');
     });
     expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('What do you want to build?');
@@ -2343,8 +2378,8 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getByTestId('invoker-terminal-input')).toHaveAttribute('placeholder', 'This window is read-only.');
   });
 
-  it('swaps the send icon for a pending spinner while a turn is running', () => {
-    render(<InvokerTerminal {...terminalProps({ busy: true })} />);
+  it('swaps the send icon for a pending spinner while binding', () => {
+    render(<InvokerTerminal {...terminalProps({ busy: true, binding: true })} />);
 
     const sendButton = screen.getByRole('button', { name: 'Send' });
     expect(sendButton).toBeDisabled();
@@ -2361,11 +2396,11 @@ describe('Invoker terminal (component)', () => {
     expect(sendButton).toHaveClass('hover:bg-amber-300');
   });
 
-  it('keeps the icon-only Send button disabled for empty input, busy state, and read-only sessions', () => {
+  it('keeps the icon-only Send button disabled for empty input, binding, and read-only sessions', () => {
     const { rerender } = render(<InvokerTerminal {...terminalProps({ value: '' })} />);
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
 
-    rerender(<InvokerTerminal {...terminalProps({ busy: true, value: 'draft a plan' })} />);
+    rerender(<InvokerTerminal {...terminalProps({ busy: true, binding: true, value: 'draft a plan' })} />);
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
 
     rerender(<InvokerTerminal {...terminalProps({ readOnly: true, value: 'draft a plan' })} />);
