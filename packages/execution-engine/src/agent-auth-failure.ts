@@ -14,10 +14,6 @@ export interface AgentAuthFailure {
 
 export { outputMatchesLoginFailure };
 
-/**
- * Auth signals that often precede a hang (Cursor status limbo, Codex 401
- * reconnect loops). After a short grace with no exit, planning aborts.
- */
 export const PLANNER_AUTH_LIMBO_OUTPUT_MARKERS = [
   'unable to fetch user details',
   '401 unauthorized',

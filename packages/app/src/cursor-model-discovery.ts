@@ -85,7 +85,6 @@ function resolveListModelsInvocation(
     accessSync(localBin, constants.X_OK);
     return { command: localBin, args: ['--list-models'] };
   } catch {
-    // fall through to wrapper
   }
 
   const wrapper = resolveExecutableOnCurrentPath(plannerCommand)
@@ -129,10 +128,6 @@ function runDiscovery(plannerCommand: string): CursorModelDiscoveryOutcome {
   return { kind: 'ok', models: parsed.models };
 }
 
-/**
- * Discover Cursor Agent models via `cursor-agent --list-models` (or `cursor agent --list-models`).
- * Results are cached for the application session (TTL). Pass `refresh: true` to bypass the cache.
- */
 export function discoverCursorPlanningModels(options?: {
   plannerCommand?: string;
   refresh?: boolean;

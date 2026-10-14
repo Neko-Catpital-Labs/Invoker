@@ -1,9 +1,5 @@
 import type { PlanningPresetSpec } from './prerequisites.js';
 
-/**
- * Legacy Cursor Agent aliases that the CLI no longer accepts as --model values.
- * Map them to real model ids so older configs and preset keys keep working.
- */
 export const CURSOR_PLANNING_MODEL_ALIASES: Readonly<Record<string, string>> = {
   claude: 'claude-4.5-sonnet',
   codex: 'gpt-5.3-codex',
@@ -16,14 +12,9 @@ export function resolveCursorPlanningModel(model: string | undefined): string | 
 }
 
 export interface BuiltinPlanningPresetEntry extends PlanningPresetSpec {
-  /** UI label for the Model/Harness picker. */
   label: string;
 }
 
-/**
- * Built-in planning presets. Cursor entries use real `cursor-agent --list-models`
- * ids (not aliases like "claude"/"codex").
- */
 export const BUILTIN_PLANNING_PRESET_ENTRIES: Record<string, BuiltinPlanningPresetEntry> = {
   'cursor+auto': { tool: 'cursor', model: 'auto', label: 'Auto' },
   'cursor+composer-2.5': { tool: 'cursor', model: 'composer-2.5', label: 'Composer 2.5' },
@@ -63,7 +54,6 @@ export function labelForBuiltinPlanningPreset(key: string): string | undefined {
   return BUILTIN_PLANNING_PRESET_ENTRIES[key]?.label;
 }
 
-/** Curated Cursor model ids (lowercased) from the builtin recommended list. */
 export function curatedCursorPlanningModelIds(): Set<string> {
   const ids = new Set<string>();
   for (const entry of Object.values(BUILTIN_PLANNING_PRESET_ENTRIES)) {

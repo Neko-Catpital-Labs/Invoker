@@ -1,7 +1,3 @@
-/**
- * Pure parse helpers for Cursor Agent `cursor-agent --list-models` text output.
- * Discovery spawn/cache lives in the app layer; this module stays side-effect free.
- */
 
 export interface CursorDiscoveredModel {
   id: string;

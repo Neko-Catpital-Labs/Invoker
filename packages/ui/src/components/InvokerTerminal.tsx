@@ -47,7 +47,6 @@ export interface PlanningHarnessChoice {
 export const PLANNING_TOOLS_EMPTY_PATH_MESSAGE =
   "No planning tools on Invoker's PATH. Install one (e.g. Cursor), then restart Invoker. Check with: invoker-cli doctor";
 
-/** Must match `PLANNING_TURN_CANCELLED_MESSAGE` in packages/app/src/in-app-planner.ts. */
 export const PLANNING_TURN_CANCELLED_MESSAGE = 'Cancelled.';
 
 export function isPlanningCancelledFailure(message: string | null | undefined): boolean {
@@ -80,7 +79,6 @@ function formatPlanningHarnessLabel(tool: string, options: PlanningPresetOptionV
 
 function formatPlanningModelLabel(model: string, fallbackLabel?: string): string {
   const trimmed = fallbackLabel?.trim();
-  // Prefer builtin model labels; skip harness-compound labels like "Claude via OMP".
   if (trimmed && !/[+]|\bvia\b/i.test(trimmed)) {
     return trimmed;
   }
@@ -157,9 +155,7 @@ interface InvokerTerminalProps {
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
-  /** True while planning presets / Cursor model discovery is in flight. */
   planningPresetsLoading?: boolean;
-  /** Concise Cursor discovery warning (failed/empty); omit when ok/skipped. */
   cursorDiscoveryWarning?: string | null;
   selectedConfirmationMode: PlanningConfirmationMode;
   draftPlanAvailable: boolean;
@@ -936,7 +932,6 @@ export function InvokerTerminal({
   const selectedPreset = useMemo(() => {
     const matched = findPresetOption(presetOptions, selectedPresetKey);
     if (matched) return matched;
-    // Do not silently switch away from a saved/selected key that discovery dropped.
     if (selectedPresetKey) return undefined;
     return presetOptions[0];
   }, [presetOptions, selectedPresetKey]);
@@ -953,7 +948,6 @@ export function InvokerTerminal({
         ]
       : [];
     if (!selectedPresetKey || base.some((option) => option.key === selectedPresetKey)) return base;
-    // Keep a saved selection visible even when live discovery no longer lists it.
     return [
       ...base,
       {
@@ -968,7 +962,6 @@ export function InvokerTerminal({
   const recommendedModelOptions = modelSelectOptions.filter((option) => option.section !== 'more');
   const moreModelOptions = modelSelectOptions.filter((option) => option.section === 'more');
   const showModelSelect = Boolean(selectedHarness && selectedHarness.modelPresets.length > 0);
-  // Prefer the caller's selected key so discovery refresh never visually swaps the model.
   const selectedModelPresetKey = selectedPresetKey || modelSelectOptions[0]?.key || '';
 
   const handleHarnessChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {

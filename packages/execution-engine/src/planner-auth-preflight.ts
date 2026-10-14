@@ -51,8 +51,6 @@ export function resolvePlannerAuthPreflightHarness(
   tool: string | undefined,
 ): PlannerAuthPreflightHarness | 'unsupported' {
   const key = (tool ?? '').trim().toLowerCase();
-  // Cursor presets own the CLI auth gate even when a model suffix is present
-  // (e.g. cursor+codex). Check cursor before +codex/+claude suffixes.
   if (key === 'cursor' || key.startsWith('cursor')) return 'cursor';
   if (key === 'claude' || key.endsWith('+claude') || key.startsWith('claude')) return 'claude';
   if (key === 'codex' || key.endsWith('+codex') || key.startsWith('codex')) return 'codex';
@@ -235,7 +233,6 @@ export async function runPlannerAuthPreflight(options: {
     env,
   });
   const runner = options.runner ?? defaultPlannerAuthPreflightRunner;
-  // Injected runners (tests) may supply outcomes without a real binary on PATH.
   if (!executable && !options.runner) {
     return {
       status: 'unknown',

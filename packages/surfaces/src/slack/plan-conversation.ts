@@ -131,7 +131,6 @@ class RetryableEmptyPlannerOutputError extends Error {
   }
 }
 
-/** User/host cancelled the in-flight planner subprocess before it finished. */
 export class PlanningTurnCancelledError extends Error {
   constructor() {
     super('Cancelled.');
@@ -166,16 +165,9 @@ export interface PlanConversationConfig {
   plannerScratchRoot?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
   timeoutMs?: number;
-  /**
-   * How long to wait after auth-limbo stderr before aborting. Default:
-   * {@link PLANNER_AUTH_LIMBO_GRACE_MS}. Tests may lower this.
-   */
   authLimboGraceMs?: number;
-  /** Per-harness auth preflight timeout. Tests may lower this. */
   authPreflightTimeoutMs?: number;
-  /** Injectable preflight command runner for tests. */
   authPreflightRunner?: PlannerAuthPreflightCommandRunner;
-  /** When false, skip auth preflight (tests that only exercise spawn). Default true. */
   authPreflightEnabled?: boolean;
   /** Slack thread timestamp. Required for persistence. */
   threadTs?: string;
@@ -1202,10 +1194,6 @@ export class PlanConversation {
 
   // ── Planner CLI Subprocess ─────────────────────────────
 
-  /**
-   * Switch harness/tool for later turns without dropping conversation history.
-   * Clears any continuity session id so the next turn starts fresh on the new harness.
-   */
   rebindHarness(options: {
     tool?: string;
     model?: string;
@@ -1217,15 +1205,10 @@ export class PlanConversation {
     this._harnessSessionId = undefined;
   }
 
-  /** Active planning tool name (e.g. cursor/codex/claude), if set. */
   get planningTool(): string | undefined {
     return this.tool;
   }
 
-  /**
-   * Kill the in-flight planner process tree, if any. Rejects the active
-   * spawn promise with {@link PlanningTurnCancelledError}.
-   */
   abortActiveTurn(): boolean {
     if (!this.activePlannerChild && !this.activePlannerReject) return false;
     this.activePlannerAbortRequested = true;

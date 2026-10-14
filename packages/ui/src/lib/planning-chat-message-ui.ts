@@ -13,7 +13,6 @@ export function extractPlanningChatCopyCommand(text: string): string | null {
     .map((match) => match[1]?.trim() ?? '')
     .filter(Boolean);
   if (commands.length === 0) return null;
-  // Prefer the direct agent binary — `cursor agent login` can hang on status.
   const preferred = commands.find((command) => command === 'cursor-agent login');
   return preferred ?? commands[0] ?? null;
 }
@@ -117,7 +116,6 @@ export function planningChatSenderKind(
   return 'system-notice';
 }
 
-/** Presentational collapse of consecutive identical system errors. Does not mutate storage. */
 export function collapsePlanningChatLines<T extends {
   id: number;
   text: string;

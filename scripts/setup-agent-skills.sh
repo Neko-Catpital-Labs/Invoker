@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Install bundled Invoker skills into local agent skill directories.
 # Safe to run repeatedly. Installs prefixed copies such as invoker-plan-to-invoker.
-# Stops this checkout's local DB owner before install-skills so the one-shot
-# headless process can acquire the writer lock.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

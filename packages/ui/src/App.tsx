@@ -797,7 +797,6 @@ export function App() {
           setSelectedPlanningPresetKey(defaultOption?.key ?? '');
           setSelectedPlanningConfirmationMode(defaultOption?.defaultConfirmationMode ?? 'require');
         } else {
-          // Preserve the user's selection even when discovery drops or renames a model.
           setSelectedPlanningPresetKey((previous) => previous);
         }
       })

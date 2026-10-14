@@ -236,7 +236,6 @@ function resolveDefaultSkillsContext(): {
   try {
     repoRoot = resolveRepoRoot(process.cwd());
   } catch {
-    // Packaged / non-checkout installs still discover from home + harness paths.
   }
   return {
     isPackaged: false,

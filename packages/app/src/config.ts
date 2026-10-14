@@ -788,8 +788,6 @@ function wrapperPresetMatchesAllowlist(
   if (!WRAPPER_PLANNING_TOOLS[tool]) return false;
   const model = preset.model?.trim().toLowerCase();
   if (model && enabled.has(model)) return true;
-  // Cursor presets use real CLI model ids; match legacy allowlists via key suffix
-  // (e.g. cursor+codex → codex) rather than requiring model === "codex".
   const keySuffix = preset.key?.split('+').pop()?.trim().toLowerCase();
   if (keySuffix && enabled.has(keySuffix)) return true;
   if (model && enabled.has('claude') && model.includes('claude')) return true;

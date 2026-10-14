@@ -129,7 +129,6 @@ export interface InAppPlannerDeps {
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
   /** Canonical full skill-doctor script. Kept separate from target worktrees. */
   planDoctorScriptPath?: string;
-  /** PATH probe for planner tools (injectable for tests; defaults to {@link commandIsOnPath}). */
   isInstalled?: (command: string) => boolean;
 }
 
@@ -1045,7 +1044,6 @@ export async function listInAppPlanningPresets(
   opts?: {
     isInstalled?: (command: string) => boolean;
     refreshCursorModels?: boolean;
-    /** When true, skip live Cursor discovery (tests / fast path). */
     skipCursorDiscovery?: boolean;
   },
 ): Promise<PlanningPresetsResponse> {
@@ -1161,11 +1159,6 @@ export function listPlanningChatSessions(
   return { ok: true, sessions };
 }
 
-/**
- * UI sends the selected preset with every turn. Apply it to the live session so
- * harness switches take effect on the next message instead of keeping the
- * PlanConversation tool/driver from session creation.
- */
 async function syncPlanningSessionPreset(
   session: InAppPlanningChatSession,
   requestedPresetKey: string | undefined,
