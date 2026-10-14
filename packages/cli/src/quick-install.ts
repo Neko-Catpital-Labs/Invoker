@@ -109,7 +109,7 @@ export function formatQuickInstallDemoTranscript(): string {
     '    Doctor finished (optional tools may still be missing).',
     '',
     '==> Skills/MCP (opt-in only)...',
-    '    Skills/MCP: skipped (opt in with invoker-cli setup --register-harnesses).',
+    '    Skills/MCP: installed under Invoker home (harness wiring stays opt-in: invoker-cli setup --register-harnesses).',
     '    Slack: skipped (optional: invoker-cli setup slack)',
     '    Remote machines: skipped (optional: invoker-cli setup machines)',
     '',
@@ -145,7 +145,8 @@ export async function runInstall(
     if (arg === '-h' || arg === '--help') {
       io.print('Usage: invoker-cli install [--demo]');
       io.print('');
-      io.print('Set up the UI and default workers. Skills and MCP stay opt-in via invoker-cli setup --register-harnesses.');      io.print('Also runs doctor --fix and ensures global cli+ui packages. Skips Slack and remote machines.');
+      io.print('Set up the UI and default workers. Skills and MCP stay opt-in via invoker-cli setup --register-harnesses.');
+      io.print('Also runs doctor --fix and ensures global cli+ui packages. Skips Slack and remote machines.');
       return 0;
     }
     throw new Error(`Unknown install option: ${arg}`);

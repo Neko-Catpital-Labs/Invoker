@@ -236,7 +236,8 @@ describe('invoker-cli --help integration', () => {
     const code = await main(['set', 'prompt', 'missing-task', '--', '-h']);
     output.restore();
     expect(output.stdout).not.toContain('Usage: invoker-cli set');
-    expect(code).not.toBe(0);  });
+    expect(code).not.toBe(0);
+  });
 
   it('--version still prints only the version', async () => {
     const output = captureProcessOutput();

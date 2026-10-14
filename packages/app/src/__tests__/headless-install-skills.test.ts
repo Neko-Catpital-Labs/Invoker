@@ -47,11 +47,12 @@ describe('headless install-skills', () => {
     expect(output).toContain('- invoker-make-pr');
   });
 
-  it('prints a one-line install note on stderr and the opt-in hint when registration was skipped', async () => {    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  it('prints a one-line MCP skip on stderr and still reports installed helpers', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const installBundledSkills = vi.fn(() => ({
       ...makeStatus(),
-      harnessesRegistered: false,      lastInstallError: 'Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object',
+      lastInstallError: 'Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object',
     }));
 
     await runHeadless(['install-skills', 'reinstall'], {
@@ -63,24 +64,10 @@ describe('headless install-skills', () => {
     expect(output).toContain('Installed 2 bundled AI helpers with prefix "invoker-".');
     expect(output).toContain('Harness MCP/skills stay opt-in');
     expect(err).toContain('Install note: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
+    expect(err).not.toContain('MCP skipped');
     expect(err).not.toContain('at installBundledSkills');
   });
 
-  it('omits the opt-in hint after a registering install', async () => {
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const installBundledSkills = vi.fn(() => ({
-      ...makeStatus(),
-      harnessesRegistered: true,
-    }));
-
-    await runHeadless(['install-skills', 'reinstall'], {
-      installBundledSkills,
-    } as unknown as HeadlessDeps);
-
-    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
-    expect(output).toContain('Installed 2 bundled AI helpers with prefix "invoker-".');
-    expect(output).not.toContain('Harness MCP/skills stay opt-in');
-  });
   it('prints Uninstalled when install-skills uninstall runs', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);

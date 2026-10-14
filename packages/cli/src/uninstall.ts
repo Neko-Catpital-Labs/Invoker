@@ -162,9 +162,9 @@ export function formatUninstallHelp(): string {
 export function uninstallCoverageTable(): UninstallCoverageRow[] {
   return [
     {
-      area: 'setup --register-harnesses / leftover home skill cleanup',
+      area: 'invoker-cli install / setup skills + local MCP',
       coverage: 'supported',
-      note: 'Harness skill/MCP/instruction entries; leftover home skill/snippet cleanup; manifest',
+      note: 'Invoker home skills, commands, MCP snippet, manifest',
     },
     {
       area: 'setup --register-harnesses',
@@ -306,7 +306,7 @@ async function discoverDesiredStateWorkerResources(): Promise<UninstallResource[
   const out: UninstallResource[] = [];
   const dbPath = join(resolveCliInstanceProfile().homeRoot, 'invoker.db');
   if (!existsSync(dbPath)) return out;
-  const store = await openWorkerDesiredStateStore(dbPath, { readOnly: true });
+  const store = await openWorkerDesiredStateStore();
   try {
     for (const id of QUICK_INSTALL_WORKER_IDS) {
       const spec = findWorkerToggle(id);
@@ -513,26 +513,7 @@ async function disableQuickInstallWorkers(): Promise<UninstallResultEntry[]> {
   let config = existsSync(configPath) ? readInvokerConfigFile(configPath) : null;
   let configChanged = false;
   const dbPath = join(profile.homeRoot, 'invoker.db');
-  let desiredStore: Awaited<ReturnType<typeof openWorkerDesiredStateStore>> | null = null;
-  if (existsSync(dbPath)) {
-    try {
-      desiredStore = await openWorkerDesiredStateStore();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      results.push({
-        resource: {
-          id: 'worker:desired-state-store',
-          kind: 'worker_toggle',
-          path: dbPath,
-          detail: 'desired-state worker store',
-          present: true,
-          userModified: false,
-          scope: 'integration',
-        },
-        status: `failed: ${message}`,
-      });
-    }
-  }
+  const desiredStore = existsSync(dbPath) ? await openWorkerDesiredStateStore() : null;
   try {
     for (const id of QUICK_INSTALL_WORKER_IDS) {
       const spec = findWorkerToggle(id);
@@ -583,39 +564,9 @@ async function disableQuickInstallWorkers(): Promise<UninstallResultEntry[]> {
     desiredStore?.close?.();
   }
   if (configChanged && config) {
-    try {
-      writeInvokerConfigFile(configPath, config);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      markPolicyToggleResultsFailed(results, configPath, message);
-      results.push({
-        resource: {
-          id: 'worker:config-write',
-          kind: 'worker_toggle',
-          path: configPath,
-          detail: 'quick-install worker config write',
-          present: true,
-          userModified: false,
-          scope: 'integration',
-        },
-        status: `failed: ${message}`,
-      });
-    }
+    writeInvokerConfigFile(configPath, config);
   }
   return results;
-}
-
-export function markPolicyToggleResultsFailed(
-  results: Array<{ resource: UninstallResource; status: UninstallResourceStatus }>,
-  configPath: string,
-  message: string,
-): void {
-  for (const entry of results) {
-    if (entry.status !== 'removed') continue;
-    if (entry.resource.kind !== 'worker_toggle') continue;
-    if (entry.resource.path !== configPath) continue;
-    entry.status = `failed: ${message}`;
-  }
 }
 
 async function defaultExecuteIntegrations(
