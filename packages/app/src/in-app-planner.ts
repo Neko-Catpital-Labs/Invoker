@@ -37,8 +37,8 @@ import type {
   PlanningTerminalMode,
   PlanningPresetOption,
   PlanningPresetsResponse,
-  type CursorModelDiscoverySummary,
-  type PlanningModelAvailability,
+  CursorModelDiscoverySummary,
+  PlanningModelAvailability,
 } from '@invoker/contracts';
 import {
   curatedCursorPlanningModelIds,
@@ -175,6 +175,17 @@ export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
 }
 
 export const PLANNING_TURN_CANCELLED_MESSAGE = 'Cancelled.';
+
+function isTurnAlreadyMarkedCancelled(
+  status: InAppPlanningTurnStatus | undefined,
+  error: string | undefined,
+  activeTurnId: string | undefined,
+  turnId: string,
+): boolean {
+  return status === 'failed'
+    && error === PLANNING_TURN_CANCELLED_MESSAGE
+    && activeTurnId === turnId;
+}
 
 function isModuleResolutionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -1504,9 +1515,12 @@ export async function sendPlanningChatMessage(
         const failureMessage = cancelled
           ? PLANNING_TURN_CANCELLED_MESSAGE
           : error instanceof Error ? error.message : String(error);
-        const alreadyCancelled = activeSession.activeTurnStatus === 'failed'
-          && activeSession.activeTurnError === PLANNING_TURN_CANCELLED_MESSAGE
-          && activeSession.activeTurnId === turnId;
+        const alreadyCancelled = isTurnAlreadyMarkedCancelled(
+          activeSession.activeTurnStatus,
+          activeSession.activeTurnError,
+          activeSession.activeTurnId,
+          turnId,
+        );
         if (!alreadyCancelled) {
           activeSession.activeTurnStatus = 'failed';
           activeSession.activeTurnError = failureMessage;
