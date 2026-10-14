@@ -82,6 +82,7 @@ describe('restored in-app planning chat conversational mode', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder,
+      isInstalled: () => true,
     });
 
     expect(result.ok).toBe(true);
