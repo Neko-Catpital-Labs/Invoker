@@ -162,9 +162,9 @@ export function formatUninstallHelp(): string {
 export function uninstallCoverageTable(): UninstallCoverageRow[] {
   return [
     {
-      area: 'setup --register-harnesses / leftover home skill cleanup',
+      area: 'invoker-cli install / setup skills + local MCP',
       coverage: 'supported',
-      note: 'Harness skill/MCP/instruction entries; leftover home skill/snippet cleanup; manifest',
+      note: 'Invoker home skills, commands, MCP snippet, manifest',
     },
     {
       area: 'setup --register-harnesses',

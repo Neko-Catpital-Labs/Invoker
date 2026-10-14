@@ -107,7 +107,7 @@ describe('uninstall discovery + dry-run', () => {
       isInstalled: () => true,
     }, 'install', 'all', { registerHarnesses: true });
 
-    const skillPath = join(fakeHome, '.cursor', 'skills', 'invoker-plan-to-invoker', 'SKILL.md');
+    const skillPath = join(invokerHome, 'skills', 'invoker-plan-to-invoker', 'SKILL.md');
     expect(existsSync(skillPath)).toBe(true);
     const beforeMcp = readFileSync(mcpPath, 'utf8');
     const beforeSkill = readFileSync(skillPath, 'utf8');
@@ -130,7 +130,7 @@ describe('uninstall discovery + dry-run', () => {
     const out = lines.join('\n');
     expect(out).toContain('Uninstall plan:');
     expect(out).toContain(mcpPath);
-    expect(out).toContain(join(fakeHome, '.cursor', 'skills', 'invoker-plan-to-invoker'));
+    expect(out).toContain(join(invokerHome, 'skills', 'invoker-plan-to-invoker'));
     expect(out).toContain('Coverage:');
     expect(out).toContain('supported');
     expect(out).toContain('excluded');
@@ -210,7 +210,7 @@ describe('uninstall execute integrations', () => {
     expect(existsSync(rulePath)).toBe(true);
     writeFileSync(rulePath, '# user edited this rule\n');
 
-    const skillDir = join(fakeHome, '.cursor', 'skills', 'invoker-plan-to-invoker');
+    const skillDir = join(invokerHome, 'skills', 'invoker-plan-to-invoker');
     expect(existsSync(skillDir)).toBe(true);
     writeFileSync(join(invokerHome, 'config.json'), '{}\n');
 
@@ -497,7 +497,7 @@ describe('uninstall data + npm + exit codes', () => {
     }, 'install', 'all', { registerHarnesses: true });
     writeFileSync(join(invokerHome, 'config.json'), '{}\n');
 
-    const skillDir = join(fakeHome, '.cursor', 'skills', 'invoker-plan-to-invoker');
+    const skillDir = join(invokerHome, 'skills', 'invoker-plan-to-invoker');
     expect(existsSync(skillDir)).toBe(true);
 
     // Simulate interrupt after integrations only (data/npm not yet run).
