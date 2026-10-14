@@ -566,7 +566,7 @@ describe('planning chat', () => {
     const second = await sendPlanningChatMessage({
       sessionId: first.sessionId,
       message: 'more detail',
-      presetKey: 'omp+claude',
+      presetKey: 'codex',
     }, {
       config: {},
       loadGeneratedPlan: vi.fn(),
@@ -1397,7 +1397,7 @@ tasks:
     {
       presetKey: 'cursor+codex',
       error: 'cursor: Authentication required. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.',
-      systemIncludes: ['Cursor + Codex isn\'t authenticated', 'cursor agent login', 'cursor-agent login'],
+      systemIncludes: ['GPT-5.3 Codex isn\'t authenticated', 'cursor agent login', 'cursor-agent login'],
     },
     {
       presetKey: 'codex',

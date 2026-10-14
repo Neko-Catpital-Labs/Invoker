@@ -187,9 +187,9 @@ export function uninstallCoverageTable(): UninstallCoverageRow[] {
       note: 'Removed last after integrations and home data',
     },
     {
-      area: 'Invoker home data (config, .env, DB, outputs)',
+      area: 'Invoker home data (config, .env, DB, outputs, worktrees, repos)',
       coverage: 'supported',
-      note: 'Current CLI home + ~/.invoker-cli when present; skip with --keep-data',
+      note: 'Deletes the whole home root (including worktrees/ and repos/); skip with --keep-data',
     },
     {
       area: 'Desktop install.sh channels (DMG / AppImage / .deb)',
@@ -251,6 +251,8 @@ function homeDataPaths(homeRoot: string): Array<{ id: string; path: string; deta
     { id: `data:db:${homeRoot}`, path: join(homeRoot, 'invoker.db'), detail: 'invoker.db' },
     { id: `data:outputs:${homeRoot}`, path: join(homeRoot, 'outputs'), detail: 'outputs/' },
     { id: `data:log:${homeRoot}`, path: join(homeRoot, 'invoker.log'), detail: 'invoker.log' },
+    { id: `data:worktrees:${homeRoot}`, path: join(homeRoot, 'worktrees'), detail: 'worktrees/' },
+    { id: `data:repos:${homeRoot}`, path: join(homeRoot, 'repos'), detail: 'repos/' },
   ];
 }
 
@@ -303,7 +305,7 @@ async function discoverDesiredStateWorkerResources(): Promise<UninstallResource[
   const out: UninstallResource[] = [];
   const dbPath = join(resolveCliInstanceProfile().homeRoot, 'invoker.db');
   if (!existsSync(dbPath)) return out;
-  const store = await openWorkerDesiredStateStore();
+  const store = await openWorkerDesiredStateStore(dbPath, { readOnly: true });
   try {
     for (const id of QUICK_INSTALL_WORKER_IDS) {
       const spec = findWorkerToggle(id);
@@ -510,7 +512,26 @@ async function disableQuickInstallWorkers(): Promise<UninstallResultEntry[]> {
   let config = existsSync(configPath) ? readInvokerConfigFile(configPath) : null;
   let configChanged = false;
   const dbPath = join(profile.homeRoot, 'invoker.db');
-  const desiredStore = existsSync(dbPath) ? await openWorkerDesiredStateStore() : null;
+  let desiredStore: Awaited<ReturnType<typeof openWorkerDesiredStateStore>> | null = null;
+  if (existsSync(dbPath)) {
+    try {
+      desiredStore = await openWorkerDesiredStateStore();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      results.push({
+        resource: {
+          id: 'worker:desired-state-store',
+          kind: 'worker_toggle',
+          path: dbPath,
+          detail: 'desired-state worker store',
+          present: true,
+          userModified: false,
+          scope: 'integration',
+        },
+        status: `failed: ${message}`,
+      });
+    }
+  }
   try {
     for (const id of QUICK_INSTALL_WORKER_IDS) {
       const spec = findWorkerToggle(id);
@@ -561,7 +582,23 @@ async function disableQuickInstallWorkers(): Promise<UninstallResultEntry[]> {
     desiredStore?.close?.();
   }
   if (configChanged && config) {
-    writeInvokerConfigFile(configPath, config);
+    try {
+      writeInvokerConfigFile(configPath, config);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      results.push({
+        resource: {
+          id: 'worker:config-write',
+          kind: 'worker_toggle',
+          path: configPath,
+          detail: 'quick-install worker config write',
+          present: true,
+          userModified: false,
+          scope: 'integration',
+        },
+        status: `failed: ${message}`,
+      });
+    }
   }
   return results;
 }

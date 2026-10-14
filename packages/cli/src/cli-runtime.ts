@@ -230,9 +230,15 @@ function usage(): string {
   return formatRootHelp();
 }
 
+function argvBeforeDoubleDash(argv: readonly string[]): readonly string[] {
+  const separatorIndex = argv.indexOf('--');
+  return separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+}
+
 function maybeThrowArgvHelp(argv: readonly string[]): void {
-  if (!argv.some(isHelpFlag)) return;
-  const withoutHelp = argv.filter((arg) => !isHelpFlag(arg));
+  const scannable = argvBeforeDoubleDash(argv);
+  if (!scannable.some(isHelpFlag)) return;
+  const withoutHelp = scannable.filter((arg) => !isHelpFlag(arg));
   if (withoutHelp.length === 0) {
     throw new CliHelpSignal(usage());
   }

@@ -289,10 +289,17 @@ export function applyDesiredStateWorkerToggle(
   }
 }
 
-/** Open the owner DB for toggle read/write. Caller must close. */
+/** Open the owner DB for toggle read/write (or read-only discovery). Caller must close. */
 export async function openWorkerDesiredStateStore(
   dbPath: string = resolveInvokerDbPath(),
+  options: { readOnly?: boolean } = {},
 ): Promise<WorkerDesiredStateStore> {
+  if (options.readOnly === true) {
+    return SQLiteAdapter.create(dbPath, {
+      outputDir: resolveInvokerOutputDir(dbPath),
+      readOnly: true,
+    });
+  }
   return SQLiteAdapter.create(dbPath, {
     outputDir: resolveInvokerOutputDir(dbPath),
     ownerCapability: true,

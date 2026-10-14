@@ -1156,7 +1156,10 @@ export function installBundledSkills(
   removeLeftoverHomeSkillArtifacts(invokerHomeRoot);
 
   if (!registerHarnesses) {
-    return resolveBundledSkillsStatus(context);
+    return {
+      ...resolveBundledSkillsStatus(context),
+      harnessesRegistered: false,
+    };
   }
 
   const previousManifest = readManifest(invokerHomeRoot);
@@ -1222,6 +1225,7 @@ export function installBundledSkills(
   return {
     ...status,
     promptRecommended: false,
+    harnessesRegistered: true,
   };
 }
 
@@ -1348,7 +1352,8 @@ const STATUS_ABSENT = 'absent';
 export type BundledOwnedRemovalStatus =
   | typeof STATUS_REMOVED
   | typeof STATUS_KEPT_USER_MODIFIED
-  | typeof STATUS_ABSENT;
+  | typeof STATUS_ABSENT
+  | `failed: ${string}`;
 
 function directoriesMatch(leftPath: string, rightPath: string): boolean {
   if (!existsSync(leftPath) || !existsSync(rightPath)) return false;
@@ -1731,10 +1736,18 @@ export function executeBundledIntegrationsUninstall(
   const results: Array<{ resource: BundledOwnedResource; status: BundledOwnedRemovalStatus }> = [];
   for (const phase of phaseOrder) {
     for (const resource of discovered.filter((entry) => entry.executePhase === phase)) {
-      results.push({
-        resource,
-        status: executeBundledOwnedResourceRemoval(resource, context),
-      });
+      try {
+        results.push({
+          resource,
+          status: executeBundledOwnedResourceRemoval(resource, context),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({
+          resource,
+          status: `failed: ${message}`,
+        });
+      }
     }
   }
   return results;

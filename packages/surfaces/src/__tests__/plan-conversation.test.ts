@@ -75,6 +75,12 @@ function mockCursorResponse(text: string) {
   mockSpawn.mockReturnValueOnce(createMockProcess(text));
 }
 
+async function waitForPlannerSpawn(callCount = 1): Promise<void> {
+  await vi.waitFor(() => {
+    expect(mockSpawn).toHaveBeenCalledTimes(callCount);
+  });
+}
+
 /** Helper: parse the returned plan text string into an object for assertions. */
 function parsePlanText(text: string): Record<string, any> {
   return parseYaml(text) as Record<string, any>;
@@ -748,7 +754,7 @@ describe('PlanConversation', () => {
     mockSpawn.mockReturnValueOnce(proc);
 
     const promise = conv.sendMessage('Hello');
-    await Promise.resolve();
+    await waitForPlannerSpawn();
 
     proc.stdout.emit('data', Buffer.from('chunk1'));
     expect(chunks).toEqual(['chunk1']);
@@ -770,7 +776,7 @@ describe('PlanConversation', () => {
     mockSpawn.mockReturnValueOnce(proc);
 
     const promise = conv.sendMessage('Hello');
-    await Promise.resolve();
+    await waitForPlannerSpawn();
 
     proc.stdout.emit('data', Buffer.from('  final '));
     proc.stdout.emit('data', Buffer.from('reply  '));
@@ -849,7 +855,7 @@ describe('PlanConversation', () => {
     mockSpawn.mockReturnValueOnce(proc);
 
     const promise = conv.sendMessage('Hello');
-    await Promise.resolve();
+    await waitForPlannerSpawn();
 
     proc.stdout.emit('data', Buffer.from('partial '));
     proc.stdout.emit('data', Buffer.from('reply'));

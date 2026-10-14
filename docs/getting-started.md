@@ -159,7 +159,7 @@ For desktop binary packages only (no npm/skills), the repo includes an installer
 curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash
 ```
 
-For CLI + UI + skills/MCP in one step, use `npx @neko-catpital-labs/invoker-cli@latest install` (or the optional Node wrapper [`scripts/bootstrap.sh`](../scripts/bootstrap.sh)).
+For CLI + UI + default workers, use `npx @neko-catpital-labs/invoker-cli@latest install` (or the optional Node wrapper [`scripts/bootstrap.sh`](../scripts/bootstrap.sh)). Harness skills and MCP stay opt-in: run `invoker-cli setup --register-harnesses` (or answer yes during interactive setup).
 
 Tagged releases are configured to publish:
 - standalone CLI binaries and `.tar.gz` archives for macOS and Linux on x64 and arm64

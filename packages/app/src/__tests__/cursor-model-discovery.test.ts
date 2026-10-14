@@ -29,6 +29,7 @@ const SAMPLE_CATALOG = [
   'gpt-5.3-codex - Codex 5.3',
   'brand-new-model - Brand New Model',
   'brand-new-model-fast - Brand New Model Fast',
+  'gemini-3.1-pro - Gemini 3.1 Pro',
 ].join('\n');
 
 describe('discoverCursorPlanningModels', () => {
@@ -42,9 +43,9 @@ describe('discoverCursorPlanningModels', () => {
     setCursorModelProbeRunnerForTests(undefined);
   });
 
-  it('returns ok models from list-models text output', () => {
+  it('returns ok models from list-models text output', async () => {
     setCursorModelProbeRunnerForTests(() => okProbe(SAMPLE_CATALOG));
-    const outcome = discoverCursorPlanningModels({ refresh: true });
+    const outcome = await discoverCursorPlanningModels({ refresh: true });
     expect(outcome.kind).toBe('ok');
     if (outcome.kind !== 'ok') return;
     expect(outcome.models.map((m) => m.id)).toEqual([
@@ -53,71 +54,72 @@ describe('discoverCursorPlanningModels', () => {
       'gpt-5.3-codex',
       'brand-new-model',
       'brand-new-model-fast',
+      'gemini-3.1-pro',
     ]);
   });
 
-  it('caches successful discovery within the session TTL', () => {
+  it('caches successful discovery within the session TTL', async () => {
     let calls = 0;
     setCursorModelProbeRunnerForTests(() => {
       calls += 1;
       return okProbe(SAMPLE_CATALOG);
     });
-    const first = discoverCursorPlanningModels({ refresh: true, now: 1_000 });
-    const second = discoverCursorPlanningModels({ refresh: false, now: 2_000 });
+    const first = await discoverCursorPlanningModels({ refresh: true, now: 1_000 });
+    const second = await discoverCursorPlanningModels({ refresh: false, now: 2_000 });
     expect(first.kind).toBe('ok');
     expect(second.kind).toBe('ok');
     expect(calls).toBe(1);
   });
 
-  it('refresh bypasses the cache', () => {
+  it('refresh bypasses the cache', async () => {
     let calls = 0;
     setCursorModelProbeRunnerForTests(() => {
       calls += 1;
       return okProbe(SAMPLE_CATALOG);
     });
-    discoverCursorPlanningModels({ refresh: true, now: 1_000 });
-    discoverCursorPlanningModels({ refresh: true, now: 2_000 });
+    await discoverCursorPlanningModels({ refresh: true, now: 1_000 });
+    await discoverCursorPlanningModels({ refresh: true, now: 2_000 });
     expect(calls).toBe(2);
   });
 
-  it('classifies missing CLI / spawn errors as failed', () => {
+  it('classifies missing CLI / spawn errors as failed', async () => {
     setCursorModelProbeRunnerForTests(() => failProbe({
       status: null,
       error: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }),
     }));
-    expect(discoverCursorPlanningModels({ refresh: true })).toEqual({
+    expect(await discoverCursorPlanningModels({ refresh: true })).toEqual({
       kind: 'failed',
       reason: expect.stringContaining('ENOENT'),
     });
   });
 
-  it('classifies timeout signals as failed', () => {
+  it('classifies timeout signals as failed', async () => {
     setCursorModelProbeRunnerForTests(() => failProbe({ status: null, signal: 'SIGKILL' }));
-    expect(discoverCursorPlanningModels({ refresh: true })).toEqual({
+    expect(await discoverCursorPlanningModels({ refresh: true })).toEqual({
       kind: 'failed',
       reason: 'timed out',
     });
   });
 
-  it('classifies auth failures as failed', () => {
+  it('classifies auth failures as failed', async () => {
     setCursorModelProbeRunnerForTests(() => failProbe({
       status: 1,
       stderr: 'Authentication required. Run cursor-agent login',
     }));
-    expect(discoverCursorPlanningModels({ refresh: true })).toEqual({
+    expect(await discoverCursorPlanningModels({ refresh: true })).toEqual({
       kind: 'failed',
       reason: 'authentication required',
     });
   });
 
-  it('classifies empty catalogs distinctly from failures', () => {
+  it('classifies empty catalogs distinctly from failures', async () => {
     setCursorModelProbeRunnerForTests(() => okProbe('Available models\n\n'));
-    expect(discoverCursorPlanningModels({ refresh: true })).toEqual({ kind: 'empty' });
+    expect(await discoverCursorPlanningModels({ refresh: true })).toEqual({ kind: 'empty' });
   });
 
-  it('classifies malformed output as failed', () => {
+  it('classifies malformed output as failed', async () => {
     setCursorModelProbeRunnerForTests(() => okProbe('not a model catalog'));
-    expect(discoverCursorPlanningModels({ refresh: true })).toMatchObject({
+    expect(await discoverCursorPlanningModels({ refresh: true })).toMatchObject({
       kind: 'failed',
       reason: expect.stringContaining('unusable'),
     });
@@ -154,6 +156,23 @@ describe('listInAppPlanningPresets hybrid Cursor discovery', () => {
       label: 'Brand New Model',
     });
     expect(options.some((p) => p.model === 'brand-new-model-fast')).toBe(false);
+  });
+
+  it('filters More… models through enabledExecutionAgents', async () => {
+    setCursorModelProbeRunnerForTests(() => okProbe(SAMPLE_CATALOG));
+    const { options } = await listInAppPlanningPresets(
+      { enabledExecutionAgents: ['claude'] },
+      {
+        isInstalled: (command) => command === 'cursor',
+        refreshCursorModels: true,
+      },
+    );
+    expect(options.find((p) => p.key === 'cursor+claude')).toMatchObject({
+      availability: 'confirmed',
+      section: 'recommended',
+    });
+    expect(options.some((p) => p.key === 'cursor+gemini-3.1-pro')).toBe(false);
+    expect(options.some((p) => p.key === 'cursor+brand-new-model')).toBe(false);
   });
 
   it('keeps curated models as unavailable when discovery renames/removes them', async () => {

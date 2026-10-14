@@ -143,7 +143,10 @@ describe('uninstall discovery + dry-run', () => {
   it('format helpers include coverage rows', () => {
     const plan = formatUninstallPlan([]);
     expect(plan.join('\n')).toContain('no Invoker-owned resources found');
-    expect(formatCoverageTable(uninstallCoverageTable()).join('\n')).toContain('DMG');
+    const coverage = formatCoverageTable(uninstallCoverageTable()).join('\n');
+    expect(coverage).toContain('DMG');
+    expect(coverage).toContain('worktrees');
+    expect(coverage).toContain('repos');
     expect(uninstallExitCode([{ status: 'removed' }])).toBe(0);
     expect(uninstallExitCode([{ status: 'failed: boom' }])).toBe(1);
   });

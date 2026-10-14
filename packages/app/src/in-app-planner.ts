@@ -946,16 +946,17 @@ async function activatePlanningSessionWorktree(
   return true;
 }
 
-function applyCursorModelDiscovery(
+async function applyCursorModelDiscovery(
   options: PlanningPresetOption[],
+  config: InvokerConfig,
   discoveryOpts?: { refreshCursorModels?: boolean },
-): { options: PlanningPresetOption[]; cursorDiscovery: CursorModelDiscoverySummary } {
+): Promise<{ options: PlanningPresetOption[]; cursorDiscovery: CursorModelDiscoverySummary }> {
   const hasCursor = options.some((opt) => opt.tool === 'cursor');
   if (!hasCursor) {
     return { options, cursorDiscovery: { status: 'skipped' } };
   }
 
-  const outcome = discoverCursorPlanningModels({
+  const outcome = await discoverCursorPlanningModels({
     plannerCommand: 'cursor',
     refresh: discoveryOpts?.refreshCursorModels === true,
   });
@@ -1023,9 +1024,10 @@ function applyCursorModelDiscovery(
     });
   }
   more.sort((a, b) => a.label.localeCompare(b.label));
+  const allowedMore = filterPlanningPresets(more, config);
 
   return {
-    options: [...annotated, ...more],
+    options: [...annotated, ...allowedMore],
     cursorDiscovery: { status: 'ok' },
   };
 }
@@ -1078,7 +1080,7 @@ export async function listInAppPlanningPresets(
     };
   }
 
-  return applyCursorModelDiscovery(filtered, {
+  return applyCursorModelDiscovery(filtered, config, {
     refreshCursorModels: opts?.refreshCursorModels,
   });
 }

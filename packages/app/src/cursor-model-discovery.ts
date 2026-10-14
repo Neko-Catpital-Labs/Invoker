@@ -1,5 +1,5 @@
 import { accessSync, constants } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -26,7 +26,7 @@ export type CursorModelProbeResult = {
 export type CursorModelProbeRunner = (
   command: string,
   args: string[],
-) => CursorModelProbeResult;
+) => CursorModelProbeResult | Promise<CursorModelProbeResult>;
 
 export type CursorModelDiscoveryOutcome =
   | { kind: 'ok'; models: readonly CursorDiscoveredModel[] }
@@ -58,11 +58,58 @@ function boundDetail(text: string): string {
     : collapsed;
 }
 
-function defaultProbeRunner(command: string, args: string[]): CursorModelProbeResult {
-  return spawnSync(command, args, {
-    encoding: 'utf8',
-    timeout: CURSOR_MODEL_DISCOVERY_TIMEOUT_MS,
-    killSignal: 'SIGKILL',
+function defaultProbeRunner(command: string, args: string[]): Promise<CursorModelProbeResult> {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const finish = (result: CursorModelProbeResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish({
+        status: null,
+        stdout,
+        stderr,
+        error: undefined,
+        signal: 'SIGKILL',
+      });
+    }, CURSOR_MODEL_DISCOVERY_TIMEOUT_MS);
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error: NodeJS.ErrnoException) => {
+      finish({
+        status: null,
+        stdout,
+        stderr,
+        error,
+        signal: null,
+      });
+    });
+    child.on('close', (status, signal) => {
+      finish({
+        status,
+        stdout,
+        stderr,
+        error: undefined,
+        signal: (signal as NodeJS.Signals | null) ?? null,
+      });
+    });
   });
 }
 
@@ -110,13 +157,13 @@ function describeProbeFailure(result: CursorModelProbeResult): string {
   return boundDetail(`exited with status ${result.status}`);
 }
 
-function runDiscovery(plannerCommand: string): CursorModelDiscoveryOutcome {
+async function runDiscovery(plannerCommand: string): Promise<CursorModelDiscoveryOutcome> {
   const resolved = resolveListModelsInvocation(plannerCommand);
   if (!resolved) {
     return { kind: 'failed', reason: 'Cursor Agent CLI was not found on PATH' };
   }
   const runner = probeRunnerOverride ?? defaultProbeRunner;
-  const result = runner(resolved.command, resolved.args);
+  const result = await runner(resolved.command, resolved.args);
   if (result.error || result.status !== 0) {
     return { kind: 'failed', reason: describeProbeFailure(result) };
   }
@@ -128,11 +175,11 @@ function runDiscovery(plannerCommand: string): CursorModelDiscoveryOutcome {
   return { kind: 'ok', models: parsed.models };
 }
 
-export function discoverCursorPlanningModels(options?: {
+export async function discoverCursorPlanningModels(options?: {
   plannerCommand?: string;
   refresh?: boolean;
   now?: number;
-}): CursorModelDiscoveryOutcome {
+}): Promise<CursorModelDiscoveryOutcome> {
   const now = options?.now ?? Date.now();
   if (!options?.refresh && sessionCache && sessionCache.expiresAt > now) {
     if (sessionCache.kind === 'ok') return { kind: 'ok', models: sessionCache.models };
@@ -140,7 +187,7 @@ export function discoverCursorPlanningModels(options?: {
     return { kind: 'failed', reason: sessionCache.reason };
   }
 
-  const outcome = runDiscovery(options?.plannerCommand ?? 'cursor');
+  const outcome = await runDiscovery(options?.plannerCommand ?? 'cursor');
   const expiresAt = now + CURSOR_MODEL_DISCOVERY_CACHE_MS;
   if (outcome.kind === 'ok') {
     sessionCache = { kind: 'ok', expiresAt, models: outcome.models };

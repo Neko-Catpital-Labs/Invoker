@@ -110,7 +110,9 @@ describe('installBundledSkills pruning', () => {
     writeSkill(repoRoot, 'legacy-source-skill');
 
     try {
-      installBundledSkills(sourceContext(repoRoot, invokerHomeRoot));
+      installBundledSkills(sourceContext(repoRoot, invokerHomeRoot), 'install', 'all', {
+        registerHarnesses: true,
+      });
 
       expect(existsSync(join(fakeHome, '.codex/skills/invoker-legacy-source-skill'))).toBe(true);
     } finally {

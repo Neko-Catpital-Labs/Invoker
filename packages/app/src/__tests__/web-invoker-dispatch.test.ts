@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildWebInvokerDispatch } from '../web/web-invoker-dispatch.js';
 import type { InvokerConfig } from '../config.js';
 import { OwnerCapabilityRegistry } from '../owner-capability-registry.js';
+import {
+  clearCursorModelDiscoveryCacheForTests,
+  setCursorModelProbeRunnerForTests,
+} from '../cursor-model-discovery.js';
+import * as systemDiagnostics from '../system-diagnostics.js';
 
 function makeTask(id: string) {
   return {
@@ -140,34 +145,51 @@ describe('buildWebInvokerDispatch', () => {
   });
 
   it('get-planning-presets returns configured planning presets', async () => {
-    const { dispatch } = makeDispatch({
-      loadConfig: () =>
-        ({
-          defaultSlackHarnessPreset: 'codex',
-          slackHarnessPresets: {
-            custom: { tool: 'codex' },
-          },
-        } as unknown as InvokerConfig),
-    });
-    const response = await dispatch('invoker:get-planning-presets', []) as {
-      options: Array<Record<string, unknown>>;
-      cursorDiscovery?: { status: string };
-    };
-    expect(response.cursorDiscovery?.status).toMatch(/ok|failed|empty|skipped/);
-    expect(response.options).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        key: 'codex',
-        label: 'Codex',
-        tool: 'codex',
-        defaultConfirmationMode: 'require',
-      }),
-      expect.objectContaining({
-        key: 'custom',
-        label: 'custom',
-        tool: 'codex',
-        defaultConfirmationMode: 'require',
-      }),
-    ]));
+    clearCursorModelDiscoveryCacheForTests();
+    setCursorModelProbeRunnerForTests(() => ({
+      status: 0,
+      stdout: 'Available models\n',
+      stderr: '',
+      error: undefined,
+      signal: null,
+    }));
+    const isInstalled = vi.spyOn(systemDiagnostics, 'commandIsOnPath').mockImplementation(
+      (command) => command === 'codex',
+    );
+    try {
+      const { dispatch } = makeDispatch({
+        loadConfig: () =>
+          ({
+            defaultSlackHarnessPreset: 'codex',
+            slackHarnessPresets: {
+              custom: { tool: 'codex' },
+            },
+          } as unknown as InvokerConfig),
+      });
+      const response = await dispatch('invoker:get-planning-presets', []) as {
+        options: Array<Record<string, unknown>>;
+        cursorDiscovery?: { status: string };
+      };
+      expect(response.cursorDiscovery?.status).toMatch(/ok|failed|empty|skipped/);
+      expect(response.options).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          key: 'codex',
+          label: 'Codex',
+          tool: 'codex',
+          defaultConfirmationMode: 'require',
+        }),
+        expect.objectContaining({
+          key: 'custom',
+          label: 'custom',
+          tool: 'codex',
+          defaultConfirmationMode: 'require',
+        }),
+      ]));
+    } finally {
+      isInstalled.mockRestore();
+      clearCursorModelDiscoveryCacheForTests();
+      setCursorModelProbeRunnerForTests(undefined);
+    }
   });
 
   it('get-execution-defaults returns configured task execution defaults', async () => {
