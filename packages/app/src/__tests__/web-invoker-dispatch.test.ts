@@ -32,6 +32,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     mutations: { approveTask, spawnRepairWorkflow, editTaskModel },
     agentRegistry: { listExecutionHarnesses: () => [] },
     loadConfig: () => ({}),
+    isPlanningToolInstalled: () => true,
     getStreamSequence: () => 7,
     refreshTaskGraph: vi.fn(async () => {}),
     deleteWorkflow: vi.fn(async () => {}),
