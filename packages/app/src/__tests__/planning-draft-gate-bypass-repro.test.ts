@@ -36,6 +36,7 @@ describe('draft gate bypass repro', () => {
       loadGeneratedPlan: vi.fn(),
       sessions,
       planningCommandBuilder: vi.fn(() => ({ command: 'planner', args: ['prompt'] })),
+      isInstalled: () => true,
       plannerReplyOverride: async () => UNREQUESTED_YAML_REPLY,
     });
 

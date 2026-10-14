@@ -5,7 +5,16 @@
 // skipped/failed).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,4 +79,52 @@ try {
     assert.doesNotMatch(output, /Invoker\.app is missing/);
   }
   console.log('ok invoker-ui --help prints usage without launching the GUI');
+}
+
+// postinstall must wipe vendor/ and unzip with -o so a cancelled prior extract
+// cannot leave dirs that block retry.
+{
+  const installSrc = readFileSync(join(packageRoot, 'scripts', 'install.js'), 'utf8');
+  assert.match(installSrc, /rm\(vendor,\s*\{\s*recursive:\s*true,\s*force:\s*true\s*\}\)/);
+  assert.match(installSrc, /unzip',\s*\['-qo'/);
+
+  const retryRoot = mkdtempSync(join(tmpdir(), 'invoker-ui-install-retry-'));
+  try {
+    const vendor = join(retryRoot, 'vendor');
+    mkdirSync(join(vendor, 'Invoker.app', 'Contents'), { recursive: true });
+    writeFileSync(join(vendor, 'Invoker.app', 'Contents', 'stale'), 'stale');
+    mkdirSync(join(vendor, '__MACOSX'), { recursive: true });
+    writeFileSync(join(vendor, '__MACOSX', '._junk'), 'x');
+
+    const zipSrc = join(retryRoot, 'zip-src');
+    mkdirSync(join(zipSrc, 'Invoker.app', 'Contents'), { recursive: true });
+    writeFileSync(join(zipSrc, 'Invoker.app', 'Contents', 'Info.plist'), 'fresh');
+    const zipPath = join(retryRoot, 'Invoker.zip');
+    execFileSync('zip', ['-qr', zipPath, 'Invoker.app'], { cwd: zipSrc });
+
+    // Without a wipe, unzip over a partial vendor can keep stale paths that were
+    // never in the new archive (and some unzip builds refuse same-path overwrites).
+    try {
+      execFileSync('unzip', ['-q', zipPath], { cwd: vendor, stdio: 'pipe' });
+    } catch {
+      // Some unzip builds exit non-zero when destinations already exist.
+    }
+    assert.equal(
+      existsSync(join(vendor, 'Invoker.app', 'Contents', 'stale')),
+      true,
+      'expected leftover stale path to survive unzip without a vendor wipe',
+    );
+
+    rmSync(vendor, { recursive: true, force: true });
+    mkdirSync(vendor, { recursive: true });
+    cpSync(zipPath, join(vendor, 'Invoker.zip'));
+    execFileSync('unzip', ['-qo', 'Invoker.zip'], { cwd: vendor, stdio: 'pipe' });
+    assert.equal(existsSync(join(vendor, 'Invoker.app', 'Contents', 'Info.plist')), true);
+    assert.equal(readFileSync(join(vendor, 'Invoker.app', 'Contents', 'Info.plist'), 'utf8'), 'fresh');
+    assert.equal(existsSync(join(vendor, 'Invoker.app', 'Contents', 'stale')), false);
+    assert.equal(existsSync(join(vendor, '__MACOSX')), false);
+  } finally {
+    rmSync(retryRoot, { recursive: true, force: true });
+  }
+  console.log('ok invoker-ui postinstall retry after partial vendor extract');
 }

@@ -83,6 +83,7 @@ else process.exit(9);
 
     expect(result.ok).toBe(true);
     expect(result.steps[0]).toMatchObject({ id: 'helpers', ok: true });
+    expect(result.steps[0]?.output).toContain('into harnesses');
     expect(result.steps[0]?.output).toContain('Install note: Invalid Claude settings at /tmp/.claude/settings.json: expected a JSON object');
     expect(result.steps[0]?.output).not.toContain('MCP skipped');
   });

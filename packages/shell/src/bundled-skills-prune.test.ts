@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe('installBundledSkills pruning', () => {
-  it('removes a dropped bundled skill while preserving kept and non-prefixed folders', () => {
+  it('removes a dropped bundled skill from harness targets while preserving non-prefixed folders', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const fakeHome = makeTempRoot('invoker-bundled-fakehome-');
@@ -60,20 +60,17 @@ describe('installBundledSkills pruning', () => {
 
     try {
       const context = installContext(resourcesRoot, invokerHomeRoot);
-      installBundledSkills(context);
+      installBundledSkills(context, 'install', 'all', { registerHarnesses: true });
 
-      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
-        mkdirSync(join(fakeHome, target, 'user-created'), { recursive: true });
-      }
+      const cursorSkills = join(fakeHome, '.cursor', 'skills');
+      mkdirSync(join(cursorSkills, 'user-created'), { recursive: true });
       rmSync(join(resourcesRoot, 'skills', 'dropped'), { recursive: true, force: true });
-      installBundledSkills(context);
+      installBundledSkills(context, 'install', 'all', { registerHarnesses: true });
 
-      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
-        const targetRoot = join(fakeHome, target);
-        expect(existsSync(join(targetRoot, 'invoker-kept'))).toBe(true);
-        expect(existsSync(join(targetRoot, 'invoker-dropped'))).toBe(false);
-        expect(existsSync(join(targetRoot, 'user-created'))).toBe(true);
-      }
+      expect(existsSync(join(cursorSkills, 'invoker-kept'))).toBe(true);
+      expect(existsSync(join(cursorSkills, 'invoker-dropped'))).toBe(false);
+      expect(existsSync(join(cursorSkills, 'user-created'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'skills'))).toBe(false);
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
@@ -91,13 +88,13 @@ describe('installBundledSkills pruning', () => {
 
     try {
       const context = installContext(resourcesRoot, invokerHomeRoot);
-      installBundledSkills(context);
-      installBundledSkills(context, 'install', 'core');
+      installBundledSkills(context, 'install', 'all', { registerHarnesses: true });
+      installBundledSkills(context, 'install', 'core', { registerHarnesses: true });
 
-      for (const target of ['.codex/skills', '.claude/skills', '.cursor/skills', '.omp/agent/skills']) {
-        expect(existsSync(join(fakeHome, target, 'invoker-core-skill'))).toBe(true);
-        expect(existsSync(join(fakeHome, target, 'invoker-optimization-skill'))).toBe(true);
-      }
+      const cursorSkills = join(fakeHome, '.cursor', 'skills');
+      expect(existsSync(join(cursorSkills, 'invoker-core-skill'))).toBe(true);
+      expect(existsSync(join(cursorSkills, 'invoker-optimization-skill'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'skills'))).toBe(false);
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;

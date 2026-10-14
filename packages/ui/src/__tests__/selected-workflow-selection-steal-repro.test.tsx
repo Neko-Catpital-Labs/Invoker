@@ -23,6 +23,7 @@ const { App, SELECTED_WORKFLOW_VANISH_GRACE_MS } = await import('../App.js');
 
 const workflowA: WorkflowMeta = { id: 'wf-a', name: 'Workflow A', status: 'running' };
 const workflowB: WorkflowMeta = { id: 'wf-b', name: 'Workflow B', status: 'running' };
+const MINI_DAG_BODY_TIMEOUT_MS = 2500;
 
 function buildTasks() {
   const alpha = makeUITask({ id: 'task-alpha', description: 'A first', status: 'pending', workflowId: 'wf-a', taskStateVersion: 1 });
@@ -102,7 +103,7 @@ describe('selected workflow selection-steal regression', () => {
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('rf__node-wf-a'));
-    await waitFor(() => expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument());
+    expect(await screen.findByTestId('rf__node-task-alpha', undefined, { timeout: MINI_DAG_BODY_TIMEOUT_MS })).toBeInTheDocument();
 
     fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
     await screen.findByRole('menu');

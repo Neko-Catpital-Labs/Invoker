@@ -187,7 +187,8 @@ describe('runSetup', () => {
       process.env.HOME = home;
       delete process.env.INVOKER_MCP_CONFIG_PATH;
 
-      const answers = ['n', 'n', 'n', 'n', 'n', 'y'];
+      // harness register, Slack, machines, then onboarding worker toggles
+      const answers = ['n', 'n', 'n', 'n', 'n', 'n', 'y'];
       const code = await runSetup([], {
         print: (line) => lines.push(line),
         prompt: async () => answers.shift() ?? 'n',
@@ -239,8 +240,8 @@ describe('runSetup', () => {
 
       expect(code).toBe(0);
       const output = lines.join('\n');
-      expect(output).toContain('Skills: installed 2 bundled skill(s) for Claude.');
-      expect(output).toContain('Skills MCP: registered invoker-cli mcp for Claude.');
+      expect(output).toContain('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
+      expect(output).toContain('Harness MCP/skills stay opt-in');
     } finally {
       restoreEnv('HOME', saved.HOME);
       rmSync(home, { recursive: true, force: true });
@@ -274,8 +275,7 @@ describe('runSetup', () => {
 
       expect(code).toBe(0);
       const output = lines.join('\n');
-      expect(output).toContain('Skills: installed 1 bundled skill(s) for Claude.');
-      expect(output).toContain('Skills MCP: registered invoker-cli mcp for Claude.');
+      expect(output).toContain('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
       expect(output).toContain('Skills: install note — Invalid MCP config at /Users/me/.cursor/mcp.json: expected a JSON object');
       expect(output).not.toContain('at installBundledSkills');
       expect(output).not.toContain('Skills: install skipped');
@@ -312,7 +312,7 @@ describe('runSetup', () => {
       }));
 
       expect(code).toBe(0);
-      expect(lines.join('\n')).toContain('Skills: installed 1 bundled skill(s) for Claude.');
+      expect(lines.join('\n')).toContain('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
     } finally {
       restoreEnv('HOME', saved.HOME);
       rmSync(home, { recursive: true, force: true });
@@ -349,10 +349,10 @@ describe('runSetup', () => {
     try {
       process.env.HOME = home;
 
-      // Prompt order: Slack, machines, then ONBOARDING_WORKER_TOGGLES
+      // Prompt order: harness register, Slack, machines, then ONBOARDING_WORKER_TOGGLES
       // (PR maintenance, e2e auto-fix, auto-approve, disk-headroom cleanup,
       // idle-task cleanup).
-      const answers = ['n', 'n', 'n', 'y', 'y', 'y', 'n'];
+      const answers = ['n', 'n', 'n', 'n', 'y', 'y', 'y', 'n'];
       const code = await runSetup([], {
         print: (line) => lines.push(line),
         prompt: async () => answers.shift() ?? 'n',
@@ -1020,6 +1020,62 @@ describe('runSetup in a non-interactive shell', () => {
     const output = lines.join('\n');
     expect(output).not.toContain('Bot User OAuth Token');
     expect(output).toContain("You're ready.");
+  });
+
+  it('does not register harnesses under --yes unless --register-harnesses is set', async () => {
+    const installCalls: unknown[] = [];
+    const { io } = collectingIO({
+      prompt: async () => { throw new Error('should not prompt under --yes'); },
+    });
+
+    const code = await runSetup(['--yes'], io, readySetupDeps({
+      resolveSkillsRepoRoot: () => '/fake/repo',
+      bundledSkillsInstall: ((_ctx, _mode, _category, options) => {
+        installCalls.push(options ?? {});
+        return {
+          available: true,
+          promptRecommended: false,
+          managedPrefix: 'invoker-',
+          bundledSkillNames: ['plan-to-invoker'],
+          targets: [{ id: 'invoker', name: 'Invoker', path: '/x', available: true, installed: true, upToDate: true, installedSkillNames: [] }],
+          commandTargets: [],
+          mcpTargets: [],
+        };
+      }) as SetupDeps['bundledSkillsInstall'],
+    }));
+
+    expect(code).toBe(0);
+    expect(installCalls).toEqual([{ registerHarnesses: false }]);
+  });
+
+  it('registers harnesses when --yes --register-harnesses is passed', async () => {
+    const installCalls: unknown[] = [];
+    const { lines, io } = collectingIO({
+      prompt: async () => { throw new Error('should not prompt under --yes'); },
+    });
+
+    const code = await runSetup(['--yes', '--register-harnesses'], io, readySetupDeps({
+      resolveSkillsRepoRoot: () => '/fake/repo',
+      bundledSkillsInstall: ((_ctx, _mode, _category, options) => {
+        installCalls.push(options ?? {});
+        return {
+          available: true,
+          promptRecommended: false,
+          managedPrefix: 'invoker-',
+          bundledSkillNames: ['plan-to-invoker'],
+          targets: [{ id: 'invoker', name: 'Invoker', path: '/x', available: true, installed: true, upToDate: true, installedSkillNames: [] }],
+          commandTargets: [],
+          mcpTargets: [
+            { id: 'cursor', name: 'Cursor', path: '/x/mcp.json', available: true, installed: true, upToDate: true, serverName: 'invoker' },
+          ],
+        };
+      }) as SetupDeps['bundledSkillsInstall'],
+    }));
+
+    expect(code).toBe(0);
+    expect(installCalls).toEqual([{ registerHarnesses: true }]);
+    expect(lines.join('\n')).toContain('Skills: installed 1 bundled skill(s) into harnesses (Invoker).');
+    expect(lines.join('\n')).toContain('Skills MCP: registered into Cursor.');
   });
 
   it('writes nothing under --yes since planner, Slack, and machines all stay opt-in', async () => {

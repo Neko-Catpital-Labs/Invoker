@@ -12,6 +12,7 @@
 import type { BundledSkillsInstallMode, BundledSkillsStatus } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import type { BundledSkillCategory } from '@invoker/shell/bundled-skills';
+import { HARNESS_REGISTRATION_HINT } from '@invoker/shell/bundled-skills';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -259,6 +260,9 @@ function writeSkillsInstallReport(
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
   }
+  if (mode !== 'uninstall') {
+    process.stdout.write(`${HARNESS_REGISTRATION_HINT}\n`);
+  }
   if (status.lastInstallError) {
     process.stderr.write(`Install note: ${status.lastInstallError}\n`);
   }
@@ -269,9 +273,15 @@ async function headlessInstallSkills(
   category: BundledSkillCategory | undefined,
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
 ): Promise<void> {
-  process.stderr.write(
-    'Deprecated: `invoker-ui --install-skills` will be removed in a future release. Run `invoker-cli setup` instead.\n',
-  );
+  if (mode === 'uninstall') {
+    process.stderr.write(
+      'Deprecated: prefer `invoker-cli uninstall` for full Invoker cleanup (integrations, home data, npm). `install-skills uninstall` remains a skills-only fallback.\n',
+    );
+  } else {
+    process.stderr.write(
+      'Deprecated: `invoker-ui --install-skills` will be removed in a future release. Run `invoker-cli setup` instead.\n',
+    );
+  }
   if (!deps.installBundledSkills) {
     throw new Error('Bundled AI helper installation is not available in this runtime.');
   }
