@@ -604,7 +604,8 @@ describe('bundled-skills', () => {
 
       const manifest = JSON.parse(readFileSync(join(invokerHomeRoot, 'bundled-skills.json'), 'utf-8'));
       expect(manifest.sourceRepoRoot).toBe(repoRoot);
-      expect(existsSync(join(cliHome, '.codex', 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(cliHome, '.codex', 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(false);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -827,6 +828,66 @@ describe('bundled-skills', () => {
       expect(uninstalled.targets.every((target) => !target.installed)).toBe(true);
 
       expect(() => installBundledSkills(deps, 'uninstall')).not.toThrow();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('reports Codex MCP absent when config.toml path is a directory', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const fakeHome = makeTempRoot('invoker-codex-toml-dir-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      mkdirSync(join(fakeHome, '.codex', 'config.toml'), { recursive: true });
+
+      const status = resolveBundledSkillsStatus({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+        isInstalled: allHarnessesInstalled,
+      });
+
+      expect(status.mcpTargets.find((target) => target.id === 'codex')?.installed).toBe(false);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('reports Cursor rule absent when the rule path is a directory', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const fakeHome = makeTempRoot('invoker-cursor-rule-dir-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      mkdirSync(join(fakeHome, '.cursor', 'rules', 'invoker-execution-precedence.mdc'), { recursive: true });
+
+      const status = resolveBundledSkillsStatus({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+        isInstalled: allHarnessesInstalled,
+      });
+
+      expect(status.instructionTargets?.find((target) => target.id === 'cursor')?.installed).toBe(false);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;

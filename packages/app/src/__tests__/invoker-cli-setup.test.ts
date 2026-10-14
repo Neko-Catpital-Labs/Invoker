@@ -84,7 +84,8 @@ else process.exit(9);
     expect(result.ok).toBe(true);
     expect(result.steps[0]).toMatchObject({ id: 'helpers', ok: true });
     expect(result.steps[0]?.output).toContain('Harness MCP stays opt-in');
-    expect(result.steps[0]?.output).toContain('MCP skipped: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
+    expect(result.steps[0]?.output).toContain('Install note: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
+    expect(result.steps[0]?.output).not.toContain('MCP skipped');
   });
 
   it('continues after a selected setup step fails', async () => {

@@ -1,3 +1,15 @@
+/**
+
+* Manages the installation lifecycle of Invoker-bundled skills and harness integrations.
+*
+* Installs, inspects, and uninstalls bundled skills and commands in Invoker home,
+* with optional integration setup for supported harnesses, including MCP server
+* entries, Cursor rules, and always-on instructions for Codex and Claude.
+*
+* Tracks ownership of installed artifacts through manifests, fingerprints, and
+* ownership markers to identify what Invoker manages. Uninstallation removes
+* owned artifacts selectively, preserving unrelated user configuration and data.
+*/
 import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -62,6 +74,11 @@ interface BundledSkillsContext {
   invokerHomeRoot?: string;
   /** Injectable for tests; defaults to real `command -v` probing. */
   isInstalled?: IsInstalled;
+}
+
+export interface InstallBundledSkillsOptions {
+  /** When true, write MCP/skills/commands/always-on into detected harnesses. Default false (no skill materialization). */
+  registerHarnesses?: boolean;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -187,6 +204,153 @@ function resolveManagedCommandTargets(invokerHomeRoot: string): HarnessConfigSta
       installedCommandNames: [],
     },
   ];
+}
+
+function resolveHarnessSkillTargets(): BundledSkillTargetStatus[] {
+  return [
+    {
+      id: 'codex',
+      name: 'Codex',
+      path: path.join(homedir(), '.codex', 'skills'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedSkillNames: [],
+    },
+    {
+      id: 'claude',
+      name: 'Claude',
+      path: path.join(homedir(), '.claude', 'skills'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedSkillNames: [],
+    },
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      path: path.join(homedir(), '.cursor', 'skills'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedSkillNames: [],
+    },
+    {
+      id: 'omp',
+      name: 'OMP',
+      path: path.join(homedir(), '.omp', 'agent', 'skills'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedSkillNames: [],
+    },
+  ];
+}
+
+function resolveHarnessCommandTargets(): HarnessConfigState[] {
+  return [
+    {
+      id: 'codex',
+      name: 'Codex',
+      path: path.join(homedir(), '.codex', 'commands'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedCommandNames: [],
+    },
+    {
+      id: 'claude',
+      name: 'Claude',
+      path: path.join(homedir(), '.claude', 'commands'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedCommandNames: [],
+    },
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      path: path.join(homedir(), '.cursor', 'commands'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedCommandNames: [],
+    },
+    {
+      id: 'omp',
+      name: 'OMP',
+      path: path.join(homedir(), '.omp', 'agent', 'commands'),
+      available: true,
+      installed: false,
+      upToDate: false,
+      installedCommandNames: [],
+    },
+  ];
+}
+
+function syncSkillTargets(params: {
+  targets: BundledSkillTargetStatus[];
+  sourceRoot: string;
+  bundledSkillNames: string[];
+  installedNames: string[];
+  currentBundledSkillNames: Set<string>;
+  previousManifest: BundledSkillsManifest | null;
+  manifestTargets: BundledSkillsManifest['targets'];
+}): void {
+  const {
+    targets,
+    sourceRoot,
+    bundledSkillNames,
+    installedNames,
+    currentBundledSkillNames,
+    previousManifest,
+    manifestTargets,
+  } = params;
+  for (const target of targets) {
+    mkdirSync(target.path, { recursive: true });
+    const previouslyInstalledNames = previousManifest?.targets?.[target.id]?.installedSkillNames ?? [];
+    const droppedSkillNames = previouslyInstalledNames.filter((name) =>
+      name.startsWith(MANAGED_PREFIX) && !currentBundledSkillNames.has(name),
+    );
+    removeManagedSkillDirs(target.path, droppedSkillNames);
+    for (const skillName of bundledSkillNames) {
+      const sourceDir = path.join(sourceRoot, skillName);
+      const targetDir = path.join(target.path, managedSkillName(skillName));
+      rmSync(targetDir, { recursive: true, force: true });
+      cpSync(sourceDir, targetDir, { recursive: true, force: true });
+    }
+    manifestTargets[target.id] = {
+      path: target.path,
+      installedSkillNames: installedNames,
+    };
+  }
+}
+
+function syncCommandTargets(params: {
+  targets: HarnessConfigState[];
+  sourceRoot: string;
+  commandFiles: string[];
+  previousManifest: BundledSkillsManifest | null;
+  manifestCommandTargets: NonNullable<BundledSkillsManifest['commandTargets']>;
+}): void {
+  const { targets, sourceRoot, commandFiles, previousManifest, manifestCommandTargets } = params;
+  const commandSourceRoot = commandSourceDir(sourceRoot);
+  const currentCommandNames = new Set(commandFiles.map(commandDisplayName));
+  for (const target of targets) {
+    mkdirSync(target.path, { recursive: true });
+    const previouslyInstalledNames = previousManifest?.commandTargets?.[target.id]?.installedCommandNames ?? [];
+    const droppedCommandFiles = previouslyInstalledNames
+      .filter((name) => name.startsWith(MANAGED_PREFIX) && !currentCommandNames.has(name))
+      .map((name) => name.endsWith('.md') ? name : `${name}.md`);
+    removeManagedCommandFiles(target.path, droppedCommandFiles);
+    for (const fileName of commandFiles) {
+      copyFileSync(path.join(commandSourceRoot, fileName), path.join(target.path, fileName));
+    }
+    manifestCommandTargets[target.id] = {
+      path: target.path,
+      installedCommandNames: commandFiles.map(commandDisplayName),
+    };
+  }
 }
 
 function resolveInvokerMcpSnippetPath(invokerHomeRoot: string): string {
@@ -450,6 +614,15 @@ function readJsonRecordIfPresent(filePath: string): JsonRecord | null {
   }
 }
 
+function readTextFileIfPresent(filePath: string): string | null {
+  if (!existsSync(filePath)) return null;
+  try {
+    return readFileSync(filePath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
 function isInvokerMcpServer(value: unknown): boolean {
   if (!isJsonRecord(value)) return false;
   return value.type === 'stdio'
@@ -503,9 +676,10 @@ function findTomlInvokerServerBlockRange(content: string, serverName: string): {
 }
 
 function isMcpTargetInstalled(target: McpTargetCandidate): boolean {
-  if (!existsSync(target.path)) return false;
   if (target.format === 'toml') {
-    return isTomlInvokerServerRegistered(readFileSync(target.path, 'utf-8'), target.serverName);
+    const content = readTextFileIfPresent(target.path);
+    if (content === null) return false;
+    return isTomlInvokerServerRegistered(content, target.serverName);
   }
   const config = readJsonRecordIfPresent(target.path);
   const servers = isJsonRecord(config?.mcpServers) ? config.mcpServers : undefined;
@@ -827,12 +1001,13 @@ function uninstallClaudeHook(invokerHomeRoot: string): void {
 }
 
 function cursorRuleInstalled(): boolean {
-  return existsSync(resolveCursorRulePath()) && readFileSync(resolveCursorRulePath(), 'utf8').includes('Invoker execution routing');
+  const content = readTextFileIfPresent(resolveCursorRulePath());
+  return content !== null && content.includes('Invoker execution routing');
 }
 
 function codexAgentsInstalled(): boolean {
-  const agentsPath = resolveCodexAgentsPath();
-  return existsSync(agentsPath) && readFileSync(agentsPath, 'utf8').includes(INSTRUCTION_BEGIN);
+  const content = readTextFileIfPresent(resolveCodexAgentsPath());
+  return content !== null && content.includes(INSTRUCTION_BEGIN);
 }
 
 function claudeHookInstalled(): boolean {
@@ -998,9 +1173,11 @@ export function installBundledSkills(
   context: BundledSkillsContext,
   mode: BundledSkillsInstallMode = 'install',
   category: BundledSkillCategory = 'all',
+  options: InstallBundledSkillsOptions = {},
 ): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
   const isInstalled = context.isInstalled ?? commandExists;
+  const registerHarnesses = options.registerHarnesses === true;
   if (mode === 'uninstall') {
     return uninstallBundledSkills(context, category);
   }
@@ -1017,8 +1194,6 @@ export function installBundledSkills(
   const bundledHash = hashDirectory(sourceRoot);
   const installedNames = prefixedSkillNames(bundledSkillNames);
   const currentBundledSkillNames = new Set(prefixedSkillNames(listBundledSkillNames(sourceRoot, 'all')));
-  const targets = resolveManagedTargets(invokerHomeRoot);
-  const commandTargets = resolveManagedCommandTargets(invokerHomeRoot);
   const commandFiles = listCommandNames(sourceRoot);
   const manifestTargets: BundledSkillsManifest['targets'] = {};
   const manifestCommandTargets: NonNullable<BundledSkillsManifest['commandTargets']> = {};
@@ -1029,55 +1204,55 @@ export function installBundledSkills(
     [...currentBundledSkillNames],
     commandFiles,
     isInstalled,
+    { preserveHarnessRegistrations: registerHarnesses },
   );
 
-  for (const target of targets) {
-    mkdirSync(target.path, { recursive: true });
-    const previouslyInstalledNames = previousManifest?.targets?.[target.id]?.installedSkillNames ?? [];
-    const droppedSkillNames = previouslyInstalledNames.filter((name) =>
-      name.startsWith(MANAGED_PREFIX) && !currentBundledSkillNames.has(name),
-    );
-    removeManagedSkillDirs(target.path, droppedSkillNames);
-    for (const skillName of bundledSkillNames) {
-      const sourceDir = path.join(sourceRoot, skillName);
-      const targetDir = path.join(target.path, managedSkillName(skillName));
-      rmSync(targetDir, { recursive: true, force: true });
-      cpSync(sourceDir, targetDir, { recursive: true, force: true });
-    }
-    manifestTargets[target.id] = {
-      path: target.path,
-      installedSkillNames: installedNames,
-    };
-  }
-
-  const commandSourceRoot = commandSourceDir(sourceRoot);
-  const currentCommandNames = new Set(commandFiles.map(commandDisplayName));
-  for (const target of commandTargets) {
-    mkdirSync(target.path, { recursive: true });
-    const previouslyInstalledNames = previousManifest?.commandTargets?.[target.id]?.installedCommandNames ?? [];
-    const droppedCommandFiles = previouslyInstalledNames
-      .filter((name) => name.startsWith(MANAGED_PREFIX) && !currentCommandNames.has(name))
-      .map((name) => name.endsWith('.md') ? name : `${name}.md`);
-    removeManagedCommandFiles(target.path, droppedCommandFiles);
-    for (const fileName of commandFiles) {
-      copyFileSync(path.join(commandSourceRoot, fileName), path.join(target.path, fileName));
-    }
-    manifestCommandTargets[target.id] = {
-      path: target.path,
-      installedCommandNames: commandFiles.map(commandDisplayName),
-    };
-  }
-
+  const skillSync = {
+    sourceRoot,
+    bundledSkillNames,
+    installedNames,
+    currentBundledSkillNames,
+    previousManifest,
+    manifestTargets,
+  };
+  syncSkillTargets({ ...skillSync, targets: resolveManagedTargets(invokerHomeRoot) });
+  syncCommandTargets({
+    targets: resolveManagedCommandTargets(invokerHomeRoot),
+    sourceRoot,
+    commandFiles,
+    previousManifest,
+    manifestCommandTargets,
+  });
   writeInvokerMcpSnippet(invokerHomeRoot);
+
+  let mcpRecorded: NonNullable<BundledSkillsManifest['mcpTargets']> = {};
+  let instructionRecorded: NonNullable<BundledSkillsManifest['instructionTargets']> = {};
+  let lastInstallError: string | undefined;
+  if (registerHarnesses) {
+    syncSkillTargets({ ...skillSync, targets: resolveHarnessSkillTargets() });
+    syncCommandTargets({
+      targets: resolveHarnessCommandTargets(),
+      sourceRoot,
+      commandFiles,
+      previousManifest,
+      manifestCommandTargets,
+    });
+    const mcpInstall = installAvailableMcpTargets(resolveManagedMcpTargets(isInstalled));
+    const instructionErrors: string[] = [];
+    instructionRecorded = installInstructionTargets(invokerHomeRoot, instructionErrors) ?? {};
+    mcpRecorded = mcpInstall.recorded;
+    lastInstallError = joinInstallErrors([...mcpInstall.errors, ...instructionErrors]);
+  }
 
   const manifest: BundledSkillsManifest = {
     bundledHash,
     bundledSkillNames,
     installedAt: new Date().toISOString(),
+    lastInstallError,
     targets: manifestTargets,
     commandTargets: manifestCommandTargets,
-    mcpTargets: {},
-    instructionTargets: {},
+    mcpTargets: mcpRecorded,
+    instructionTargets: instructionRecorded,
     instructionHash: hashAlwaysOnFragments(),
     sourceRepoRoot: context.isPackaged ? undefined : context.repoRoot,
     yamlModuleRoot: resolveYamlModuleRoot(context),
@@ -1088,8 +1263,13 @@ export function installBundledSkills(
   const status = resolveBundledSkillsStatus(context);
   return {
     ...status,
-    promptRecommended: context.isPackaged && mode === 'install' ? false : status.promptRecommended,
+    promptRecommended: false,
   };
+}
+
+function removeLeftoverHomeSkillArtifacts(invokerHomeRoot: string): void {
+  rmSync(path.join(invokerHomeRoot, INVOKER_SKILLS_DIR), { recursive: true, force: true });
+  rmSync(path.join(invokerHomeRoot, INVOKER_COMMANDS_DIR), { recursive: true, force: true });
 }
 
 function removeLegacyHarnessCopies(
@@ -1098,13 +1278,18 @@ function removeLegacyHarnessCopies(
   managedSkillNames: string[],
   commandFiles: string[],
   isInstalled: IsInstalled,
+  options: { preserveHarnessRegistrations?: boolean } = {},
 ): void {
   if (!previousManifest) return;
-  const keepSkillPath = path.join(invokerHomeRoot, INVOKER_SKILLS_DIR);
-  const keepCommandPath = path.join(invokerHomeRoot, INVOKER_COMMANDS_DIR);
+  const keepSkillPaths = new Set<string>([path.join(invokerHomeRoot, INVOKER_SKILLS_DIR)]);
+  const keepCommandPaths = new Set<string>([path.join(invokerHomeRoot, INVOKER_COMMANDS_DIR)]);
+  if (options.preserveHarnessRegistrations === true) {
+    for (const target of resolveHarnessSkillTargets()) keepSkillPaths.add(target.path);
+    for (const target of resolveHarnessCommandTargets()) keepCommandPaths.add(target.path);
+  }
 
   for (const entry of Object.values(previousManifest.targets ?? {})) {
-    if (entry.path === keepSkillPath) continue;
+    if (keepSkillPaths.has(entry.path)) continue;
     removeManagedSkillDirs(entry.path, entry.installedSkillNames.length > 0 ? entry.installedSkillNames : managedSkillNames);
   }
   removeManagedSkillDirs(
@@ -1113,10 +1298,12 @@ function removeLegacyHarnessCopies(
   );
 
   for (const entry of Object.values(previousManifest.commandTargets ?? {})) {
-    if (entry.path === keepCommandPath) continue;
+    if (keepCommandPaths.has(entry.path)) continue;
     const files = entry.installedCommandNames.map((name) => name.endsWith('.md') ? name : `${name}.md`);
     removeManagedCommandFiles(entry.path, files.length > 0 ? files : commandFiles);
   }
+
+  if (options.preserveHarnessRegistrations === true) return;
 
   for (const recorded of Object.values(previousManifest.mcpTargets ?? {})) {
     const target = resolveManagedMcpTargets(isInstalled).find((candidate) => candidate.path === recorded.path);
@@ -1168,16 +1355,17 @@ function uninstallBundledSkills(
 
   removeLegacyHarnessCopies(manifest, invokerHomeRoot, expectedNames, commandFiles, isInstalled);
 
-  for (const target of resolveManagedTargets(invokerHomeRoot)) {
+  for (const target of [...resolveManagedTargets(invokerHomeRoot), ...resolveHarnessSkillTargets()]) {
     const names = managedNamesFromManifestOrPrefix(manifest, target.path);
     removeManagedSkillDirs(target.path, names.length > 0 ? names : expectedNames);
   }
 
-  for (const target of resolveManagedCommandTargets(invokerHomeRoot)) {
+  for (const target of [...resolveManagedCommandTargets(invokerHomeRoot), ...resolveHarnessCommandTargets()]) {
     const files = managedCommandFilesFromManifestOrPrefix(manifest, target.path);
     removeManagedCommandFiles(target.path, files.length > 0 ? files : commandFiles);
   }
 
+  removeLeftoverHomeSkillArtifacts(invokerHomeRoot);
   removeInvokerMcpSnippet(invokerHomeRoot);
   rmSync(resolveManifestPath(invokerHomeRoot), { force: true });
 
@@ -1186,4 +1374,423 @@ function uninstallBundledSkills(
 
 export function resolveInstalledBundledSkillDir(skillName: string, invokerHomeRoot?: string): string {
   return path.join(invokerHomeRoot ?? resolveInvokerHomeRoot(), INVOKER_SKILLS_DIR, managedSkillName(skillName));
+}
+
+export type BundledOwnedResourceKind = 'dedicated_file' | 'dedicated_dir' | 'shared_entry';
+
+export type BundledOwnedExecutePhase = 'shared' | 'dedicated' | 'home';
+
+export interface BundledOwnedResource {
+  id: string;
+  kind: BundledOwnedResourceKind;
+  path: string;
+  detail: string;
+  present: boolean;
+  userModified: boolean;
+  executePhase: BundledOwnedExecutePhase;
+}
+
+const STATUS_REMOVED = 'removed';
+const STATUS_KEPT_USER_MODIFIED = 'kept (user-modified)';
+const STATUS_ABSENT = 'absent';
+
+export type BundledOwnedRemovalStatus =
+  | typeof STATUS_REMOVED
+  | typeof STATUS_KEPT_USER_MODIFIED
+  | typeof STATUS_ABSENT;
+
+function directoriesMatch(leftPath: string, rightPath: string): boolean {
+  if (!existsSync(leftPath) || !existsSync(rightPath)) return false;
+  return hashDirectory(leftPath) === hashDirectory(rightPath);
+}
+
+function fileMatchesExpected(filePath: string, expected: string): boolean {
+  if (!existsSync(filePath) || lstatSync(filePath).isSymbolicLink()) return false;
+  return readFileSync(filePath, 'utf8') === expected;
+}
+
+function pushOwned(
+  out: BundledOwnedResource[],
+  resource: BundledOwnedResource,
+): void {
+  if (!resource.present && !resource.userModified) return;
+  out.push(resource);
+}
+
+function discoverMcpOwnedResources(isInstalled: IsInstalled): BundledOwnedResource[] {
+  const out: BundledOwnedResource[] = [];
+  for (const target of resolveManagedMcpTargets(isInstalled)) {
+    const present = isMcpTargetInstalled(target);
+    pushOwned(out, {
+      id: `mcp:${target.id}`,
+      kind: 'shared_entry',
+      path: target.path,
+      detail: `mcpServers.${target.serverName} (Invoker stdio shape)`,
+      present,
+      userModified: false,
+      executePhase: 'shared',
+    });
+  }
+  return out;
+}
+
+function discoverInstructionOwnedResources(invokerHomeRoot: string): BundledOwnedResource[] {
+  const out: BundledOwnedResource[] = [];
+  const cursorPath = resolveCursorRulePath();
+  const cursorPresent = existsSync(cursorPath) && !lstatSync(cursorPath).isSymbolicLink();
+  if (cursorPresent) {
+    const cursorMatches = fileMatchesExpected(cursorPath, CURSOR_RULE_CONTENTS);
+    out.push({
+      id: 'instruction:cursor-rule',
+      kind: 'dedicated_file',
+      path: cursorPath,
+      detail: CURSOR_RULE_FILE,
+      present: true,
+      userModified: !cursorMatches,
+      executePhase: 'dedicated',
+    });
+  }
+
+  const agentsPath = resolveCodexAgentsPath();
+  const agentsPresent = existsSync(agentsPath)
+    && !lstatSync(agentsPath).isSymbolicLink()
+    && readFileSync(agentsPath, 'utf8').includes(INSTRUCTION_BEGIN);
+  pushOwned(out, {
+    id: 'instruction:codex-agents',
+    kind: 'shared_entry',
+    path: agentsPath,
+    detail: `${INSTRUCTION_BEGIN} marked block`,
+    present: agentsPresent,
+    userModified: false,
+    executePhase: 'shared',
+  });
+
+  const settingsPath = resolveClaudeSettingsPath();
+  const hookPresent = claudeHookInstalled();
+  pushOwned(out, {
+    id: 'instruction:claude-hook-settings',
+    kind: 'shared_entry',
+    path: settingsPath,
+    detail: `UserPromptSubmit hook containing ${CLAUDE_HOOK_MARKER}`,
+    present: hookPresent,
+    userModified: false,
+    executePhase: 'shared',
+  });
+
+  const hookDir = resolveHookInstallDir(invokerHomeRoot);
+  const hookScript = path.join(hookDir, 'claude_prompt_submit.mjs');
+  const hookScriptPresent = existsSync(hookScript) && !lstatSync(hookScript).isSymbolicLink();
+  const hookMatches = hookScriptPresent && fileMatchesExpected(hookScript, CLAUDE_HOOK_SCRIPT);
+  if (hookScriptPresent || existsSync(hookDir)) {
+    out.push({
+      id: 'instruction:claude-hook-dir',
+      kind: 'dedicated_dir',
+      path: hookDir,
+      detail: 'hooks/invoker-execution',
+      present: true,
+      userModified: hookScriptPresent && !hookMatches,
+      executePhase: 'home',
+    });
+  }
+  return out;
+}
+
+function discoverSkillDirResource(params: {
+  id: string;
+  targetPath: string;
+  skillDirName: string;
+  sourceDir: string | null;
+  recordedNames: ReadonlySet<string>;
+  executePhase: BundledOwnedExecutePhase;
+}): BundledOwnedResource | null {
+  const dirPath = path.join(params.targetPath, params.skillDirName);
+  if (!existsSync(dirPath) || !lstatSync(dirPath).isDirectory()) return null;
+  const inManifest = params.recordedNames.has(params.skillDirName);
+  const fingerprintOk = params.sourceDir !== null && directoriesMatch(dirPath, params.sourceDir);
+  if (!inManifest && !fingerprintOk) return null;
+  return {
+    id: params.id,
+    kind: 'dedicated_dir',
+    path: dirPath,
+    detail: params.skillDirName,
+    present: true,
+    userModified: inManifest && params.sourceDir !== null && !fingerprintOk,
+    executePhase: params.executePhase,
+  };
+}
+
+function discoverCommandFileResource(params: {
+  id: string;
+  targetPath: string;
+  fileName: string;
+  sourceFile: string | null;
+  recordedNames: ReadonlySet<string>;
+  executePhase: BundledOwnedExecutePhase;
+}): BundledOwnedResource | null {
+  const filePath = path.join(params.targetPath, params.fileName);
+  if (!existsSync(filePath) || lstatSync(filePath).isSymbolicLink()) return null;
+  const displayName = commandDisplayName(params.fileName);
+  const inManifest = params.recordedNames.has(displayName) || params.recordedNames.has(params.fileName);
+  const fingerprintOk = params.sourceFile !== null
+    && readFileSync(filePath).equals(readFileSync(params.sourceFile));
+  if (!inManifest && !fingerprintOk) return null;
+  return {
+    id: params.id,
+    kind: 'dedicated_file',
+    path: filePath,
+    detail: params.fileName,
+    present: true,
+    userModified: inManifest && params.sourceFile !== null && !fingerprintOk,
+    executePhase: params.executePhase,
+  };
+}
+
+function recordedSkillNamesForPath(
+  manifest: BundledSkillsManifest | null,
+  targetPath: string,
+): Set<string> {
+  const names = new Set<string>();
+  if (!manifest?.targets) return names;
+  for (const entry of Object.values(manifest.targets)) {
+    if (entry.path !== targetPath) continue;
+    for (const name of entry.installedSkillNames) names.add(name);
+  }
+  return names;
+}
+
+function recordedCommandNamesForPath(
+  manifest: BundledSkillsManifest | null,
+  targetPath: string,
+): Set<string> {
+  const names = new Set<string>();
+  if (!manifest?.commandTargets) return names;
+  for (const entry of Object.values(manifest.commandTargets)) {
+    if (entry.path !== targetPath) continue;
+    for (const name of entry.installedCommandNames) names.add(name);
+  }
+  return names;
+}
+
+function discoverSkillAndCommandResources(
+  invokerHomeRoot: string,
+  sourceRoot: string | null,
+  manifest: BundledSkillsManifest | null,
+): BundledOwnedResource[] {
+  const out: BundledOwnedResource[] = [];
+  const skillTargets: Array<{ id: string; path: string; phase: BundledOwnedExecutePhase }> = [
+    { id: 'invoker', path: path.join(invokerHomeRoot, INVOKER_SKILLS_DIR), phase: 'home' },
+    ...resolveHarnessSkillTargets().map((target) => ({
+      id: target.id,
+      path: target.path,
+      phase: 'dedicated' as const,
+    })),
+  ];
+  const commandTargets: Array<{ id: string; path: string; phase: BundledOwnedExecutePhase }> = [
+    { id: 'invoker', path: path.join(invokerHomeRoot, INVOKER_COMMANDS_DIR), phase: 'home' },
+    ...resolveHarnessCommandTargets().map((target) => ({
+      id: target.id,
+      path: target.path,
+      phase: 'dedicated' as const,
+    })),
+  ];
+
+  const bundledNames = sourceRoot ? listBundledSkillNames(sourceRoot) : [];
+  const candidateSkillNames = new Set<string>([
+    ...prefixedSkillNames(bundledNames),
+    ...(manifest?.bundledSkillNames ? prefixedSkillNames(manifest.bundledSkillNames) : []),
+  ]);
+  if (manifest?.targets) {
+    for (const entry of Object.values(manifest.targets)) {
+      for (const name of entry.installedSkillNames) candidateSkillNames.add(name);
+    }
+  }
+
+  for (const target of skillTargets) {
+    const recorded = recordedSkillNamesForPath(manifest, target.path);
+    for (const skillDirName of candidateSkillNames) {
+      const bareName = skillDirName.startsWith(MANAGED_PREFIX)
+        ? skillDirName.slice(MANAGED_PREFIX.length)
+        : skillDirName;
+      const sourceDir = sourceRoot ? path.join(sourceRoot, bareName) : null;
+      const usableSource = sourceDir && existsSync(sourceDir) ? sourceDir : null;
+      const resource = discoverSkillDirResource({
+        id: `skill:${target.id}:${skillDirName}`,
+        targetPath: target.path,
+        skillDirName,
+        sourceDir: usableSource,
+        recordedNames: recorded,
+        executePhase: target.phase,
+      });
+      if (resource) out.push(resource);
+    }
+  }
+
+  const commandFiles = sourceRoot ? listCommandNames(sourceRoot) : [];
+  const candidateCommands = new Set<string>(commandFiles);
+  if (manifest?.commandTargets) {
+    for (const entry of Object.values(manifest.commandTargets)) {
+      for (const name of entry.installedCommandNames) {
+        candidateCommands.add(name.endsWith('.md') ? name : `${name}.md`);
+      }
+    }
+  }
+  const commandSrc = sourceRoot ? commandSourceDir(sourceRoot) : null;
+  for (const target of commandTargets) {
+    const recorded = recordedCommandNamesForPath(manifest, target.path);
+    for (const fileName of candidateCommands) {
+      const normalized = fileName.endsWith('.md') ? fileName : `${fileName}.md`;
+      const sourceFile = commandSrc && existsSync(path.join(commandSrc, normalized))
+        ? path.join(commandSrc, normalized)
+        : null;
+      const resource = discoverCommandFileResource({
+        id: `command:${target.id}:${normalized}`,
+        targetPath: target.path,
+        fileName: normalized,
+        sourceFile,
+        recordedNames: recorded,
+        executePhase: target.phase,
+      });
+      if (resource) out.push(resource);
+    }
+  }
+  return out;
+}
+
+function discoverHomeArtifactResources(invokerHomeRoot: string): BundledOwnedResource[] {
+  const out: BundledOwnedResource[] = [];
+  const snippetPath = resolveInvokerMcpSnippetPath(invokerHomeRoot);
+  if (existsSync(snippetPath)) {
+    const expected = `${JSON.stringify({ mcpServers: { [INVOKER_MCP_SERVER_NAME]: INVOKER_MCP_SERVER } }, null, 2)}\n`;
+    out.push({
+      id: 'home:mcp-snippet',
+      kind: 'dedicated_file',
+      path: snippetPath,
+      detail: INVOKER_MCP_SNIPPET_RELATIVE,
+      present: true,
+      userModified: !fileMatchesExpected(snippetPath, expected),
+      executePhase: 'home',
+    });
+  }
+  const manifestPath = resolveManifestPath(invokerHomeRoot);
+  if (existsSync(manifestPath)) {
+    out.push({
+      id: 'home:bundled-skills-manifest',
+      kind: 'dedicated_file',
+      path: manifestPath,
+      detail: MANIFEST_FILE,
+      present: true,
+      userModified: false,
+      executePhase: 'home',
+    });
+  }
+  return out;
+}
+
+/** Discover Invoker-owned harness/skills artifacts without mutating disk. */
+export function discoverBundledOwnedResources(context: BundledSkillsContext): BundledOwnedResource[] {
+  const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
+  const isInstalled = context.isInstalled ?? commandExists;
+  const sourceRoot = resolveBundledSkillsSourceRoot(context);
+  const manifest = readManifest(invokerHomeRoot);
+  return [
+    ...discoverMcpOwnedResources(isInstalled),
+    ...discoverInstructionOwnedResources(invokerHomeRoot),
+    ...discoverSkillAndCommandResources(invokerHomeRoot, sourceRoot, manifest),
+    ...discoverHomeArtifactResources(invokerHomeRoot),
+  ];
+}
+
+function removeDedicatedPath(resource: BundledOwnedResource): BundledOwnedRemovalStatus {
+  if (!existsSync(resource.path)) return STATUS_ABSENT;
+  if (resource.userModified) return STATUS_KEPT_USER_MODIFIED;
+  if (resource.kind === 'dedicated_dir') {
+    rmSync(resource.path, { recursive: true, force: true });
+  } else {
+    if (lstatSync(resource.path).isSymbolicLink()) return STATUS_KEPT_USER_MODIFIED;
+    rmSync(resource.path);
+  }
+  return STATUS_REMOVED;
+}
+
+function removeSharedHarnessEntry(
+  resource: BundledOwnedResource,
+  isInstalled: IsInstalled,
+): BundledOwnedRemovalStatus {
+  if (resource.id.startsWith('mcp:')) {
+    const targetId = resource.id.slice('mcp:'.length);
+    const target = resolveManagedMcpTargets(isInstalled).find((candidate) => candidate.id === targetId);
+    if (!target || !isMcpTargetInstalled(target)) return STATUS_ABSENT;
+    uninstallMcpTarget(target);
+    return STATUS_REMOVED;
+  }
+  if (resource.id === 'instruction:codex-agents') {
+    if (!codexAgentsInstalled()) return STATUS_ABSENT;
+    uninstallCodexAgentsBlock();
+    return STATUS_REMOVED;
+  }
+  if (resource.id === 'instruction:claude-hook-settings') {
+    if (!claudeHookInstalled()) return STATUS_ABSENT;
+    const settingsPath = resolveClaudeSettingsPath();
+    if (existsSync(settingsPath) && !lstatSync(settingsPath).isSymbolicLink()) {
+      const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8')) as unknown;
+      if (!isJsonRecord(parsed)) throw new Error(`Invalid Claude settings at ${settingsPath}`);
+      if (isJsonRecord(parsed.hooks) && Array.isArray(parsed.hooks.UserPromptSubmit)) {
+        parsed.hooks.UserPromptSubmit = parsed.hooks.UserPromptSubmit.filter((entry) => !isClaudeHookEntry(entry));
+        writeFileAtomic(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+      }
+    }
+    return STATUS_REMOVED;
+  }
+  return STATUS_ABSENT;
+}
+
+/** Surgically remove one discovered owned resource. Skips user-modified dedicated artifacts. */
+export function executeBundledOwnedResourceRemoval(
+  resource: BundledOwnedResource,
+  context: BundledSkillsContext,
+): BundledOwnedRemovalStatus {
+  const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
+  const isInstalled = context.isInstalled ?? commandExists;
+  if (resource.executePhase === 'shared') {
+    return removeSharedHarnessEntry(resource, isInstalled);
+  }
+  if (resource.id === 'instruction:cursor-rule') {
+    if (!existsSync(resource.path)) return STATUS_ABSENT;
+    if (resource.userModified) return STATUS_KEPT_USER_MODIFIED;
+    uninstallCursorRule();
+    return existsSync(resource.path) ? STATUS_ABSENT : STATUS_REMOVED;
+  }
+  if (resource.id === 'home:mcp-snippet') {
+    if (resource.userModified) return STATUS_KEPT_USER_MODIFIED;
+    if (!existsSync(resource.path)) return STATUS_ABSENT;
+    removeInvokerMcpSnippet(invokerHomeRoot);
+    return STATUS_REMOVED;
+  }
+  if (resource.id === 'home:bundled-skills-manifest') {
+    if (!existsSync(resource.path)) return STATUS_ABSENT;
+    rmSync(resource.path, { force: true });
+    return STATUS_REMOVED;
+  }
+  return removeDedicatedPath(resource);
+}
+
+/**
+ * Execute harness/skills cleanup in plan order: shared → dedicated → home.
+ * Does not touch Invoker persistent data or npm packages.
+ */
+export function executeBundledIntegrationsUninstall(
+  context: BundledSkillsContext,
+): Array<{ resource: BundledOwnedResource; status: BundledOwnedRemovalStatus }> {
+  const discovered = discoverBundledOwnedResources(context);
+  const phaseOrder: BundledOwnedExecutePhase[] = ['shared', 'dedicated', 'home'];
+  const results: Array<{ resource: BundledOwnedResource; status: BundledOwnedRemovalStatus }> = [];
+  for (const phase of phaseOrder) {
+    for (const resource of discovered.filter((entry) => entry.executePhase === phase)) {
+      results.push({
+        resource,
+        status: executeBundledOwnedResourceRemoval(resource, context),
+      });
+    }
+  }
+  return results;
 }
