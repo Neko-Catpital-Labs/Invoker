@@ -612,6 +612,35 @@ describe('bundled-skills', () => {
     }
   });
 
+  it('finds top-level repo skills for unpackaged runs when the rehomed corpus skill root is absent', () => {
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const cliHome = makeTempRoot('invoker-cli-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = cliHome;
+
+    try {
+      writeSkill(repoRoot, 'plan-to-invoker');
+
+      const status = resolveBundledSkillsStatus({
+        isPackaged: false,
+        repoRoot,
+        invokerHomeRoot,
+        isInstalled: allHarnessesInstalled,
+      });
+
+      expect(status.available).toBe(true);
+      expect(status.sourcePath).toBe(join(repoRoot, 'skills'));
+      expect(status.bundledSkillNames).toEqual(['plan-to-invoker']);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
   it('records yamlModuleRoot for a packaged install, pointing at a directory that holds node_modules/yaml', () => {
     const packageRoot = makeTempRoot('invoker-bundled-package-');
     const resourcesRoot = join(packageRoot, 'vendor', 'Invoker.app', 'Contents', 'Resources');
