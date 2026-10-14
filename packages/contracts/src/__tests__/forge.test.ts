@@ -112,6 +112,15 @@ describe('parseForgeProject', () => {
     });
   });
 
+  it('matches self-managed GitLab SSH URLs with explicit ports by hostname', () => {
+    process.env.INVOKER_GITLAB_HOST = 'git.example.com';
+    expect(parseForgeProject('ssh://git@git.example.com:2222/team/app.git')).toEqual({
+      kind: 'gitlab',
+      host: 'git.example.com:2222',
+      projectPath: 'team/app',
+    });
+  });
+
   it('rejects an unknown web host without a forge kind', () => {
     expect(parseForgeProject('https://bitbucket.org/acme/widgets')).toBeUndefined();
   });
