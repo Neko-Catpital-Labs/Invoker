@@ -350,9 +350,9 @@ export class GitHubMergeGateProvider implements ForgeProvider {
       if (!isGitRefLockRace(err)) throw err;
       await this.exec('git', [
         'fetch',
+        '--prune',
         '--end-of-options',
         'origin',
-        `+refs/heads/${safeBranch}:refs/remotes/origin/${safeBranch}`,
       ], cwd);
       await this.exec('git', pushArgs, cwd);
     }
