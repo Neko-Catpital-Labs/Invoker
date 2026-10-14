@@ -35,6 +35,8 @@ export {
 } from '@invoker/workflow-core';
 
 import type { MergeGateApprovalStatus } from './merge-gate-provider.js';
+import type { ForgeProvider } from './merge-gate-provider.js';
+import { resolveForgeProvider } from './resolve-forge-provider.js';
 import type { TaskRunner } from './task-runner.js';
 
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
@@ -92,6 +94,7 @@ export type TaskRunnerReviewGateHost = Pick<
   | 'cwd'
   | 'logger'
   | 'mergeGateProvider'
+  | 'reviewProviderRegistry'
   | 'executeTasks'
   // Review-gate cluster state
   | 'reviewGateCiFailurePublisher'
@@ -247,6 +250,23 @@ export async function handleApprovedMergeGate(
   }
 }
 
+function resolveReviewGateArtifactProvider(
+  host: TaskRunnerReviewGateHost,
+  artifact: ReviewGateArtifact,
+  repoUrl: string | undefined,
+): ForgeProvider {
+  if (artifact.provider) {
+    if (host.reviewProviderRegistry) return host.reviewProviderRegistry.getOrThrow(artifact.provider);
+    if (host.mergeGateProvider) return host.mergeGateProvider;
+  }
+
+  return resolveForgeProvider({
+    reviewProviderRegistry: host.reviewProviderRegistry,
+    mergeGateProvider: host.mergeGateProvider,
+    repoUrl,
+  });
+}
+
 export async function pollMergeGateTask(
   host: TaskRunnerReviewGateHost,
   task: TaskState,
@@ -254,6 +274,9 @@ export async function pollMergeGateTask(
 ): Promise<void> {
   const artifacts = getCurrentRequiredReviewArtifacts(task);
   if (artifacts.length === 0) return;
+  const workflow = task.config.workflowId
+    ? host.persistence.loadWorkflow?.(task.config.workflowId)
+    : undefined;
 
   host.orchestrator.recordTaskHeartbeat?.(task.id, { at: new Date(), source: 'executor' });
 
@@ -263,7 +286,8 @@ export async function pollMergeGateTask(
     const providerId = artifact.providerId;
     if (!providerId) continue;
     const gateCwd = task.execution.workspacePath ?? host.cwd;
-    const status = await host.mergeGateProvider!.checkApproval({
+    const mergeGateProvider = resolveReviewGateArtifactProvider(host, artifact, workflow?.repoUrl);
+    const status = await mergeGateProvider.checkApproval({
       identifier: providerId,
       cwd: gateCwd,
     });
@@ -315,7 +339,7 @@ export async function pollMergeGateTask(
 }
 
 export async function checkMergeGateStatuses(host: TaskRunnerReviewGateHost): Promise<void> {
-  if (!host.mergeGateProvider) return;
+  if (!host.mergeGateProvider && !host.reviewProviderRegistry) return;
   for (const task of host.orchestrator.getAllTasks()) {
     if (
       task.config.isMergeNode &&
@@ -332,7 +356,7 @@ export async function checkMergeGateStatuses(host: TaskRunnerReviewGateHost): Pr
 }
 
 export async function checkPrApprovalNow(host: TaskRunnerReviewGateHost, taskId: string): Promise<void> {
-  if (!host.mergeGateProvider) return;
+  if (!host.mergeGateProvider && !host.reviewProviderRegistry) return;
 
   const task = host.orchestrator.getTask(taskId);
   if (!task) return;
