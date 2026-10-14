@@ -1377,6 +1377,11 @@ export class PlanConversation {
         action();
       };
 
+      let stdout = '';
+      let stderr = '';
+      let stdoutChunks = 0;
+      let stderrChunks = 0;
+
       const abortForAuthLimbo = (): void => {
         this.log(
           'plan-conversation',
@@ -1387,9 +1392,10 @@ export class PlanConversation {
         settle(() => reject(buildPlannerAuthRequiredError(plannerLabel)));
       };
 
-      const armAuthLimboWatch = (combinedOutput: string): void => {
+      const armAuthLimboWatch = (stderrOutput: string): void => {
         if (authLimboTimer !== undefined || settled) return;
-        if (!plannerOutputIndicatesAuthLimbo(combinedOutput)) return;
+        if (stdout.length > 0) return;
+        if (!plannerOutputIndicatesAuthLimbo(stderrOutput)) return;
         authLimboTimer = setTimeout(abortForAuthLimbo, this.authLimboGraceMs);
       };
 
@@ -1402,11 +1408,6 @@ export class PlanConversation {
         rejectForAbort?.(new PlanningTurnCancelledError());
         return;
       }
-
-      let stdout = '';
-      let stderr = '';
-      let stdoutChunks = 0;
-      let stderrChunks = 0;
 
       this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, tool=${plannerLabel}, model=${this.model ?? 'default'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}, attempt=${attemptNumber}/${totalAttempts}`);
 
@@ -1422,7 +1423,6 @@ export class PlanConversation {
           }
         }
         this.log('plan-conversation', 'info', `[PERF] cursor_stdout chunk #${stdoutChunks}: +${chunkStr.length} bytes (total=${stdout.length}, elapsed=${Date.now() - spawnStart}ms)`);
-        armAuthLimboWatch(`${stdout}\n${stderr}`);
       });
 
       child.stderr?.on('data', (chunk: Buffer) => {
@@ -1430,7 +1430,7 @@ export class PlanConversation {
         stderr += chunkStr;
         stderrChunks++;
         this.log('plan-conversation', 'info', `[PERF] cursor_stderr chunk #${stderrChunks}: +${chunkStr.length} bytes (total=${stderr.length}, elapsed=${Date.now() - spawnStart}ms), preview="${chunkStr.slice(0, 200).replace(/\n/g, '\\n')}"`);
-        armAuthLimboWatch(`${stdout}\n${stderr}`);
+        armAuthLimboWatch(stderr);
       });
 
       timer = setTimeout(() => {
@@ -1454,7 +1454,7 @@ export class PlanConversation {
           }
           return;
         }
-        if (plannerOutputIndicatesAuthFailure(`${stdout}\n${stderr}`)) {
+        if (plannerOutputIndicatesAuthFailure(stderr)) {
           settle(() => reject(buildPlannerAuthRequiredError(plannerLabel)));
           return;
         }

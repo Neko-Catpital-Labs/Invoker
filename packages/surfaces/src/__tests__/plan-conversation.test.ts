@@ -1121,6 +1121,90 @@ describe('PlanConversation', () => {
     await expect(promise).resolves.toBe('planner reply');
     expect(proc.kill).not.toHaveBeenCalled();
   });
+
+  it('does not arm auth limbo from stdout that mentions 401 Unauthorized', async () => {
+    const conv = new PlanConversation({
+      tool: 'cursor',
+      authLimboGraceMs: 40,
+      timeoutMs: 30_000,
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['agent', '--print', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.pid = 7272;
+    proc.exitCode = null;
+    proc.signalCode = null;
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stdout.emit(
+      'data',
+      Buffer.from('Plan: handle 401 Unauthorized responses in the API client\nplan yaml here'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    proc.emit('close', 0);
+
+    await expect(promise).resolves.toContain('401 Unauthorized');
+    expect(proc.kill).not.toHaveBeenCalled();
+  });
+
+  it('does not classify non-zero exit as auth failure from stdout alone', async () => {
+    const conv = new PlanConversation({
+      tool: 'cursor',
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['agent', '--print', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stdout.emit(
+      'data',
+      Buffer.from('Error: Authentication required. Please run \'cursor agent login\' first.\n'),
+    );
+    proc.emit('close', 1);
+
+    await expect(promise).rejects.toThrow(/exited with code 1: Error: Authentication required/);
+  });
+
+  it('does not arm auth limbo from stderr after stdout has already started', async () => {
+    const conv = new PlanConversation({
+      tool: 'cursor',
+      authLimboGraceMs: 40,
+      timeoutMs: 30_000,
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['agent', '--print', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.pid = 8282;
+    proc.exitCode = null;
+    proc.signalCode = null;
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stdout.emit('data', Buffer.from('planner reply mentioning 401 Unauthorized\n'));
+    proc.stderr.emit(
+      'data',
+      Buffer.from('Logged in (unable to fetch user details)\n'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    proc.emit('close', 0);
+
+    await expect(promise).resolves.toContain('planner reply');
+    expect(proc.kill).not.toHaveBeenCalled();
+  });
 });
 
 describe('planner auth failure helpers', () => {
