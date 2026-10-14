@@ -34,3 +34,32 @@ export function normalizeBranchForGithubCli(ref: string, remoteNames: readonly s
   }
   return stripKnownRemotePrefix(s, remoteNames) ?? s;
 }
+
+function isSafeGitBranchName(ref: string): boolean {
+  if (!ref || ref.startsWith('-') || ref.startsWith('/') || ref.endsWith('/')) return false;
+  if (ref === '@' || ref.includes('@{') || ref.includes('..') || ref.includes('//')) return false;
+  if (ref.endsWith('.') || ref.endsWith('.lock')) return false;
+
+  for (let i = 0; i < ref.length; i += 1) {
+    const code = ref.charCodeAt(i);
+    if (code <= 32 || code === 127) return false;
+    if ('~^:?*[\\'.includes(ref[i])) return false;
+  }
+
+  return ref.split('/').every((part) => (
+    part.length > 0
+    && !part.startsWith('.')
+    && !part.endsWith('.lock')
+  ));
+}
+
+export function normalizeSafeGitBranchRef(
+  ref: string,
+  remoteNames: readonly string[] = ['origin'],
+): string {
+  const normalized = normalizeBranchForGithubCli(ref, remoteNames);
+  if (!isSafeGitBranchName(normalized)) {
+    throw new Error(`Invalid Git branch "${ref}".`);
+  }
+  return normalized;
+}
