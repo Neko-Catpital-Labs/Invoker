@@ -62,6 +62,7 @@ describe('in-app-planner monkey pass', () => {
         loadGeneratedPlan: vi.fn(),
         sessions,
         planningCommandBuilder,
+        isInstalled: () => true,
         plannerReplyOverride: async (formattedMessage) => {
           invocationOrder.push(formattedMessage);
           return 'reply-seed';
@@ -98,6 +99,7 @@ describe('in-app-planner monkey pass', () => {
           loadGeneratedPlan: vi.fn(),
           sessions,
           planningCommandBuilder,
+          isInstalled: () => true,
           plannerReplyOverride: sharedOverride(i),
         });
         calls.push(call);

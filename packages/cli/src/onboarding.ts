@@ -1171,7 +1171,7 @@ function printBundledSkillsResult(
     io.print(`Skills MCP: ${HARNESS_REGISTRATION_HINT}`);
   }
   if (status.lastInstallError) {
-    io.print(`Skills MCP: skipped — ${status.lastInstallError}`);
+    io.print(`Skills: install note — ${status.lastInstallError}`);
   }
 }
 

@@ -264,7 +264,7 @@ function writeSkillsInstallReport(
     process.stdout.write(`${HARNESS_REGISTRATION_HINT}\n`);
   }
   if (status.lastInstallError) {
-    process.stderr.write(`MCP skipped: ${status.lastInstallError}\n`);
+    process.stderr.write(`Install note: ${status.lastInstallError}\n`);
   }
 }
 

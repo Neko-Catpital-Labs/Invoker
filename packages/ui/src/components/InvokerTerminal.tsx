@@ -34,6 +34,9 @@ export interface PlanningHarnessChoice {
   modelPresets: PlanningPresetOptionView[];
 }
 
+export const PLANNING_TOOLS_EMPTY_PATH_MESSAGE =
+  "No planning tools on Invoker's PATH. Install one (e.g. Cursor), then restart Invoker. Check with: invoker-cli doctor";
+
 function titleCaseIdentifier(value: string): string {
   return value
     .split(/[-_\s/]+/)
@@ -693,6 +696,7 @@ export function InvokerTerminal({
   const sendButtonDisabled = busy || binding || readOnly || !value.trim();
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
   const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
+  const hasPlanningTools = harnessChoices.length > 0;
   const selectedPreset = useMemo(
     () => findPresetOption(presetOptions, selectedPresetKey) ?? presetOptions[0],
     [presetOptions, selectedPresetKey],
@@ -1047,8 +1051,8 @@ export function InvokerTerminal({
                           data-testid="invoker-terminal-harness"
                           value={selectedHarnessValue}
                           onChange={handleHarnessChange}
-                          disabled={readOnly}
-                          className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                          disabled={readOnly || !hasPlanningTools}
+                          className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {harnessChoices.map((option) => (
                             <option key={option.tool} value={option.tool}>{option.label}</option>
@@ -1111,6 +1115,14 @@ export function InvokerTerminal({
                       )}
                       {repoError && !repoLocked && (
                         <span data-testid="invoker-terminal-repo-error" className="text-xs text-red-400">{repoError}</span>
+                      )}
+                      {!hasPlanningTools && (
+                        <p
+                          data-testid="invoker-terminal-planning-tools-empty"
+                          className="basis-full text-xs text-muted-foreground"
+                        >
+                          {PLANNING_TOOLS_EMPTY_PATH_MESSAGE}
+                        </p>
                       )}
                     </div>
                   )}

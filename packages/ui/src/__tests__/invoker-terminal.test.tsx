@@ -121,7 +121,11 @@ const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
-const { InvokerTerminal, buildPlanningHarnessChoices } = await import('../components/InvokerTerminal.js');
+const {
+  InvokerTerminal,
+  PLANNING_TOOLS_EMPTY_PATH_MESSAGE,
+  buildPlanningHarnessChoices,
+} = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
 
@@ -383,6 +387,26 @@ describe('Invoker terminal (component)', () => {
 
     expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     expect(screen.queryByTestId('invoker-terminal-model')).not.toBeInTheDocument();
+  });
+
+  it('shows PATH empty-state copy and disables harness select when no presets are available', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: '',
+        presetOptions: [],
+      })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+
+    const emptyState = screen.getByTestId('invoker-terminal-planning-tools-empty');
+    expect(emptyState).toHaveTextContent(PLANNING_TOOLS_EMPTY_PATH_MESSAGE);
+    expect(emptyState).toHaveTextContent('invoker-cli doctor');
+
+    const harness = screen.getByTestId('invoker-terminal-harness');
+    expect(harness).toBeDisabled();
+    expect(within(harness).queryByRole('option', { name: /codex/i })).not.toBeInTheDocument();
+    expect(harness.querySelectorAll('option')).toHaveLength(0);
   });
 
   it('announces the turn error and only renders Retry when a handler is provided', () => {

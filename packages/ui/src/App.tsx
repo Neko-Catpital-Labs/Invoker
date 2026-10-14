@@ -767,7 +767,7 @@ export function App() {
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     window.invoker?.getPlanningPresets?.()
       .then((options) => {
-        const resolved = Array.isArray(options) && options.length > 0
+        const resolved = Array.isArray(options)
           ? options.map((option) => ({
               key: option.key,
               label: option.label,
@@ -776,15 +776,16 @@ export function App() {
               isDefault: option.isDefault,
               defaultConfirmationMode: option.defaultConfirmationMode,
             }))
-          : [{ key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' as const }];
+          : [];
         setPlanningPresetOptions(resolved);
-        setSelectedPlanningPresetKey(resolved.find((option) => option.isDefault)?.key ?? resolved[0]?.key ?? 'codex');
-        setSelectedPlanningConfirmationMode(resolved.find((option) => option.isDefault)?.defaultConfirmationMode ?? resolved[0]?.defaultConfirmationMode ?? 'require');
+        const defaultOption = resolved.find((option) => option.isDefault) ?? resolved[0];
+        setSelectedPlanningPresetKey(defaultOption?.key ?? '');
+        setSelectedPlanningConfirmationMode(defaultOption?.defaultConfirmationMode ?? 'require');
       })
       .catch((err) => {
         console.error('Failed to load planning presets', err);
-        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' }]);
-        setSelectedPlanningPresetKey('codex');
+        setPlanningPresetOptions([]);
+        setSelectedPlanningPresetKey('');
         setSelectedPlanningConfirmationMode('require');
       });
     refreshSystemDiagnostics();

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Install bundled Invoker skills into local agent skill directories.
 # Safe to run repeatedly. Installs prefixed copies such as invoker-plan-to-invoker.
+# Stops this checkout's local DB owner before install-skills so the one-shot
+# headless process can acquire the writer lock.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 INVOKER_SKILL_CATEGORY="${INVOKER_SKILL_CATEGORY:-}"
+OWNER_STOP_WAIT_SECONDS=15
 
 log() {
   echo "[setup] $*"
@@ -42,8 +45,83 @@ build_headless_installer() {
   pnpm --filter @invoker/app build
 }
 
+resolve_checkout_db_path() {
+  node --input-type=module <<'EOF'
+import { resolveInvokerInstanceProfile, resolveRepoRoot } from './packages/contracts/dist/index.js';
+
+const sourceRoot = resolveRepoRoot(process.cwd());
+const profile = resolveInvokerInstanceProfile({
+  kind: 'source-development',
+  sourceRoot,
+  env: process.env,
+  homeDir: process.env.HOME,
+});
+process.stdout.write(`${profile.homeRoot}/invoker.db`);
+EOF
+}
+
+pid_is_alive() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local waited=0
+  while [ "$waited" -lt "$OWNER_STOP_WAIT_SECONDS" ]; do
+    pid_is_alive "$pid" || return 0
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+remove_stale_db_lock() {
+  local lock_dir="$1"
+  local pid=""
+  [ -d "$lock_dir" ] || return 0
+  pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
+  if pid_is_alive "$pid"; then
+    return 1
+  fi
+  rm -rf "$lock_dir"
+  return 0
+}
+
+stop_checkout_db_owner() {
+  local db_path lock_dir pid
+  db_path="$(resolve_checkout_db_path)" || fail "could not resolve this checkout's Invoker DB path"
+  lock_dir="${db_path}.lock"
+
+  if [ ! -f "${lock_dir}/pid" ]; then
+    log "No writer lock at ${lock_dir}; continuing"
+    return 0
+  fi
+
+  pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
+  if ! pid_is_alive "$pid"; then
+    log "Removing stale DB lock at ${lock_dir}"
+    rm -rf "$lock_dir"
+    return 0
+  fi
+
+  log "Stopping local owner PID ${pid} holding ${db_path}"
+  kill -TERM "$pid" 2>/dev/null || true
+  if ! wait_for_pid_exit "$pid"; then
+    log "Owner PID ${pid} still alive after ${OWNER_STOP_WAIT_SECONDS}s; sending SIGKILL"
+    kill -KILL "$pid" 2>/dev/null || true
+    wait_for_pid_exit "$pid" || true
+  fi
+
+  if ! remove_stale_db_lock "$lock_dir"; then
+    fail "could not stop owner PID ${pid} holding ${db_path}"
+  fi
+  log "Local owner stopped; writer lock free"
+}
+
 install_bundled_skills() {
   local mode="${1:-reinstall}"
+  stop_checkout_db_owner
   log "Installing bundled Invoker skills with prefix invoker-..."
   unset ELECTRON_RUN_AS_NODE
   if [ -n "$INVOKER_SKILL_CATEGORY" ]; then
