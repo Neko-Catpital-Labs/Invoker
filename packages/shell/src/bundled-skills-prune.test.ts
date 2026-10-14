@@ -33,6 +33,15 @@ function installContext(resourcesRoot: string, invokerHomeRoot: string) {
   };
 }
 
+function sourceContext(repoRoot: string, invokerHomeRoot: string) {
+  return {
+    isPackaged: false,
+    repoRoot,
+    invokerHomeRoot,
+    isInstalled: () => true,
+  };
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -86,6 +95,24 @@ describe('installBundledSkills pruning', () => {
       expect(existsSync(join(cursorSkills, 'invoker-core-skill'))).toBe(true);
       expect(existsSync(join(cursorSkills, 'invoker-optimization-skill'))).toBe(true);
       expect(existsSync(join(invokerHomeRoot, 'skills'))).toBe(false);
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  it('installs from the legacy source skills tree when corpus skills are absent', () => {
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const fakeHome = makeTempRoot('invoker-bundled-fakehome-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    writeSkill(repoRoot, 'legacy-source-skill');
+
+    try {
+      installBundledSkills(sourceContext(repoRoot, invokerHomeRoot));
+
+      expect(existsSync(join(fakeHome, '.codex/skills/invoker-legacy-source-skill'))).toBe(true);
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
