@@ -359,6 +359,27 @@ assert(
   dockerSteps.includes('Install Electron GUI system libraries'),
   'docker must provision libgtk-3 before running the suite: test-docker-comprehensive.sh boots Electron headless on the runner host, and self-hosted runners in this pool are not guaranteed to already have libgtk-3/libatk-1.0 installed',
 );
+assert(
+  dockerSteps.includes('Ensure Electron binary is installed'),
+  'docker must repair/verify the Electron binary immediately before building Docker images and running the suite: submit-plan.sh calls scripts/electron.cjs directly, so it does not get run.sh bootstrap recovery',
+);
+assertStepBefore(
+  jobs.docker,
+  'Install Electron GUI system libraries',
+  'Ensure Electron binary is installed',
+  'docker',
+);
+assertStepBefore(
+  jobs.docker,
+  'Ensure Electron binary is installed',
+  'Build invoker agent base image',
+  'docker',
+);
+const dockerElectronEnsureStep = jobs.docker.steps.find((step) => step.name === 'Ensure Electron binary is installed');
+assert(
+  String(dockerElectronEnsureStep?.run ?? '').trim() === 'node scripts/electron.cjs --install-only',
+  'docker must use scripts/electron.cjs --install-only so missing Electron binaries are repaired by the same owner as root postinstall',
+);
 assertStepBefore(
   jobs.docker,
   'Install system libraries for Node',
