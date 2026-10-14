@@ -26,7 +26,7 @@ Install, configure, and run Invoker. For the product overview, see the [README](
 
 ## Installation
 
-**Recommended (packaged):** Node.js 26.x required. One command installs `invoker-cli` + `invoker-ui`, runs `doctor --fix`, and enables `pr-status` / `autofix` / `auto-approve`. It does not install harness skills/MCP, Slack tokens, or remote machines.
+**Recommended (packaged):** Node.js 26.x required. One command installs `invoker-cli` + `invoker-ui`, runs `doctor --fix`, installs skills + local MCP, and enables `pr-status` / `autofix` / `auto-approve`. It does not write Slack tokens or remote machines.
 
 ```bash
 npx @neko-catpital-labs/invoker-cli@latest install
@@ -55,9 +55,7 @@ Every bundled skill carries a `category:` field in its `SKILL.md` frontmatter. B
 default `setup-agent-skills.sh` installs all of them; set `INVOKER_SKILL_CATEGORY`
 to install only one subset. Use `INVOKER_SKILL_CATEGORY=core` for the skills that
 submit and operate Invoker work, or `INVOKER_SKILL_CATEGORY=optimization` for the
-verification and review skills. The script stops any local owner holding this
-checkout's DB writer lock before `install-skills` so setup does not fail on a
-live lock.
+verification and review skills.
 
 Invoker does not provision machines for you. You are responsible for bringing your own local workstation, VM, container host, or remote machines and making sure the required tools are installed there before running workflows.
 
@@ -78,29 +76,7 @@ invoker-cli install
 invoker-cli run plans/fixtures/hello-world.yaml --standalone
 ```
 
-`invoker-cli install` enables default workers (`pr-status`, `autofix`, `auto-approve`). It does **not** install skills or modify Cursor / Claude / Codex / OMP configs by default, and it skips Slack/machines. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in without a prompt (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
-
-To remove what install/setup added:
-
-```bash
-invoker-cli uninstall --dry-run   # plan + coverage only (no disk changes)
-invoker-cli uninstall             # interactive confirm, then clean integrations + home data + npm
-invoker-cli uninstall --yes       # same without prompt (required when stdin is not a TTY)
-invoker-cli uninstall --yes --keep-data   # keep config/DB/outputs; still clean integrations + npm
-invoker-cli uninstall --help      # flags, exit codes, and coverage table
-```
-
-| Flag | Effect |
-| --- | --- |
-| `--dry-run` | Print the deletion plan and coverage table; never mutates disk |
-| `--yes` | Skip the confirmation prompt (required in non-interactive shells) |
-| `--keep-data` | Skip Invoker home data purge; still remove integrations and global npm packages |
-
-**Coverage (supported):** `setup --register-harnesses` surgical MCP/skill/instruction entries (and leftover home skill cleanup); quick-install worker toggles; experimental planner MCP entry; current CLI home data (`config.json`, `.env`, DB, outputs) plus standalone `~/.invoker-cli` when present; global npm packages `@neko-catpital-labs/invoker-{cli,ui,slack,watcher}` (removed last).
-
-**Coverage (excluded):** desktop `scripts/install.sh` channels (DMG / AppImage / `.deb`) — listed in help/output, not removed. Other `~/.invoker/dev/*` profiles that are not the active CLI home are also out of scope.
-
-Prefer `invoker-cli uninstall` over headless `install-skills uninstall` (skills-only fallback). User-modified dedicated managed files are kept and reported as `kept (user-modified)`; shared host configs only lose Invoker-managed entries.
+`invoker-cli install` installs the first-party Invoker AI helper skills under `~/.invoker`, writes an MCP snippet at `~/.invoker/mcp-servers/invoker.json`, and enables default workers (`pr-status`, `autofix`, `auto-approve`). It does **not** modify Cursor / Claude / Codex / OMP configs by default, and it skips Slack/machines. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in without a prompt (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
 
 Or download the platform binary from GitHub Releases:
 
@@ -130,8 +106,6 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
 `invoker-cli doctor --fix` can install some missing runtime tools on a best-effort basis using Homebrew on macOS, apt on Linux, or npm for npm-based CLIs. Authentication-dependent setup, such as `gh auth login` and provider CLI login, remains manual.
-
-The in-app planning harness picker only lists planner CLIs that are on Invoker’s process PATH (for example `cursor`, `codex`, `claude`). Install a tool, then restart Invoker so the picker refreshes; `invoker-cli doctor` shows which binaries Invoker can see.
 
 `invoker-cli run <plan.yaml>` defaults to `auto` mode: it submits the plan to a running desktop owner over IPC when one is reachable, and otherwise runs the plan in a standalone CLI database at `~/.invoker-cli`. Use `--live` to require the desktop owner, `--standalone` to force isolated CLI execution, `--db-dir <path>` to choose a different standalone database directory, and `--json` for a machine-readable result summary.
 
@@ -166,9 +140,9 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker AI helpers inside the app. Run `invoker-cli setup` (or System Setup in the desktop app) to optionally register harness MCP/skills (`--register-harnesses` or answer yes to the prompt) and to configure Slack / remote machines.
+Packaged installs bundle the first-party Invoker AI helpers inside the app. `invoker-cli install` already installs helper skills under `~/.invoker` and the MCP snippet; run `invoker-cli setup` (or System Setup in the desktop app) to optionally register harness MCP/skills (`--register-harnesses` or answer yes to the prompt) and to configure Slack / remote machines.
 
-Then, in Codex, Claude, Cursor, or OMP (after harness registration), ask in normal chat to plan and run durable work through Invoker. `invoker-chat-submit` plus MCP review/submit/status tools prepare a review, wait for one approval, submit, and watch without a slash command.
+Then, in Codex, Claude, Cursor, or OMP (after harness registration or a manual snippet merge), ask in normal chat to plan and run durable work through Invoker. `invoker-chat-submit` plus MCP review/submit/status tools prepare a review, wait for one approval, submit, and watch without a slash command.
 
 Explicit fallback:
 
@@ -300,7 +274,7 @@ For app development with hot reload:
 pnpm run dev:hot
 ```
 
-GUI-launched workflows inherit the GUI app environment. On macOS, apps launched from Finder often have a narrower `PATH` than your terminal. If workflows need `pnpm`, `git`, `codex`, or `claude`, start Invoker from a terminal or make those tools available to GUI-launched apps. The same PATH drives the planning harness picker: a CLI only visible in your shell will not appear as selectable until Invoker is restarted with that PATH.
+GUI-launched workflows inherit the GUI app environment. On macOS, apps launched from Finder often have a narrower `PATH` than your terminal. If workflows need `pnpm`, `git`, `codex`, or `claude`, start Invoker from a terminal or make those tools available to GUI-launched apps.
 
 **Example plan:**
 

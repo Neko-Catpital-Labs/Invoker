@@ -109,7 +109,7 @@ export function formatQuickInstallDemoTranscript(): string {
     '    Doctor finished (optional tools may still be missing).',
     '',
     '==> Skills/MCP (opt-in only)...',
-    '    Skills/MCP: skipped (opt in with invoker-cli setup --register-harnesses).',
+    '    Skills/MCP: installed under Invoker home (harness wiring stays opt-in: invoker-cli setup --register-harnesses).',
     '    Slack: skipped (optional: invoker-cli setup slack)',
     '    Remote machines: skipped (optional: invoker-cli setup machines)',
     '',
