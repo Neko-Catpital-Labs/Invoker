@@ -55,7 +55,9 @@ Every bundled skill carries a `category:` field in its `SKILL.md` frontmatter. B
 default `setup-agent-skills.sh` installs all of them; set `INVOKER_SKILL_CATEGORY`
 to install only one subset. Use `INVOKER_SKILL_CATEGORY=core` for the skills that
 submit and operate Invoker work, or `INVOKER_SKILL_CATEGORY=optimization` for the
-verification and review skills.
+verification and review skills. The script stops any local owner holding this
+checkout's DB writer lock before `install-skills` so setup does not fail on a
+live lock.
 
 Invoker does not provision machines for you. You are responsible for bringing your own local workstation, VM, container host, or remote machines and making sure the required tools are installed there before running workflows.
 
