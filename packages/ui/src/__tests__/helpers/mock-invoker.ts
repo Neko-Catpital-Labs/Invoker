@@ -258,11 +258,14 @@ export function createMockInvoker(
     planningTerminalResize: vi.fn(async () => ({ ok: true })),
     planningTerminalAppliedSize: vi.fn(async () => null),
     planningTerminalClose: vi.fn(async () => ({ ok: true })),
-    getPlanningPresets: vi.fn(async () => [
-      { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' },
-      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: false, defaultConfirmationMode: 'require' },
-      { key: 'omp', label: 'OMP', tool: 'omp', isDefault: false, defaultConfirmationMode: 'require' },
-    ]),
+    getPlanningPresets: vi.fn(async () => ({
+      options: [
+        { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' as const },
+        { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: false, defaultConfirmationMode: 'require' as const },
+        { key: 'omp', label: 'OMP', tool: 'omp', isDefault: false, defaultConfirmationMode: 'require' as const },
+      ],
+      cursorDiscovery: { status: 'skipped' as const },
+    })),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),

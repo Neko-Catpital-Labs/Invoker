@@ -1,16 +1,10 @@
-import type { PlanningPresetSpec } from '@invoker/contracts';
+import {
+  BUILTIN_PLANNING_PRESETS,
+  DEFAULT_PLANNING_PRESET,
+  type PlanningPresetSpec,
+} from '@invoker/contracts';
 
-export const BUILTIN_PLANNING_PRESETS: Record<string, PlanningPresetSpec> = {
-  'cursor+claude': { tool: 'cursor', model: 'claude' },
-  'cursor+codex': { tool: 'cursor', model: 'codex' },
-  'omp+claude': { tool: 'omp', model: 'claude' },
-  'omp+codex': { tool: 'omp', model: 'codex' },
-  omp: { tool: 'omp' },
-  codex: { tool: 'codex' },
-  claude: { tool: 'claude' },
-};
-
-export const DEFAULT_PLANNING_PRESET = 'cursor+claude';
+export { BUILTIN_PLANNING_PRESETS, DEFAULT_PLANNING_PRESET };
 
 export function resolvePlanningPreset(
   harnessPreset: string | undefined,

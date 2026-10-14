@@ -89,7 +89,7 @@
   "slackHarnessPresets": {
     "comment": "Slack planning harness presets: preset key -> CLI tool + optional model. Selected via a leading [preset] tag in the lobby @Invoker message. Omit to use built-ins (cursor+claude / cursor+codex / omp / omp+claude / codex).",
     "omp+claude": { "tool": "omp", "model": "anthropic/claude-sonnet-5-5" },
-    "cursor+codex": { "tool": "cursor", "model": "gpt-5-codex" },
+    "cursor+codex": { "tool": "cursor", "model": "gpt-5.3-codex" },
     "codex": { "tool": "codex" }
   },
   "defaultSlackHarnessPreset": "cursor+claude",

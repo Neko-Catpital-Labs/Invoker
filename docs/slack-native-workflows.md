@@ -40,12 +40,15 @@ A preset names the **CLI tool** that both plans conversationally and converts th
 
 | Preset | Tool | Model |
 | --- | --- | --- |
-| `cursor+claude` (default) | cursor | claude |
-| `cursor+codex` | cursor | codex |
+| `cursor+claude` (default) | cursor | `claude-4.5-sonnet` |
+| `cursor+codex` | cursor | `gpt-5.3-codex` |
+| `cursor+auto` | cursor | `auto` |
 | `omp+claude` | omp | claude |
 | `omp+codex` | omp | codex |
 | `omp` | omp | (CLI default) |
 | `codex` | codex | (CLI default) |
+
+Cursor presets use real `cursor-agent --list-models` ids (not aliases like `claude` / `codex`). Legacy alias values in custom config are remapped at spawn. The planning picker keeps this curated recommended set, then intersects it with a live `cursor-agent --list-models` probe (session-cached); models missing from the live catalog stay selectable but are marked unavailable, and other discovered ids appear under **More…**. If discovery fails (missing CLI, auth, timeout, or bad output), the curated list is shown as unverified rather than as confirmed.
 
 Override them in `~/.invoker/config.json`:
 

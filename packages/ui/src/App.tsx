@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningChatResponse, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnOutcome, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, CursorModelDiscoverySummary, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningChatResponse, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnOutcome, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, PlanningPresetsResponse, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { resolvePlanningSubmitAction } from '@invoker/contracts/planning-surface';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
@@ -596,8 +596,11 @@ export function App() {
   const planningTurnGoneCountsRef = useRef<Map<string, number>>(new Map());
   const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
   const [planningPresetOptions, setPlanningPresetOptions] = useState<PlanningPresetOption[]>([]);
+  const [planningPresetsLoading, setPlanningPresetsLoading] = useState(true);
+  const [cursorDiscoverySummary, setCursorDiscoverySummary] = useState<CursorModelDiscoverySummary | undefined>();
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [selectedPlanningConfirmationMode, setSelectedPlanningConfirmationMode] = useState<PlanningConfirmationMode>('require');
+  const planningPresetSelectionInitializedRef = useRef(false);
   const [keptPlanningDraftSessionIds, setKeptPlanningDraftSessionIds] = useState<Set<string>>(new Set());
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
@@ -770,28 +773,44 @@ export function App() {
     window.invoker?.getExecutionHarnesses?.().then(setExecutionHarnesses).catch(() => {});
     window.invoker?.getExecutionDefaults?.().then(setExecutionDefaults).catch(() => {});
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
+    setPlanningPresetsLoading(true);
     window.invoker?.getPlanningPresets?.()
-      .then((options) => {
-        const resolved = Array.isArray(options)
-          ? options.map((option) => ({
-              key: option.key,
-              label: option.label,
-              tool: option.tool,
-              model: option.model,
-              isDefault: option.isDefault,
-              defaultConfirmationMode: option.defaultConfirmationMode,
-            }))
-          : [];
+      .then((response) => {
+        const normalized: PlanningPresetsResponse = Array.isArray(response)
+          ? { options: response }
+          : (response ?? { options: [] });
+        const resolved = (normalized.options ?? []).map((option) => ({
+          key: option.key,
+          label: option.label,
+          tool: option.tool,
+          model: option.model,
+          isDefault: option.isDefault,
+          defaultConfirmationMode: option.defaultConfirmationMode,
+          availability: option.availability,
+          section: option.section,
+        }));
         setPlanningPresetOptions(resolved);
-        const defaultOption = resolved.find((option) => option.isDefault) ?? resolved[0];
-        setSelectedPlanningPresetKey(defaultOption?.key ?? '');
-        setSelectedPlanningConfirmationMode(defaultOption?.defaultConfirmationMode ?? 'require');
+        setCursorDiscoverySummary(normalized.cursorDiscovery);
+        if (!planningPresetSelectionInitializedRef.current) {
+          planningPresetSelectionInitializedRef.current = true;
+          const defaultOption = resolved.find((option) => option.isDefault) ?? resolved[0];
+          setSelectedPlanningPresetKey(defaultOption?.key ?? '');
+          setSelectedPlanningConfirmationMode(defaultOption?.defaultConfirmationMode ?? 'require');
+        } else {
+          // Preserve the user's selection even when discovery drops or renames a model.
+          setSelectedPlanningPresetKey((previous) => previous);
+        }
       })
       .catch((err) => {
         console.error('Failed to load planning presets', err);
         setPlanningPresetOptions([]);
-        setSelectedPlanningPresetKey('');
-        setSelectedPlanningConfirmationMode('require');
+        setCursorDiscoverySummary({
+          status: 'failed',
+          warning: 'Could not load planning presets.',
+        });
+      })
+      .finally(() => {
+        setPlanningPresetsLoading(false);
       });
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
@@ -4820,6 +4839,8 @@ export function App() {
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
+            planningPresetsLoading={planningPresetsLoading}
+            cursorDiscoveryWarning={cursorDiscoverySummary?.warning ?? null}
             selectedConfirmationMode={selectedPlanningConfirmationMode}
             draftPlanAvailable={draftPlanAvailable}
             draftReviewOpen={activeDraftReviewOpen}

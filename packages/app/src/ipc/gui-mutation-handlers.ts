@@ -2859,11 +2859,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return filterExecutionHarnesses(agentRegistry.listExecutionHarnesses(), loadConfig());
   });
 
-  ipcMain.handle('invoker:get-planning-presets', () => {
+  ipcMain.handle('invoker:get-planning-presets', (_event, options?: { refreshCursorModels?: boolean }) => {
     if (process.env.INVOKER_E2E_BREAK_PLANNING_PRESETS === '1') {
       throw new Error('simulated getPlanningPresets IPC failure (injected by INVOKER_E2E_BREAK_PLANNING_PRESETS)');
     }
-    return listInAppPlanningPresets(loadConfig());
+    return listInAppPlanningPresets(loadConfig(), {
+      refreshCursorModels: options?.refreshCursorModels === true,
+    });
   });
 
   ipcMain.handle('invoker:get-execution-defaults', () => {

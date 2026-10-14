@@ -33,6 +33,8 @@ export interface PlanningPresetOptionView {
   label: string;
   tool: string;
   model?: string;
+  availability?: 'confirmed' | 'unverified' | 'unavailable';
+  section?: 'recommended' | 'more';
 }
 
 export interface PlanningHarnessChoice {
@@ -76,8 +78,22 @@ function formatPlanningHarnessLabel(tool: string, options: PlanningPresetOptionV
   return directPreset?.label ?? titleCaseIdentifier(tool);
 }
 
-function formatPlanningModelLabel(model: string): string {
+function formatPlanningModelLabel(model: string, fallbackLabel?: string): string {
+  const trimmed = fallbackLabel?.trim();
+  // Prefer builtin model labels; skip harness-compound labels like "Claude via OMP".
+  if (trimmed && !/[+]|\bvia\b/i.test(trimmed)) {
+    return trimmed;
+  }
   return titleCaseIdentifier(model);
+}
+
+function formatPlanningModelOptionLabel(option: PlanningPresetOptionView): string {
+  const base = option.model
+    ? formatPlanningModelLabel(option.model, option.label)
+    : 'Default';
+  if (option.availability === 'unavailable') return `${base} (unavailable)`;
+  if (option.availability === 'unverified') return `${base} (unverified)`;
+  return base;
 }
 
 export function buildPlanningHarnessChoices(options: PlanningPresetOptionView[]): PlanningHarnessChoice[] {
@@ -141,6 +157,10 @@ interface InvokerTerminalProps {
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
+  /** True while planning presets / Cursor model discovery is in flight. */
+  planningPresetsLoading?: boolean;
+  /** Concise Cursor discovery warning (failed/empty); omit when ok/skipped. */
+  cursorDiscoveryWarning?: string | null;
   selectedConfirmationMode: PlanningConfirmationMode;
   draftPlanAvailable: boolean;
   draftReviewOpen?: boolean;
@@ -761,6 +781,8 @@ export function InvokerTerminal({
   value,
   selectedPresetKey,
   presetOptions,
+  planningPresetsLoading = false,
+  cursorDiscoveryWarning = null,
   selectedConfirmationMode,
   draftPlanAvailable,
   draftReviewOpen = false,
@@ -911,25 +933,43 @@ export function InvokerTerminal({
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
   const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
   const hasPlanningTools = harnessChoices.length > 0;
-  const selectedPreset = useMemo(
-    () => findPresetOption(presetOptions, selectedPresetKey) ?? presetOptions[0],
-    [presetOptions, selectedPresetKey],
-  );
+  const selectedPreset = useMemo(() => {
+    const matched = findPresetOption(presetOptions, selectedPresetKey);
+    if (matched) return matched;
+    // Do not silently switch away from a saved/selected key that discovery dropped.
+    if (selectedPresetKey) return undefined;
+    return presetOptions[0];
+  }, [presetOptions, selectedPresetKey]);
   const selectedHarness = useMemo(
     () => harnessChoices.find((choice) => choice.tool === selectedPreset?.tool) ?? harnessChoices[0],
     [harnessChoices, selectedPreset?.tool],
   );
   const selectedHarnessValue = selectedHarness?.tool ?? '';
-  const modelSelectOptions = selectedHarness
-    ? [
-        ...(selectedHarness.directPreset ? [selectedHarness.directPreset] : []),
-        ...selectedHarness.modelPresets,
-      ]
-    : [];
+  const modelSelectOptions = useMemo(() => {
+    const base = selectedHarness
+      ? [
+          ...(selectedHarness.directPreset ? [selectedHarness.directPreset] : []),
+          ...selectedHarness.modelPresets,
+        ]
+      : [];
+    if (!selectedPresetKey || base.some((option) => option.key === selectedPresetKey)) return base;
+    // Keep a saved selection visible even when live discovery no longer lists it.
+    return [
+      ...base,
+      {
+        key: selectedPresetKey,
+        label: selectedPresetKey,
+        tool: selectedHarness?.tool ?? 'cursor',
+        availability: 'unavailable' as const,
+        section: 'recommended' as const,
+      },
+    ];
+  }, [selectedHarness, selectedPresetKey]);
+  const recommendedModelOptions = modelSelectOptions.filter((option) => option.section !== 'more');
+  const moreModelOptions = modelSelectOptions.filter((option) => option.section === 'more');
   const showModelSelect = Boolean(selectedHarness && selectedHarness.modelPresets.length > 0);
-  const selectedModelPresetKey = selectedPreset && modelSelectOptions.some((option) => option.key === selectedPreset.key)
-    ? selectedPreset.key
-    : modelSelectOptions[0]?.key ?? '';
+  // Prefer the caller's selected key so discovery refresh never visually swaps the model.
+  const selectedModelPresetKey = selectedPresetKey || modelSelectOptions[0]?.key || '';
 
   const handleHarnessChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
     const nextHarness = harnessChoices.find((choice) => choice.tool === event.target.value);
@@ -1273,16 +1313,55 @@ export function InvokerTerminal({
                             data-testid="invoker-terminal-model"
                             value={selectedModelPresetKey}
                             onChange={(event) => onPresetChange(event.target.value)}
-                            disabled={readOnly}
-                            className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                            disabled={readOnly || planningPresetsLoading}
+                            className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {modelSelectOptions.map((option) => (
-                              <option key={option.key} value={option.key}>
-                                {option.model ? formatPlanningModelLabel(option.model) : 'Default'}
-                              </option>
-                            ))}
+                            {planningPresetsLoading && modelSelectOptions.length === 0 && (
+                              <option value="">Loading models…</option>
+                            )}
+                            {recommendedModelOptions.length > 0 && moreModelOptions.length > 0 ? (
+                              <>
+                                <optgroup label="Recommended">
+                                  {recommendedModelOptions.map((option) => (
+                                    <option key={option.key} value={option.key}>
+                                      {formatPlanningModelOptionLabel(option)}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="More…">
+                                  {moreModelOptions.map((option) => (
+                                    <option key={option.key} value={option.key}>
+                                      {formatPlanningModelOptionLabel(option)}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              </>
+                            ) : (
+                              modelSelectOptions.map((option) => (
+                                <option key={option.key} value={option.key}>
+                                  {formatPlanningModelOptionLabel(option)}
+                                </option>
+                              ))
+                            )}
                           </select>
                         </label>
+                      )}
+                      {planningPresetsLoading && (
+                        <span
+                          data-testid="invoker-terminal-models-loading"
+                          className="text-[11px] text-muted-foreground"
+                        >
+                          Checking Cursor models…
+                        </span>
+                      )}
+                      {cursorDiscoveryWarning && !planningPresetsLoading && (
+                        <span
+                          data-testid="invoker-terminal-models-warning"
+                          className="max-w-md text-[11px] text-amber-600 dark:text-amber-400"
+                          title={cursorDiscoveryWarning}
+                        >
+                          {cursorDiscoveryWarning}
+                        </span>
                       )}
                       <label className="text-xs text-muted-foreground">
                         Review

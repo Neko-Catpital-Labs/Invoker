@@ -271,7 +271,9 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:get-execution-harnesses':
         return filterExecutionHarnesses(agentRegistry.listExecutionHarnesses(), deps.loadConfig());
       case 'invoker:get-planning-presets':
-        return listInAppPlanningPresets(deps.loadConfig());
+        return listInAppPlanningPresets(deps.loadConfig(), {
+          refreshCursorModels: (args[0] as { refreshCursorModels?: boolean } | undefined)?.refreshCursorModels === true,
+        });
       case 'invoker:get-execution-defaults':
         return resolveDefaultTaskExecutionSettings(deps.loadConfig());
       case 'invoker:get-system-diagnostics':

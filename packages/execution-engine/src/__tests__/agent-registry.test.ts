@@ -146,10 +146,20 @@ describe('registerBuiltinAgents', () => {
 
   it('threads the planning model into the cursor command', () => {
     const cursor = registerBuiltinAgents().getPlanningOrThrow('cursor');
-    expect(cursor.buildPlanningCommand('p', { model: 'codex' })).toEqual({
+    expect(cursor.buildPlanningCommand('p', { model: 'gpt-5.3-codex' })).toEqual({
       command: 'cursor',
-      args: ['agent', '--print', '--trust', '--model', 'codex', 'p'],
+      args: ['agent', '--print', '--trust', '--model', 'gpt-5.3-codex', 'p'],
     });
+  });
+
+  it('maps legacy Cursor model aliases to real CLI model ids', () => {
+    const cursor = registerBuiltinAgents().getPlanningOrThrow('cursor');
+    expect(cursor.buildPlanningCommand('p', { model: 'claude' }).args).toEqual([
+      'agent', '--print', '--trust', '--model', 'claude-4.5-sonnet', 'p',
+    ]);
+    expect(cursor.buildPlanningCommand('p', { model: 'codex' }).args).toEqual([
+      'agent', '--print', '--trust', '--model', 'gpt-5.3-codex', 'p',
+    ]);
   });
 });
 

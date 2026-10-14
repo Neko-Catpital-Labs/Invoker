@@ -143,15 +143,30 @@ describe('buildWebInvokerDispatch', () => {
     const { dispatch } = makeDispatch({
       loadConfig: () =>
         ({
-          defaultSlackHarnessPreset: 'omp+claude',
+          defaultSlackHarnessPreset: 'codex',
           slackHarnessPresets: {
             custom: { tool: 'codex' },
           },
         } as unknown as InvokerConfig),
     });
-    expect(await dispatch('invoker:get-planning-presets', [])).toEqual(expect.arrayContaining([
-      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: true, defaultConfirmationMode: 'require' },
-      { key: 'custom', label: 'custom', tool: 'codex', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
+    const response = await dispatch('invoker:get-planning-presets', []) as {
+      options: Array<Record<string, unknown>>;
+      cursorDiscovery?: { status: string };
+    };
+    expect(response.cursorDiscovery?.status).toMatch(/ok|failed|empty|skipped/);
+    expect(response.options).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'codex',
+        label: 'Codex',
+        tool: 'codex',
+        defaultConfirmationMode: 'require',
+      }),
+      expect.objectContaining({
+        key: 'custom',
+        label: 'custom',
+        tool: 'codex',
+        defaultConfirmationMode: 'require',
+      }),
     ]));
   });
 

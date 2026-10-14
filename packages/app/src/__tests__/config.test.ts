@@ -765,8 +765,8 @@ describe('filterPlanningPresets', () => {
   const presets = [
     { key: 'claude', tool: 'claude', model: undefined },
     { key: 'codex', tool: 'codex', model: undefined },
-    { key: 'cursor+claude', tool: 'cursor', model: 'claude' },
-    { key: 'cursor+codex', tool: 'cursor', model: 'codex' },
+    { key: 'cursor+claude', tool: 'cursor', model: 'claude-4.5-sonnet' },
+    { key: 'cursor+codex', tool: 'cursor', model: 'gpt-5.3-codex' },
     { key: 'omp+claude', tool: 'omp', model: 'claude' },
   ];
 

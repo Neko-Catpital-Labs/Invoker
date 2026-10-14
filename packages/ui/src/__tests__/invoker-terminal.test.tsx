@@ -508,8 +508,8 @@ describe('Invoker terminal (component)', () => {
         presetOptions: [
           { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
           { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
-          { key: 'cursor+claude', label: 'Claude via Cursor', tool: 'cursor', model: 'claude' },
-          { key: 'cursor+codex', label: 'Codex via Cursor', tool: 'cursor', model: 'codex' },
+          { key: 'cursor+claude', label: 'Claude Sonnet 4.5', tool: 'cursor', model: 'claude-4.5-sonnet' },
+          { key: 'cursor+codex', label: 'GPT-5.3 Codex', tool: 'cursor', model: 'gpt-5.3-codex' },
           { key: 'codex', label: 'Codex', tool: 'codex' },
         ],
         onPresetChange,
@@ -522,6 +522,67 @@ describe('Invoker terminal (component)', () => {
 
     fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'codex' } });
     expect(onPresetChange).toHaveBeenLastCalledWith('codex');
+  });
+
+  it('groups Cursor More… models and shows discovery loading/warning without changing selection', () => {
+    const onPresetChange = vi.fn();
+    const { rerender } = render(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'cursor+claude',
+        planningPresetsLoading: true,
+        cursorDiscoveryWarning: null,
+        presetOptions: [
+          {
+            key: 'cursor+claude',
+            label: 'Claude Sonnet 4.5',
+            tool: 'cursor',
+            model: 'claude-4.5-sonnet',
+            availability: 'unverified',
+            section: 'recommended',
+          },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+    expect(screen.getByTestId('invoker-terminal-models-loading')).toHaveTextContent('Checking Cursor models');
+    expect(screen.getByTestId('invoker-terminal-model')).toHaveValue('cursor+claude');
+
+    rerender(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'cursor+claude',
+        planningPresetsLoading: false,
+        cursorDiscoveryWarning: 'Could not verify Cursor models (timed out). Showing recommended list as unverified.',
+        presetOptions: [
+          {
+            key: 'cursor+claude',
+            label: 'Claude Sonnet 4.5',
+            tool: 'cursor',
+            model: 'claude-4.5-sonnet',
+            availability: 'unverified',
+            section: 'recommended',
+          },
+          {
+            key: 'cursor+brand-new-model',
+            label: 'Brand New Model',
+            tool: 'cursor',
+            model: 'brand-new-model',
+            availability: 'confirmed',
+            section: 'more',
+          },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    expect(screen.queryByTestId('invoker-terminal-models-loading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-models-warning')).toHaveTextContent('Could not verify Cursor models');
+    expect(screen.getByTestId('invoker-terminal-model')).toHaveValue('cursor+claude');
+    expect(onPresetChange).not.toHaveBeenCalled();
+    const modelSelect = screen.getByTestId('invoker-terminal-model');
+    expect(within(modelSelect).getByText('Claude Sonnet 4.5 (unverified)')).toBeInTheDocument();
+    expect(within(modelSelect).getByText('Brand New Model')).toBeInTheDocument();
   });
 
   it('shows the submitted-plan bar running state while the workflow is still running', () => {

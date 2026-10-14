@@ -447,6 +447,14 @@ export type InAppPlanResponse =
     };
 
 export type PlanningConfirmationMode = 'require' | 'auto_submit';
+/** How a planning model id relates to live Cursor discovery. */
+export type PlanningModelAvailability =
+  | 'confirmed'
+  | 'unverified'
+  | 'unavailable';
+
+export type PlanningPresetSection = 'recommended' | 'more';
+
 export interface PlanningPresetOption {
   key: string;
   label: string;
@@ -454,6 +462,23 @@ export interface PlanningPresetOption {
   model?: string;
   isDefault: boolean;
   defaultConfirmationMode?: PlanningConfirmationMode;
+  /** Live discovery status for Cursor model presets. Absent for non-Cursor tools. */
+  availability?: PlanningModelAvailability;
+  /** Picker grouping; curated Cursor models are recommended, extras are more. */
+  section?: PlanningPresetSection;
+}
+
+export type CursorModelDiscoveryStatus = 'ok' | 'failed' | 'empty' | 'skipped';
+
+export interface CursorModelDiscoverySummary {
+  status: CursorModelDiscoveryStatus;
+  /** Concise operator-facing warning when discovery did not confirm models. */
+  warning?: string;
+}
+
+export interface PlanningPresetsResponse {
+  options: PlanningPresetOption[];
+  cursorDiscovery?: CursorModelDiscoverySummary;
 }
 
 export interface InAppPlanningPlanSummaryTaskGroup {
@@ -1067,8 +1092,8 @@ export const IpcChannels = {
     response: { ok: boolean; reason?: string };
   },
   'invoker:get-planning-presets': {} as {
-    request: [];
-    response: PlanningPresetOption[];
+    request: [options?: { refreshCursorModels?: boolean }];
+    response: PlanningPresetsResponse;
   },
   'invoker:load-plan': {} as {
     request: [planText: string];

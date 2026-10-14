@@ -159,7 +159,7 @@ describe('buildDoctorChecks', () => {
   const cfg: CliConfigState = {
     path: '/x/config.json',
     exists: true,
-    presets: { omp: { tool: 'omp' }, 'cursor+claude': { tool: 'cursor', model: 'claude' } },
+    presets: { omp: { tool: 'omp' }, 'cursor+claude': { tool: 'cursor', model: 'claude-4.5-sonnet' } },
     defaultPreset: 'cursor+claude',
   };
 

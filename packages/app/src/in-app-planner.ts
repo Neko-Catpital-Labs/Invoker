@@ -36,8 +36,17 @@ import type {
   PlanningConfirmationMode,
   PlanningTerminalMode,
   PlanningPresetOption,
+  PlanningPresetsResponse,
+  type CursorModelDiscoverySummary,
+  type PlanningModelAvailability,
 } from '@invoker/contracts';
-import { forgeProjectIdentityFromUrl, resolveInvokerHomeRoot } from '@invoker/contracts';
+import {
+  curatedCursorPlanningModelIds,
+  cursorMorePresetKey,
+  forgeProjectIdentityFromUrl,
+  labelForBuiltinPlanningPreset,
+  resolveInvokerHomeRoot,
+} from '@invoker/contracts';
 import type {
   ConversationMessageEntry,
   ConversationRepository,
@@ -73,6 +82,7 @@ import {
   type PlanningRepoPool,
 } from './planning-chat-worktree.js';
 import { commandIsOnPath } from './system-diagnostics.js';
+import { discoverCursorPlanningModels } from './cursor-model-discovery.js';
 
 function logPlanningWorktreeReadyError(sessionId: string, step: string, error: unknown): void {
   console.error(`[planning-chat] ensurePlanningWorktreeReady ${step} failed session="${sessionId}": ${
@@ -270,11 +280,11 @@ function labelForPresetKey(key: string): string {
     case 'omp+codex':
       return 'Codex via OMP';
     case 'cursor+claude':
-      return 'Cursor + Claude';
+      return labelForBuiltinPlanningPreset(key) ?? 'Claude Sonnet 4.5';
     case 'cursor+codex':
-      return 'Cursor + Codex';
+      return labelForBuiltinPlanningPreset(key) ?? 'GPT-5.3 Codex';
     default:
-      return key.replaceAll('+', ' + ');
+      return labelForBuiltinPlanningPreset(key) ?? key.replaceAll('+', ' + ');
   }
 }
 
@@ -925,6 +935,90 @@ async function activatePlanningSessionWorktree(
   return true;
 }
 
+function applyCursorModelDiscovery(
+  options: PlanningPresetOption[],
+  discoveryOpts?: { refreshCursorModels?: boolean },
+): { options: PlanningPresetOption[]; cursorDiscovery: CursorModelDiscoverySummary } {
+  const hasCursor = options.some((opt) => opt.tool === 'cursor');
+  if (!hasCursor) {
+    return { options, cursorDiscovery: { status: 'skipped' } };
+  }
+
+  const outcome = discoverCursorPlanningModels({
+    plannerCommand: 'cursor',
+    refresh: discoveryOpts?.refreshCursorModels === true,
+  });
+
+  if (outcome.kind === 'failed') {
+    return {
+      options: options.map((opt) => (
+        opt.tool === 'cursor' && opt.model
+          ? { ...opt, availability: 'unverified' as const, section: 'recommended' as const }
+          : opt
+      )),
+      cursorDiscovery: {
+        status: 'failed',
+        warning: `Could not verify Cursor models (${outcome.reason}). Showing recommended list as unverified.`,
+      },
+    };
+  }
+
+  if (outcome.kind === 'empty') {
+    return {
+      options: options.map((opt) => (
+        opt.tool === 'cursor' && opt.model
+          ? { ...opt, availability: 'unverified' as const, section: 'recommended' as const }
+          : opt
+      )),
+      cursorDiscovery: {
+        status: 'empty',
+        warning: 'Cursor returned no models. Showing recommended list as unverified.',
+      },
+    };
+  }
+
+  const discoveredById = new Map(
+    outcome.models.map((model) => [model.id.toLowerCase(), model] as const),
+  );
+  const curatedIds = curatedCursorPlanningModelIds();
+  const existingKeys = new Set(options.map((opt) => opt.key));
+
+  const annotated = options.map((opt) => {
+    if (opt.tool !== 'cursor' || !opt.model) return opt;
+    const resolved = opt.model.trim().toLowerCase();
+    const availability: PlanningModelAvailability = discoveredById.has(resolved)
+      ? 'confirmed'
+      : 'unavailable';
+    return { ...opt, availability, section: 'recommended' as const };
+  });
+
+  const more: PlanningPresetOption[] = [];
+  for (const model of outcome.models) {
+    const idKey = model.id.toLowerCase();
+    if (curatedIds.has(idKey)) continue;
+    if (idKey.endsWith('-fast')) continue;
+    const key = cursorMorePresetKey(model.id);
+    if (existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    more.push({
+      key,
+      label: model.label,
+      tool: 'cursor',
+      model: model.id,
+      isDefault: false,
+      defaultConfirmationMode: annotated[0]?.defaultConfirmationMode,
+      availability: 'confirmed',
+      section: 'more',
+    });
+  }
+  more.sort((a, b) => a.label.localeCompare(b.label));
+
+  return {
+    options: [...annotated, ...more],
+    cursorDiscovery: { status: 'ok' },
+  };
+}
+
 /**
  * List the planning presets offered to pickers.
  * The `enabledExecutionAgents` allowlist is applied HERE (not at the IPC/web
@@ -932,16 +1026,23 @@ async function activatePlanningSessionWorktree(
  * dispatch — gets the same filtered view without double-filtering.
  * After the allowlist, presets whose planner `tool` is not on Invoker’s PATH
  * are dropped (injectable for tests; defaults to {@link commandIsOnPath}).
+ * When Cursor is available, hybrid discovery intersects the curated manifest
+ * with `cursor-agent --list-models` and appends non-curated ids under section "more".
  */
 export async function listInAppPlanningPresets(
   config: InvokerConfig,
-  opts?: { isInstalled?: (command: string) => boolean },
-): Promise<PlanningPresetOption[]> {
+  opts?: {
+    isInstalled?: (command: string) => boolean;
+    refreshCursorModels?: boolean;
+    /** When true, skip live Cursor discovery (tests / fast path). */
+    skipCursorDiscovery?: boolean;
+  },
+): Promise<PlanningPresetsResponse> {
   const isInstalled = opts?.isInstalled ?? commandIsOnPath;
   const presets = await resolveHarnessPresets(config);
   const defaultPresetKey = await resolveDefaultPresetKey(config);
   const defaultConfirmationMode = resolveDefaultPlanningConfirmationMode(config);
-  const options = Object.entries(presets).map(([key, preset]) => ({
+  const options: PlanningPresetOption[] = Object.entries(presets).map(([key, preset]) => ({
     key,
     label: labelForPresetKey(key),
     tool: preset.tool,
@@ -955,7 +1056,21 @@ export async function listInAppPlanningPresets(
   if (!hasDefault && filtered.length > 0) {
     filtered[0] = { ...filtered[0], isDefault: true };
   }
-  return filtered;
+
+  if (opts?.skipCursorDiscovery) {
+    return {
+      options: filtered.map((opt) => (
+        opt.tool === 'cursor' && opt.model
+          ? { ...opt, availability: 'unverified' as const, section: 'recommended' as const }
+          : opt
+      )),
+      cursorDiscovery: { status: 'skipped' },
+    };
+  }
+
+  return applyCursorModelDiscovery(filtered, {
+    refreshCursorModels: opts?.refreshCursorModels,
+  });
 }
 
 export function createPlanningCommandBuilderFromRegistry(
