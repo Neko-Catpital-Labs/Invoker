@@ -1292,6 +1292,42 @@ tasks:
     expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
   });
 
+  it('applies a mid-session preset switch from the send request to the live conversation', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const created = await sendPlanningChatMessage({
+      message: 'start on cursor',
+      presetKey: 'cursor+codex',
+      turnId: 'turn-preset-1',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'cursor hello',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    expect(session?.presetKey).toBe('cursor+codex');
+    expect(session?.conversation.planningTool).toBe('cursor');
+
+    const switched = await sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'now use codex',
+      presetKey: 'codex',
+      turnId: 'turn-preset-2',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'codex hello',
+    });
+    expect(switched.ok).toBe(true);
+    expect(session?.presetKey).toBe('codex');
+    expect(session?.conversation.planningTool).toBe('codex');
+  });
+
   it.each([
     {
       presetKey: 'cursor+codex',

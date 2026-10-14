@@ -1035,6 +1035,50 @@ export function listPlanningChatSessions(
   return { ok: true, sessions };
 }
 
+/**
+ * UI sends the selected preset with every turn. Apply it to the live session so
+ * harness switches take effect on the next message instead of keeping the
+ * PlanConversation tool/driver from session creation.
+ */
+async function syncPlanningSessionPreset(
+  session: InAppPlanningChatSession,
+  requestedPresetKey: string | undefined,
+  presets: Record<string, HarnessPreset>,
+  deps: InAppPlannerDeps & {
+    planningCommandBuilder: PlanningCommandBuilder;
+    planningSessionStore?: InAppPlanningSessionStore;
+  },
+): Promise<string | undefined> {
+  const nextKey = requestedPresetKey?.trim();
+  if (!nextKey || nextKey === session.presetKey) return undefined;
+
+  const preset = presets[nextKey];
+  if (!preset) return `Unknown planner preset "${nextKey}".`;
+
+  const missingTool = refuseIfPlanningToolMissingFromPath(
+    preset.tool,
+    deps.isInstalled ?? commandIsOnPath,
+  );
+  if (missingTool) return missingTool;
+
+  const { selectHarnessSessionDriver } = await loadPlannerSurfaces();
+  const mcpConfigPath = session.worktreePath
+    ? planningMcpConfigPath(session.worktreePath)
+    : undefined;
+  session.conversation.rebindHarness({
+    tool: preset.tool,
+    model: preset.model,
+    harnessSessionDriver: selectHarnessSessionDriver(preset, {
+      executionAgentRegistry: deps.executionAgentRegistry,
+      planningCommandBuilder: deps.planningCommandBuilder,
+      mcpConfigPath,
+    }),
+  });
+  session.presetKey = nextKey;
+  persistPlanningSession(session, deps.planningSessionStore, false);
+  return undefined;
+}
+
 export async function sendPlanningChatMessage(
   request: InAppPlanningChatRequest,
   deps: InAppPlannerDeps & {
@@ -1093,6 +1137,15 @@ export async function sendPlanningChatMessage(
       return { ok: false, sessionId: session.id, turnId, error: 'duplicate-turn' };
     }
     const sessionPresets = await resolveHarnessPresets(deps.config);
+    const presetSyncError = await syncPlanningSessionPreset(
+      session,
+      typeof rawRequest?.presetKey === 'string' ? rawRequest.presetKey : undefined,
+      sessionPresets,
+      deps,
+    );
+    if (presetSyncError) {
+      return { ok: false, sessionId: session.id, turnId, error: presetSyncError };
+    }
     const sessionPreset = sessionPresets[session.presetKey];
     if (!sessionPreset) {
       return {

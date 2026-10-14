@@ -1203,6 +1203,26 @@ export class PlanConversation {
   // ── Planner CLI Subprocess ─────────────────────────────
 
   /**
+   * Switch harness/tool for later turns without dropping conversation history.
+   * Clears any continuity session id so the next turn starts fresh on the new harness.
+   */
+  rebindHarness(options: {
+    tool?: string;
+    model?: string;
+    harnessSessionDriver?: HarnessSessionDriver;
+  }): void {
+    this.tool = options.tool;
+    this.model = options.model;
+    this.harnessSessionDriver = options.harnessSessionDriver;
+    this._harnessSessionId = undefined;
+  }
+
+  /** Active planning tool name (e.g. cursor/codex/claude), if set. */
+  get planningTool(): string | undefined {
+    return this.tool;
+  }
+
+  /**
    * Kill the in-flight planner process tree, if any. Rejects the active
    * spawn promise with {@link PlanningTurnCancelledError}.
    */

@@ -905,6 +905,17 @@ describe('PlanConversation', () => {
     expect(err?.message).not.toContain('Cursor');
   });
 
+  it('rebindHarness updates the planning tool and clears continuity', () => {
+    const conv = new PlanConversation({
+      tool: 'cursor',
+      model: 'grok-4.5',
+      authPreflightEnabled: false,
+    });
+    expect(conv.planningTool).toBe('cursor');
+    conv.rebindHarness({ tool: 'codex', model: undefined, harnessSessionDriver: undefined });
+    expect(conv.planningTool).toBe('codex');
+  });
+
   it('abortActiveTurn kills the in-flight planner and rejects with Cancelled.', async () => {
     const proc = new EventEmitter() as any;
     proc.stdout = new EventEmitter();
