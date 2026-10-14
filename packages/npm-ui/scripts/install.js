@@ -54,6 +54,8 @@ function expectedHash(sums, name) {
   return undefined;
 }
 
+// Safety invariant: wipe vendor so a cancelled prior postinstall cannot leave extract dirs that collide on retry.
+await rm(vendor, { recursive: true, force: true });
 await mkdir(vendor, { recursive: true });
 await download(`${baseUrl}/SHA256SUMS`, join(vendor, 'SHA256SUMS'));
 await download(`${baseUrl}/${asset}`, join(vendor, asset));
@@ -67,14 +69,12 @@ if (actual !== expected) {
 }
 
 if (process.platform === 'darwin') {
-  await rm(join(vendor, 'Invoker.app'), { recursive: true, force: true });
-  execFileSync('unzip', ['-q', asset], { cwd: vendor, stdio: 'inherit' });
+  execFileSync('unzip', ['-qo', asset], { cwd: vendor, stdio: 'inherit' });
   if (!existsSync(join(vendor, 'Invoker.app'))) {
     throw new Error(`${asset} did not contain Invoker.app`);
   }
 } else {
   const target = join(vendor, 'Invoker.AppImage');
-  await rm(target, { force: true });
   execFileSync('cp', [join(vendor, asset), target]);
   await chmod(target, 0o755);
 }

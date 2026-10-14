@@ -58,7 +58,7 @@ ${BOLD}Respond:${RESET}
 
 ${BOLD}Configure:${RESET}
   install-skills [install|update|reinstall]          Install bundled Invoker AI helpers
-  install-skills uninstall                            Remove bundled Invoker AI helpers
+  install-skills uninstall                            Prefer invoker-cli uninstall (skills-only fallback)
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set pool <taskId> <poolId>                          Change execution pool (a pool name from executionPools config)
