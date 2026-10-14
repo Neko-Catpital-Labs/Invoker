@@ -60,7 +60,7 @@ else process.exit(9);
     expect(deps.installBundledSkills).toHaveBeenCalledWith('install');
   });
 
-  it('keeps helper install ok and mentions a non-MCP install note', async () => {
+  it('keeps helper install ok and mentions a skipped MCP file', async () => {
     const cliPath = makeCli('process.exit(0);');
     const deps = makeDeps(cliPath);
     deps.installBundledSkills.mockReturnValue({
@@ -68,7 +68,7 @@ else process.exit(9);
       promptRecommended: false,
       managedPrefix: 'invoker-',
       bundledSkillNames: ['plan-to-invoker'],
-      lastInstallError: 'Invalid Claude settings at /tmp/.claude/settings.json: expected a JSON object',
+      lastInstallError: 'Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object',
       targets: [{ id: 'codex', name: 'Codex', path: '/tmp/skills', available: true, installed: true, upToDate: true, installedSkillNames: ['invoker-plan-to-invoker'] }],
       commandTargets: [],
       mcpTargets: [],
@@ -83,8 +83,8 @@ else process.exit(9);
 
     expect(result.ok).toBe(true);
     expect(result.steps[0]).toMatchObject({ id: 'helpers', ok: true });
-    expect(result.steps[0]?.output).toContain('into harnesses');
-    expect(result.steps[0]?.output).toContain('Install note: Invalid Claude settings at /tmp/.claude/settings.json: expected a JSON object');
+    expect(result.steps[0]?.output).toContain('Harness MCP stays opt-in');
+    expect(result.steps[0]?.output).toContain('Install note: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
     expect(result.steps[0]?.output).not.toContain('MCP skipped');
   });
 

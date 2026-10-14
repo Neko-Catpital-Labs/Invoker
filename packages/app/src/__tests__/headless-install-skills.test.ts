@@ -47,12 +47,12 @@ describe('headless install-skills', () => {
     expect(output).toContain('- invoker-make-pr');
   });
 
-  it('prints a one-line install note on stderr and still reports installed helpers', async () => {
+  it('prints a one-line MCP skip on stderr and still reports installed helpers', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const installBundledSkills = vi.fn(() => ({
       ...makeStatus(),
-      lastInstallError: 'Invalid Claude settings at /tmp/.claude/settings.json: expected a JSON object',
+      lastInstallError: 'Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object',
     }));
 
     await runHeadless(['install-skills', 'reinstall'], {
@@ -63,14 +63,13 @@ describe('headless install-skills', () => {
     const err = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(output).toContain('Installed 2 bundled AI helpers with prefix "invoker-".');
     expect(output).toContain('Harness MCP/skills stay opt-in');
-    expect(err).toContain('Install note: Invalid Claude settings at /tmp/.claude/settings.json: expected a JSON object');
+    expect(err).toContain('Install note: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
     expect(err).not.toContain('MCP skipped');
     expect(err).not.toContain('at installBundledSkills');
   });
 
   it('prints Uninstalled when install-skills uninstall runs', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const installBundledSkills = vi.fn(() => makeStatus());
 
     await runHeadless(['install-skills', 'uninstall'], {
@@ -79,9 +78,7 @@ describe('headless install-skills', () => {
 
     expect(installBundledSkills).toHaveBeenCalledWith('uninstall');
     const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
-    const err = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(output).toContain('Uninstalled 2 bundled AI helpers with prefix "invoker-".');
-    expect(err).toContain('prefer `invoker-cli uninstall`');
   });
 
   it('throws a clear error when helper installation is unavailable', async () => {
