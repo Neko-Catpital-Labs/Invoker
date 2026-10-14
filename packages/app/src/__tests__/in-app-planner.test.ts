@@ -1492,6 +1492,135 @@ tasks:
     expect(events).toEqual([{ turnId: 'turn-cancel', error: PLANNING_TURN_CANCELLED_MESSAGE }]);
   });
 
+  it('cancel during pre-spawn planner work stays cancelled and does not emit completed', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const streamEvents: Array<{ status?: string; error?: string }> = [];
+    let releaseOverride!: (value: string) => void;
+    const overrideGate = new Promise<string>((resolve) => { releaseOverride = resolve; });
+    let overrideStarted!: () => void;
+    const started = new Promise<void>((resolve) => { overrideStarted = resolve; });
+
+    const created = await sendPlanningChatMessage({
+      message: 'bootstrap',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'ready',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    if (!session) throw new Error('expected session');
+    vi.spyOn(session.conversation, 'abortActiveTurn').mockReturnValue(false);
+
+    const sendPromise = sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'slow turn',
+      turnId: 'turn-pre-spawn-cancel',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        overrideStarted();
+        return overrideGate;
+      },
+      onRawPlannerOutput: (event) => {
+        if (event.turn) {
+          streamEvents.push({ status: event.turn.status, error: event.turn.error });
+        }
+      },
+    });
+
+    const recordStream = {
+      sessions,
+      onRawPlannerOutput: (event: { turn?: { status?: string; error?: string } }) => {
+        if (event.turn) {
+          streamEvents.push({ status: event.turn.status, error: event.turn.error });
+        }
+      },
+    };
+    await started;
+    const cancelled = cancelPlanningChatTurn(
+      { sessionId: created.sessionId, turnId: 'turn-pre-spawn-cancel' },
+      recordStream,
+    );
+    expect(cancelled.ok && cancelled.cancelled).toBe(true);
+    expect(session.activeTurnStatus).toBe('failed');
+    expect(session.activeTurnError).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+
+    releaseOverride('should not complete');
+    const result = await sendPromise;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected cancelled turn');
+    expect(result.error).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(session.activeTurnStatus).toBe('failed');
+    expect(session.activeTurnError).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(streamEvents.some((event) => event.status === 'completed')).toBe(false);
+    expect(streamEvents.filter((event) => event.status === 'failed')).toEqual([
+      { status: 'failed', error: PLANNING_TURN_CANCELLED_MESSAGE },
+    ]);
+  });
+
+  it('next send after a cancelled turn clears the latch and can complete', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    let releaseOverride!: (value: string) => void;
+    const overrideGate = new Promise<string>((resolve) => { releaseOverride = resolve; });
+    let overrideStarted!: () => void;
+    const started = new Promise<void>((resolve) => { overrideStarted = resolve; });
+
+    const created = await sendPlanningChatMessage({
+      message: 'bootstrap',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'ready',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+
+    const cancelledSend = sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'cancel me',
+      turnId: 'turn-latch-clear-1',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        overrideStarted();
+        return overrideGate;
+      },
+    });
+    await started;
+    cancelPlanningChatTurn(
+      { sessionId: created.sessionId, turnId: 'turn-latch-clear-1' },
+      { sessions },
+    );
+    releaseOverride('ignored');
+    const cancelledResult = await cancelledSend;
+    expect(cancelledResult.ok).toBe(false);
+
+    const next = await sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'try again',
+      turnId: 'turn-latch-clear-2',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello again',
+    });
+    expect(next.ok && next.reply).toBe('hello again');
+  });
+
   it('cancelPlanningChatTurn is a no-op when no turn is running', async () => {
     const sessions = createInAppPlanningChatSessions();
     const created = await sendPlanningChatMessage({

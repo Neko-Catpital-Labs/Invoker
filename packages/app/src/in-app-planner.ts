@@ -73,7 +73,7 @@ import {
 } from '@invoker/planning-core';
 import { detectDefaultBranchRemote } from '@invoker/workflow-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
-import { isPlanningTurnCancelledError } from '@invoker/surfaces';
+import { isPlanningTurnCancelledError, PlanningTurnCancelledError } from '@invoker/surfaces';
 import { filterPlanningPresets, type InvokerConfig } from './config.js';
 import {
   ensurePlanningWorktreeReady,
@@ -1304,7 +1304,26 @@ export async function sendPlanningChatMessage(
       activeSession.activeTurnError = undefined;
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
+      const turnIsCancelled = (): boolean => isTurnAlreadyMarkedCancelled(
+        activeSession.activeTurnStatus,
+        activeSession.activeTurnError,
+        activeSession.activeTurnId,
+        turnId,
+      );
+      const throwIfTurnCancelled = (): void => {
+        if (turnIsCancelled()) {
+          throw new PlanningTurnCancelledError();
+        }
+      };
       const finishTurn = (response: Extract<InAppPlanningChatResponse, { ok: true }>): InAppPlanningChatResponse => {
+        if (turnIsCancelled()) {
+          return {
+            ok: false,
+            sessionId: activeSession.id,
+            turnId,
+            error: PLANNING_TURN_CANCELLED_MESSAGE,
+          };
+        }
         activeSession.activeTurnId = undefined;
         activeSession.activeTurnStatus = undefined;
         activeSession.activeTurnError = undefined;
@@ -1326,6 +1345,7 @@ export async function sendPlanningChatMessage(
 
       try {
         const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
+        throwIfTurnCancelled();
         if (activatedWorktree) {
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
         }
@@ -1350,10 +1370,13 @@ export async function sendPlanningChatMessage(
           } catch (error) {
             logPlanningWorktreeReadyError(activeSession.id, 'before-send', error);
           }
+          throwIfTurnCancelled();
         }
+        throwIfTurnCancelled();
         let reply = deps.plannerReplyOverride
           ? await deps.plannerReplyOverride(hostedMessage)
           : await activeSession.conversation.sendMessage(hostedMessage);
+        throwIfTurnCancelled();
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, message, reply);
         }
@@ -1434,6 +1457,7 @@ export async function sendPlanningChatMessage(
         }
 
         const mismatchedRepoUrl = await silentRepoMismatch(activeSession, review.planText);
+        throwIfTurnCancelled();
         if (mismatchedRepoUrl) {
           const mismatchReply = `Draft rejected because it silently changed repositories to ${mismatchedRepoUrl}. `
             + `This planning session is bound to ${activeSession.repoUrl}. Name a different repository explicitly if that is intentional.`;
@@ -1441,6 +1465,7 @@ export async function sendPlanningChatMessage(
           const correctedReply = deps.plannerReplyOverride
             ? await deps.plannerReplyOverride(correctionPrompt)
             : await activeSession.conversation.sendMessage(correctionPrompt);
+          throwIfTurnCancelled();
           const correctedPlanText = deps.plannerReplyOverride
             ? extractFencedYamlPlanText(correctedReply)
             : activeSession.conversation.lastTurnDraftPlanText;

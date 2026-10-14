@@ -739,6 +739,8 @@ export class PlanConversation {
     const t0 = Date.now();
     const turn = this.messages.filter(m => m.role === 'user').length + 1;
     this.log('plan-conversation', 'info', `[TRACE] sendMessage() start (threadTs=${this.threadTs}, initialized=${this._initialized}, msgCount=${this.messages.length}, turn=${turn})`);
+    // Next user send clears a prior cancel latch so a later turn can complete.
+    this.activePlannerAbortRequested = false;
 
     if (!this._initialized) await this.init();
     const tInit = Date.now();
@@ -1210,7 +1212,10 @@ export class PlanConversation {
   }
 
   abortActiveTurn(): boolean {
-    if (!this.activePlannerChild && !this.activePlannerReject) return false;
+    const hadInFlight = Boolean(this.activePlannerChild || this.activePlannerReject);
+    if (!hadInFlight && this.activePlannerAbortRequested) return false;
+    // Latch with no child only while a turn is in flight (preflight/backoff/pre-spawn).
+    if (!hadInFlight && !this.turnInFlight) return false;
     this.activePlannerAbortRequested = true;
     const child = this.activePlannerChild;
     const reject = this.activePlannerReject;
@@ -1220,6 +1225,12 @@ export class PlanConversation {
     }
     reject?.(new PlanningTurnCancelledError());
     return true;
+  }
+
+  private throwIfAbortRequested(): void {
+    if (this.activePlannerAbortRequested) {
+      throw new PlanningTurnCancelledError();
+    }
   }
 
   async spawnPlanner(prompt: string, turn?: number): Promise<string> {
@@ -1273,6 +1284,7 @@ export class PlanConversation {
     plannerLabel: string,
   ): Promise<string> {
     await this.runAuthPreflightOrThrow(command, plannerLabel);
+    this.throwIfAbortRequested();
 
     const totalAttempts = this.plannerRetryLimit + 1;
     let lastStderrTail = '';
@@ -1283,7 +1295,9 @@ export class PlanConversation {
         this.log('plan-conversation', 'warn',
           `[PLANNER_RETRY] backing off ${backoffMs}ms before attempt=${attempt + 1}/${totalAttempts} (planner=${plannerLabel})`);
         await delay(backoffMs);
+        this.throwIfAbortRequested();
       }
+      this.throwIfAbortRequested();
       try {
         return await this.spawnPlannerAttempt(prompt, command, args, plannerLabel, attempt + 1, totalAttempts);
       } catch (err) {
@@ -1381,7 +1395,13 @@ export class PlanConversation {
 
       this.activePlannerChild = child;
       this.activePlannerReject = (error) => settle(() => reject(error));
-      this.activePlannerAbortRequested = false;
+      if (this.activePlannerAbortRequested) {
+        const rejectForAbort = this.activePlannerReject;
+        this.activePlannerReject = null;
+        void terminateChildProcessGroup(child, () => childProcessHasExited(child) || settled);
+        rejectForAbort?.(new PlanningTurnCancelledError());
+        return;
+      }
 
       let stdout = '';
       let stderr = '';

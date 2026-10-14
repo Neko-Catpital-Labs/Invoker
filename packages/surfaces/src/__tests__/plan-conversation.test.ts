@@ -939,6 +939,56 @@ describe('PlanConversation', () => {
     expect(conversation.abortActiveTurn()).toBe(false);
   });
 
+  it('abortActiveTurn latches cancel during auth preflight before any child exists', async () => {
+    let releasePreflight!: () => void;
+    const preflightGate = new Promise<void>((resolve) => { releasePreflight = resolve; });
+    const runner = vi.fn<PlannerAuthPreflightCommandRunner>(async () => {
+      await preflightGate;
+      return { exitCode: 0, output: JSON.stringify({ loggedIn: true }), timedOut: false };
+    });
+    const conv = new PlanConversation({
+      tool: 'claude',
+      authPreflightRunner: runner,
+      planningCommandBuilder: () => ({
+        command: 'claude',
+        args: ['--dangerously-skip-permissions', '-p', 'x'],
+      }),
+    });
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(runner).toHaveBeenCalled());
+    expect(conv.abortActiveTurn()).toBe(true);
+    releasePreflight();
+    await expect(promise).rejects.toBeInstanceOf(PlanningTurnCancelledError);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('abortActiveTurn latches cancel during retry backoff and skips the next spawn', async () => {
+    const emptyProc = new EventEmitter() as any;
+    emptyProc.stdout = new EventEmitter();
+    emptyProc.stderr = new EventEmitter();
+    emptyProc.pid = 9001;
+    emptyProc.exitCode = null;
+    emptyProc.signalCode = null;
+    emptyProc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(emptyProc);
+
+    const conv = new PlanConversation({
+      tool: 'codex',
+      authPreflightEnabled: false,
+      plannerRetryLimit: 1,
+      plannerRetryBaseDelayMs: 50,
+      planningCommandBuilder: () => ({ command: 'codex', args: ['exec', '--json', 'x'] }),
+    });
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(1));
+    emptyProc.emit('close', 0);
+    await vi.waitFor(() => expect(conv.abortActiveTurn()).toBe(true));
+    await expect(promise).rejects.toBeInstanceOf(PlanningTurnCancelledError);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
   it('fails fast when Cursor status hangs after unable to fetch user details', async () => {
     const conv = new PlanConversation({
       tool: 'cursor',
