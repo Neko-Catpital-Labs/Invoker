@@ -46,6 +46,7 @@ import {
   forgeProjectIdentityFromUrl,
   labelForBuiltinPlanningPreset,
   resolveInvokerHomeRoot,
+  resolvePlanningPresetByKey,
 } from '@invoker/contracts';
 import type {
   ConversationMessageEntry,
@@ -831,7 +832,7 @@ async function createSession(
     ? request.presetKey
     : undefined;
   const presetKey = requestedPresetKey ?? await resolveDefaultPresetKey(deps.config);
-  const preset = presets[presetKey];
+  const preset = resolvePlanningPresetByKey(presets, presetKey);
   if (!preset) {
     return { error: `Unknown planner preset "${presetKey}".` };
   }
@@ -923,7 +924,7 @@ async function activatePlanningSessionWorktree(
     sessionId: session.id,
   });
   const presets = await resolveHarnessPresets(deps.config);
-  const preset = presets[session.presetKey];
+  const preset = resolvePlanningPresetByKey(presets, session.presetKey);
   if (!preset) throw new Error(`Unknown planner preset "${session.presetKey}".`);
   const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
   const conversationDeps = {
@@ -1100,7 +1101,7 @@ export async function planFromGoal(
 
   const presets = await resolveHarnessPresets(deps.config);
   const presetKey = request.presetKey ?? await resolveDefaultPresetKey(deps.config);
-  const preset = presets[presetKey];
+  const preset = resolvePlanningPresetByKey(presets, presetKey);
   if (!preset) {
     return { ok: false, error: `Unknown planner preset "${presetKey}".` };
   }
@@ -1171,7 +1172,7 @@ async function syncPlanningSessionPreset(
   const nextKey = requestedPresetKey?.trim();
   if (!nextKey || nextKey === session.presetKey) return undefined;
 
-  const preset = presets[nextKey];
+  const preset = resolvePlanningPresetByKey(presets, nextKey);
   if (!preset) return `Unknown planner preset "${nextKey}".`;
 
   const missingTool = refuseIfPlanningToolMissingFromPath(
@@ -1265,7 +1266,7 @@ export async function sendPlanningChatMessage(
     if (presetSyncError) {
       return { ok: false, sessionId: session.id, turnId, error: presetSyncError };
     }
-    const sessionPreset = sessionPresets[session.presetKey];
+    const sessionPreset = resolvePlanningPresetByKey(sessionPresets, session.presetKey);
     if (!sessionPreset) {
       return {
         ok: false,
@@ -1816,7 +1817,7 @@ export async function rebindPlanningChatRepo(
     });
 
     const presets = await resolveHarnessPresets(deps.config);
-    const preset = presets[session.presetKey];
+    const preset = resolvePlanningPresetByKey(presets, session.presetKey);
     if (!preset) {
       return { ok: false, error: `Unknown planner preset "${session.presetKey}".` };
     }
@@ -1932,7 +1933,7 @@ export async function restorePlanningChatSessions(
   const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
 
   for (const record of records) {
-    const preset = presets[record.presetKey];
+    const preset = resolvePlanningPresetByKey(presets, record.presetKey);
     if (!preset) continue;
 
     let restoredWorktreePath: string | undefined;

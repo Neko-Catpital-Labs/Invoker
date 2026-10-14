@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_PLANNING_PRESETS,
   CURSOR_PLANNING_MODEL_ALIASES,
+  cursorMorePresetKey,
   labelForBuiltinPlanningPreset,
   resolveCursorPlanningModel,
+  resolvePlanningPresetByKey,
 } from '../planning-presets.js';
 
 describe('planning presets', () => {
@@ -40,5 +42,30 @@ describe('planning presets', () => {
   it('exposes human labels for builtin cursor models', () => {
     expect(labelForBuiltinPlanningPreset('cursor+claude')).toBe('Claude Sonnet 4.5');
     expect(labelForBuiltinPlanningPreset('cursor+auto')).toBe('Auto');
+  });
+
+  it('resolves known presets before synthesizing cursor+ More… keys', () => {
+    expect(resolvePlanningPresetByKey(BUILTIN_PLANNING_PRESETS, 'cursor+claude')).toEqual({
+      tool: 'cursor',
+      model: 'claude-4.5-sonnet',
+    });
+    expect(resolvePlanningPresetByKey(BUILTIN_PLANNING_PRESETS, cursorMorePresetKey('brand-new-model'))).toEqual({
+      tool: 'cursor',
+      model: 'brand-new-model',
+    });
+    expect(resolvePlanningPresetByKey(BUILTIN_PLANNING_PRESETS, 'codex+something')).toBeUndefined();
+    expect(resolvePlanningPresetByKey(BUILTIN_PLANNING_PRESETS, 'cursor+')).toBeUndefined();
+    expect(resolvePlanningPresetByKey(BUILTIN_PLANNING_PRESETS, 'bad')).toBeUndefined();
+  });
+
+  it('lets config presets win over cursor+ synthesis for the same key', () => {
+    const presets = {
+      ...BUILTIN_PLANNING_PRESETS,
+      'cursor+brand-new-model': { tool: 'cursor' as const, model: 'configured-override' },
+    };
+    expect(resolvePlanningPresetByKey(presets, 'cursor+brand-new-model')).toEqual({
+      tool: 'cursor',
+      model: 'configured-override',
+    });
   });
 });

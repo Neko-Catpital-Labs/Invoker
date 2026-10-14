@@ -1344,6 +1344,55 @@ tasks:
     expect(session?.conversation.planningTool).toBe('codex');
   });
 
+  it('starts and switches with a discovered cursor+ More… model key', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const rebindSpy = vi.spyOn(PlanConversation.prototype, 'rebindHarness');
+    try {
+      const created = await createPlanningChatSession({
+        title: 'More model',
+        presetKey: 'cursor+brand-new-model',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+      });
+      expect(created).toEqual({
+        ok: true,
+        session: expect.objectContaining({
+          presetKey: 'cursor+brand-new-model',
+        }),
+      });
+      if (!created.ok || !created.session) throw new Error('expected create to succeed');
+      const session = sessions.get(created.session.id);
+      expect(session?.conversation.planningTool).toBe('cursor');
+      expect((session?.conversation as unknown as { model?: string }).model).toBe('brand-new-model');
+
+      const switched = await sendPlanningChatMessage({
+        sessionId: created.session.id,
+        message: 'switch to another discovered model',
+        presetKey: 'cursor+another-discovered',
+        turnId: 'turn-more-switch',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        plannerReplyOverride: async () => 'switched',
+      });
+      expect(switched.ok).toBe(true);
+      expect(session?.presetKey).toBe('cursor+another-discovered');
+      expect(session?.conversation.planningTool).toBe('cursor');
+      expect(rebindSpy).toHaveBeenCalledWith(expect.objectContaining({
+        tool: 'cursor',
+        model: 'another-discovered',
+      }));
+      expect((session?.conversation as unknown as { model?: string }).model).toBe('another-discovered');
+    } finally {
+      rebindSpy.mockRestore();
+    }
+  });
+
   it.each([
     {
       presetKey: 'cursor+codex',

@@ -25,7 +25,7 @@ import type {
   WorkerDecisionsRequest,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
-import { IpcChannels } from '@invoker/contracts';
+import { IpcChannels, resolvePlanningPresetByKey } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
@@ -115,7 +115,11 @@ function planningAgentForPreset(config: InvokerConfig, presetKey: unknown): stri
   const key = typeof presetKey === 'string' && presetKey.trim()
     ? presetKey.trim()
     : config.defaultSlackHarnessPreset ?? 'cursor+claude';
-  const preset = config.slackHarnessPresets?.[key] ?? DEFAULT_SLACK_HARNESS_PRESETS[key];
+  const presets = {
+    ...DEFAULT_SLACK_HARNESS_PRESETS,
+    ...(config.slackHarnessPresets ?? {}),
+  };
+  const preset = resolvePlanningPresetByKey(presets, key);
   if (!preset) return undefined;
   const tool = preset.tool.trim().toLowerCase();
   if ((tool === 'cursor' || tool === 'omp') && preset.model?.trim()) {

@@ -63,6 +63,20 @@ export function curatedCursorPlanningModelIds(): Set<string> {
   return ids;
 }
 
+const CURSOR_MORE_PRESET_PREFIX = 'cursor+';
+
 export function cursorMorePresetKey(modelId: string): string {
-  return `cursor+${modelId.trim()}`;
+  return `${CURSOR_MORE_PRESET_PREFIX}${modelId.trim()}`;
+}
+
+export function resolvePlanningPresetByKey(
+  presets: Readonly<Record<string, { tool: string; model?: string }>>,
+  presetKey: string,
+): { tool: string; model?: string } | undefined {
+  const known = presets[presetKey];
+  if (known) return known;
+  if (!presetKey.startsWith(CURSOR_MORE_PRESET_PREFIX)) return undefined;
+  const modelId = presetKey.slice(CURSOR_MORE_PRESET_PREFIX.length).trim();
+  if (!modelId) return undefined;
+  return { tool: 'cursor', model: modelId };
 }
