@@ -37,6 +37,24 @@ export interface PlanningHarnessChoice {
 export const PLANNING_TOOLS_EMPTY_PATH_MESSAGE =
   "No planning tools on Invoker's PATH. Install one (e.g. Cursor), then restart Invoker. Check with: invoker-cli doctor";
 
+/** Must match `PLANNING_TURN_CANCELLED_MESSAGE` in packages/app/src/in-app-planner.ts. */
+export const PLANNING_TURN_CANCELLED_MESSAGE = 'Cancelled.';
+
+export function isPlanningCancelledFailure(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const trimmed = message.trim();
+  return trimmed === PLANNING_TURN_CANCELLED_MESSAGE
+    || trimmed.endsWith(`\n${PLANNING_TURN_CANCELLED_MESSAGE}`);
+}
+
+function planningStreamStatusLabel(stream: InvokerTerminalPlanningStream | null | undefined): string {
+  if (!stream) return 'Working…';
+  if (stream.status !== 'failed') return 'Drafting your plan…';
+  return isPlanningCancelledFailure(stream.text)
+    ? 'Planning cancelled'
+    : 'Planning stopped. Try again when ready.';
+}
+
 function titleCaseIdentifier(value: string): string {
   return value
     .split(/[-_\s/]+/)
@@ -814,11 +832,20 @@ export function InvokerTerminal({
               : 'text-muted-foreground'
           }`}
         >
-          <span
-            aria-hidden="true"
-            className="inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-muted-foreground border-t-foreground"
-          />
-          <span>{planningStream ? (planningStream.status === 'failed' ? 'Planning stopped. Try again when ready.' : 'Drafting your plan…') : 'Working…'}</span>
+          {planningStream?.status === 'failed' ? (
+            <span
+              aria-hidden="true"
+              data-testid="invoker-terminal-planner-stream-idle"
+              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-destructive"
+            />
+          ) : (
+            <span
+              aria-hidden="true"
+              data-testid="invoker-terminal-planner-stream-spinner"
+              className="inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-muted-foreground border-t-foreground"
+            />
+          )}
+          <span>{planningStreamStatusLabel(planningStream)}</span>
         </div>
       ) : null}
     </>

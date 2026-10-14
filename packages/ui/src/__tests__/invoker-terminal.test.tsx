@@ -124,6 +124,7 @@ const { App } = await import('../App.js');
 const {
   InvokerTerminal,
   PLANNING_TOOLS_EMPTY_PATH_MESSAGE,
+  PLANNING_TURN_CANCELLED_MESSAGE,
   buildPlanningHarnessChoices,
 } = await import('../components/InvokerTerminal.js');
 
@@ -361,6 +362,23 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
     fireEvent.click(cancel);
     expect(onCancelTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows Planning cancelled without a spinner and hides the Cancelled turn-error card', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        busy: false,
+        turnError: null,
+        planningStream: { text: PLANNING_TURN_CANCELLED_MESSAGE, status: 'failed' },
+      })}
+    />);
+
+    const panel = screen.getByTestId('invoker-terminal-planner-stream');
+    expect(panel).toHaveAttribute('data-state', 'failed');
+    expect(panel).toHaveTextContent('Planning cancelled');
+    expect(screen.getByTestId('invoker-terminal-planner-stream-idle')).toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
   });
 
   it('keeps the send spinner while binding instead of Cancel', () => {
@@ -841,6 +859,22 @@ describe('Invoker terminal (component)', () => {
     expect(mock.api.planningChatCancel).toHaveBeenCalledWith({
       turnId,
     });
+
+    // First-message turns stay on the local session id until send resolves;
+    // the cancel stream event must target that same view id.
+    await act(async () => {
+      mock.firePlanningChatStream({
+        sessionId: 'local-planning-session-1',
+        turnId,
+        turn: { status: 'failed', error: PLANNING_TURN_CANCELLED_MESSAGE },
+      });
+    });
+
+    const panel = await screen.findByTestId('invoker-terminal-planner-stream');
+    expect(panel).toHaveTextContent('Planning cancelled');
+    expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
   });
 
   it('shows concise planning activity while busy and removes it when the final reply arrives', async () => {
@@ -911,6 +945,8 @@ describe('Invoker terminal (component)', () => {
       const panel = screen.getByTestId('invoker-terminal-planner-stream');
       expect(panel).toHaveAttribute('data-state', 'failed');
       expect(panel).toHaveTextContent('Planning stopped. Try again when ready.');
+      expect(screen.getByTestId('invoker-terminal-planner-stream-idle')).toBeInTheDocument();
+      expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
     });
 
     const firstTurnId = vi.mocked(mock.api.planningChatSend).mock.calls[0][0].turnId;

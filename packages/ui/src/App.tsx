@@ -77,7 +77,12 @@ import {
   type PlanningSessionView,
   type PlanningStreamState,
 } from './lib/planning-session-view.js';
-import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } from './components/InvokerTerminal.js';
+import {
+  InvokerTerminal,
+  PLANNING_TURN_CANCELLED_MESSAGE,
+  type InvokerTerminalLine,
+  type PlanningTerminalMode,
+} from './components/InvokerTerminal.js';
 import { WorkflowContextMenu, type ContextMenuCloseOptions } from './components/WorkflowContextMenu.js';
 import { MarkdownText } from './components/MarkdownText.js';
 import { Toaster, toast } from 'sonner';
@@ -2517,7 +2522,9 @@ export function App() {
     planningSessionsRef.current = planningSessionsRef.current.map(applyFailed);
     setPlanningSessions((prev) => prev.map(applyFailed));
     if (!wasAlreadyFailed) {
-      appendTerminalLine(outcome.error, 'system', 'error', targetId);
+      if (outcome.error !== PLANNING_TURN_CANCELLED_MESSAGE) {
+        appendTerminalLine(outcome.error, 'system', 'error', targetId);
+      }
       keepPlanningStreamFailureForSessionIds([sessionId, targetId], outcome.error);
     }
     forgetPlanningStreamAliasesForSessionIds([sessionId, targetId]);
@@ -4831,7 +4838,12 @@ export function App() {
             repoLocked={activePlanningRepoLocked}
             repoSuggestions={planningRepoSuggestions}
             repoError={activePlanningSession.repoError ?? null}
-            turnError={activePlanningSession.activeTurnStatus === 'failed' ? activePlanningSession.activeTurnError ?? 'The planner turn failed.' : null}
+            turnError={
+              activePlanningSession.activeTurnStatus === 'failed'
+              && activePlanningSession.activeTurnError !== PLANNING_TURN_CANCELLED_MESSAGE
+                ? activePlanningSession.activeTurnError ?? 'The planner turn failed.'
+                : null
+            }
             onRetryTurn={() => void handleRetryPlanningTurn()}
             onCancelTurn={() => void handleCancelPlanningTurn()}
             onValueChange={setPlanningInput}
