@@ -248,7 +248,7 @@ describe('runSetup', () => {
     }
   });
 
-  it('prints a one-line MCP skip and still reports installed skills', async () => {
+  it('prints a one-line install note and still reports installed skills', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-skip-'));
     const saved = { HOME: process.env.HOME };
     const lines: string[] = [];
@@ -276,9 +276,10 @@ describe('runSetup', () => {
       expect(code).toBe(0);
       const output = lines.join('\n');
       expect(output).toContain('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
-      expect(output).toContain('Skills MCP: skipped — Invalid MCP config at /Users/me/.cursor/mcp.json: expected a JSON object');
+      expect(output).toContain('Skills: install note — Invalid MCP config at /Users/me/.cursor/mcp.json: expected a JSON object');
       expect(output).not.toContain('at installBundledSkills');
       expect(output).not.toContain('Skills: install skipped');
+      expect(output).not.toContain('Skills MCP: skipped');
     } finally {
       restoreEnv('HOME', saved.HOME);
       rmSync(home, { recursive: true, force: true });
