@@ -739,7 +739,6 @@ export class PlanConversation {
     const t0 = Date.now();
     const turn = this.messages.filter(m => m.role === 'user').length + 1;
     this.log('plan-conversation', 'info', `[TRACE] sendMessage() start (threadTs=${this.threadTs}, initialized=${this._initialized}, msgCount=${this.messages.length}, turn=${turn})`);
-    // Next user send clears a prior cancel latch so a later turn can complete.
     this.activePlannerAbortRequested = false;
 
     if (!this._initialized) await this.init();
@@ -1214,7 +1213,6 @@ export class PlanConversation {
   abortActiveTurn(): boolean {
     const hadInFlight = Boolean(this.activePlannerChild || this.activePlannerReject);
     if (!hadInFlight && this.activePlannerAbortRequested) return false;
-    // Latch with no child only while a turn is in flight (preflight/backoff/pre-spawn).
     if (!hadInFlight && !this.turnInFlight) return false;
     this.activePlannerAbortRequested = true;
     const child = this.activePlannerChild;

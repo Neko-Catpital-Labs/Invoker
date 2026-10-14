@@ -840,7 +840,6 @@ export interface BundledSkillsStatus {
   bundledSkillNames: string[];
   lastInstallAt?: string;
   lastInstallError?: string;
-  /** True when this install call registered harness skills/MCP/instructions. */
   harnessesRegistered?: boolean;
   targets: BundledSkillTargetStatus[];
   commandTargets: HarnessConfigState[];
