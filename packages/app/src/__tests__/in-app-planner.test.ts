@@ -1292,6 +1292,58 @@ tasks:
     expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      presetKey: 'cursor+codex',
+      error: 'cursor: Authentication required. Run `cursor agent login` or set CURSOR_API_KEY, then try again.',
+      systemIncludes: ['Cursor + Codex isn\'t authenticated', 'cursor agent login'],
+    },
+    {
+      presetKey: 'codex',
+      error: 'codex: Authentication required. Run `codex login` (or `invoker-cli agent-login` for Codex), then try again.',
+      systemIncludes: ['Codex isn\'t authenticated', 'codex login'],
+    },
+    {
+      presetKey: 'claude',
+      error: 'Not logged in · Please run /login',
+      systemIncludes: ['Claude isn\'t authenticated', '/login'],
+    },
+    {
+      presetKey: 'omp+codex',
+      error: 'failed to authenticate: oauth session expired and could not be refreshed',
+      systemIncludes: ['Codex via OMP isn\'t authenticated', 'codex login'],
+    },
+  ] as const)('surfaces a harness-specific auth error for $presetKey', async ({
+    presetKey,
+    error,
+    systemIncludes,
+  }) => {
+    const sessions = createInAppPlanningChatSessions();
+    const result = await sendPlanningChatMessage({
+      message: 'hi',
+      presetKey,
+      turnId: `turn-auth-${presetKey}`,
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        throw new Error(error);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected auth failure');
+    const session = sessions.get(result.sessionId!);
+    expect(session?.status).toBe('planner_error');
+    const systemError = session?.messages.find((line) => line.role === 'system' && line.tone === 'error');
+    expect(systemError?.text).toBeTruthy();
+    for (const snippet of systemIncludes) {
+      expect(systemError?.text).toContain(snippet);
+    }
+  });
+
   it('cancelPlanningChatTurn marks a running turn cancelled and aborts the planner', async () => {
     const sessions = createInAppPlanningChatSessions();
     const events: Array<{ turnId?: string; error?: string }> = [];

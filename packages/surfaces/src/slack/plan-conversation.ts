@@ -16,11 +16,30 @@ import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository, PlanningDraft } from '@invoker/data-store';
 import {
+  PLANNER_AUTH_LIMBO_GRACE_MS,
+  buildPlannerAuthRequiredError,
   childProcessHasExited,
   formatCodexPlannerStdout,
+  plannerOutputIndicatesAuthFailure,
+  plannerOutputIndicatesAuthLimbo,
+  runPlannerAuthPreflight,
+  throwIfPlannerAuthPreflightUnauthenticated,
   terminateChildProcessGroup,
 } from '@invoker/execution-engine';
-import type { HarnessSessionDriver } from '@invoker/execution-engine';
+import type {
+  HarnessSessionDriver,
+  PlannerAuthPreflightCommandRunner,
+} from '@invoker/execution-engine';
+
+export {
+  PLANNER_AUTH_LIMBO_GRACE_MS,
+  buildPlannerAuthRequiredError,
+  buildPlannerAuthRequiredMessage,
+  plannerAuthRecoveryHint,
+  plannerOutputIndicatesAuthFailure,
+  plannerOutputIndicatesAuthLimbo,
+  runPlannerAuthPreflight,
+} from '@invoker/execution-engine';
 import {
   buildPlanningHandoffInstructions,
   formatPlanningHostedTurn,
@@ -125,6 +144,8 @@ export function isPlanningTurnCancelledError(error: unknown): boolean {
     || (error instanceof Error && error.name === 'PlanningTurnCancelledError');
 }
 
+export const PLANNER_AUTH_REQUIRED_MESSAGE = 'Authentication required.';
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -145,6 +166,17 @@ export interface PlanConversationConfig {
   plannerScratchRoot?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
   timeoutMs?: number;
+  /**
+   * How long to wait after auth-limbo stderr before aborting. Default:
+   * {@link PLANNER_AUTH_LIMBO_GRACE_MS}. Tests may lower this.
+   */
+  authLimboGraceMs?: number;
+  /** Per-harness auth preflight timeout. Tests may lower this. */
+  authPreflightTimeoutMs?: number;
+  /** Injectable preflight command runner for tests. */
+  authPreflightRunner?: PlannerAuthPreflightCommandRunner;
+  /** When false, skip auth preflight (tests that only exercise spawn). Default true. */
+  authPreflightEnabled?: boolean;
   /** Slack thread timestamp. Required for persistence. */
   threadTs?: string;
   /** Slack channel id this thread belongs to. Persisted alongside threadTs so a
@@ -546,6 +578,10 @@ export class PlanConversation {
   private plannerScratchRoot?: string;
   private planDraftDirUnavailable = false;
   private timeoutMs: number;
+  private authLimboGraceMs: number;
+  private authPreflightTimeoutMs?: number;
+  private authPreflightRunner?: PlannerAuthPreflightCommandRunner;
+  private authPreflightEnabled: boolean;
   private threadTs?: string;
   private channelId?: string;
   private conversationRepo?: ConversationRepository;
@@ -595,6 +631,10 @@ export class PlanConversation {
     this.workingDir = config.workingDir;
     this.plannerScratchRoot = config.plannerScratchRoot;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.authLimboGraceMs = Math.max(0, config.authLimboGraceMs ?? PLANNER_AUTH_LIMBO_GRACE_MS);
+    this.authPreflightTimeoutMs = config.authPreflightTimeoutMs;
+    this.authPreflightRunner = config.authPreflightRunner;
+    this.authPreflightEnabled = config.authPreflightEnabled !== false;
     this.threadTs = config.threadTs;
     this.channelId = config.channelId;
     this.conversationRepo = config.conversationRepo;
@@ -1229,6 +1269,8 @@ export class PlanConversation {
     args: string[],
     plannerLabel: string,
   ): Promise<string> {
+    await this.runAuthPreflightOrThrow(command, plannerLabel);
+
     const totalAttempts = this.plannerRetryLimit + 1;
     let lastStderrTail = '';
 
@@ -1258,6 +1300,24 @@ export class PlanConversation {
     throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
   }
 
+  private async runAuthPreflightOrThrow(command: string, plannerLabel: string): Promise<void> {
+    if (!this.authPreflightEnabled) return;
+    const preflight = await runPlannerAuthPreflight({
+      tool: this.tool ?? plannerLabel,
+      plannerCommand: command,
+      env: { ...process.env },
+      cwd: this.workingDir ?? process.cwd(),
+      timeoutMs: this.authPreflightTimeoutMs,
+      runner: this.authPreflightRunner,
+    });
+    this.log(
+      'plan-conversation',
+      'info',
+      `[PERF] planner_auth_preflight: harness=${preflight.harness}, status=${preflight.status}, detail=${preflight.detail ?? 'none'}`,
+    );
+    throwIfPlannerAuthPreflightUnauthenticated(preflight, plannerLabel);
+  }
+
   private clearActivePlannerChild(child: ChildProcess): void {
     if (this.activePlannerChild === child) {
       this.activePlannerChild = null;
@@ -1278,6 +1338,7 @@ export class PlanConversation {
     return new Promise((resolve, reject) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let authLimboTimer: ReturnType<typeof setTimeout> | undefined;
 
       const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
@@ -1286,12 +1347,33 @@ export class PlanConversation {
         detached: process.platform !== 'win32',
       });
 
+      const clearTimers = (): void => {
+        if (timer !== undefined) clearTimeout(timer);
+        if (authLimboTimer !== undefined) clearTimeout(authLimboTimer);
+      };
+
       const settle = (action: () => void): void => {
         if (settled) return;
         settled = true;
-        if (timer !== undefined) clearTimeout(timer);
+        clearTimers();
         this.clearActivePlannerChild(child);
         action();
+      };
+
+      const abortForAuthLimbo = (): void => {
+        this.log(
+          'plan-conversation',
+          'error',
+          `[PERF] cursor_auth_limbo: pid=${child.pid ?? 'none'}, graceMs=${this.authLimboGraceMs}, elapsed=${Date.now() - spawnStart}ms`,
+        );
+        void terminateChildProcessGroup(child, () => childProcessHasExited(child) || settled);
+        settle(() => reject(buildPlannerAuthRequiredError(plannerLabel)));
+      };
+
+      const armAuthLimboWatch = (combinedOutput: string): void => {
+        if (authLimboTimer !== undefined || settled) return;
+        if (!plannerOutputIndicatesAuthLimbo(combinedOutput)) return;
+        authLimboTimer = setTimeout(abortForAuthLimbo, this.authLimboGraceMs);
       };
 
       this.activePlannerChild = child;
@@ -1317,6 +1399,7 @@ export class PlanConversation {
           }
         }
         this.log('plan-conversation', 'info', `[PERF] cursor_stdout chunk #${stdoutChunks}: +${chunkStr.length} bytes (total=${stdout.length}, elapsed=${Date.now() - spawnStart}ms)`);
+        armAuthLimboWatch(`${stdout}\n${stderr}`);
       });
 
       child.stderr?.on('data', (chunk: Buffer) => {
@@ -1324,6 +1407,7 @@ export class PlanConversation {
         stderr += chunkStr;
         stderrChunks++;
         this.log('plan-conversation', 'info', `[PERF] cursor_stderr chunk #${stderrChunks}: +${chunkStr.length} bytes (total=${stderr.length}, elapsed=${Date.now() - spawnStart}ms), preview="${chunkStr.slice(0, 200).replace(/\n/g, '\\n')}"`);
+        armAuthLimboWatch(`${stdout}\n${stderr}`);
       });
 
       timer = setTimeout(() => {
@@ -1345,6 +1429,10 @@ export class PlanConversation {
           } else {
             settle(() => reject(new RetryableEmptyPlannerOutputError(stderr)));
           }
+          return;
+        }
+        if (plannerOutputIndicatesAuthFailure(`${stdout}\n${stderr}`)) {
+          settle(() => reject(buildPlannerAuthRequiredError(plannerLabel)));
           return;
         }
         const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';

@@ -44,7 +44,11 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import {
+  plannerAuthRecoveryHint,
+  plannerOutputIndicatesAuthFailure,
+  type AgentRegistry,
+} from '@invoker/execution-engine';
 import {
   decideWorktreeBinding,
   evaluatePlanningTurn,
@@ -174,18 +178,28 @@ function isModuleResolutionError(error: unknown): boolean {
 
 function isAuthenticationError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
+  const message = error.message;
+  if (plannerOutputIndicatesAuthFailure(message)) return true;
+  const lower = message.toLowerCase();
   return (
-    message.includes('oauth')
-    || message.includes('401')
-    || message.includes('unauthorized')
-    || message.includes('failed to authenticate')
-    || message.includes('authentication failed')
-    || message.includes('token has expired')
-    || message.includes('re-authenticate')
-    || message.includes('session expired')
-    || message.includes('api error: 401')
+    lower.includes('oauth')
+    || lower.includes('401')
+    || lower.includes('token has expired')
+    || lower.includes('api error: 401')
   );
+}
+
+function planningAuthToolHint(presetKey: string): string {
+  if (presetKey === 'cursor' || presetKey.startsWith('cursor+')) return 'cursor';
+  if (presetKey.includes('codex')) return 'codex';
+  if (presetKey.includes('claude')) return 'claude';
+  if (presetKey.includes('omp')) return 'omp';
+  return presetKey;
+}
+
+function planningAuthenticationFailureMessage(presetKey: string): string {
+  const harness = labelForPresetKey(presetKey);
+  return `${harness} isn't authenticated. ${plannerAuthRecoveryHint(planningAuthToolHint(presetKey))}`;
 }
 
 type PlanConversationConstructor = new (config: PlanConversationConfig) => PlanConversation;
@@ -243,6 +257,8 @@ async function resolveDefaultPresetKey(config: InvokerConfig): Promise<string> {
 
 function labelForPresetKey(key: string): string {
   switch (key) {
+    case 'cursor':
+      return 'Cursor';
     case 'codex':
       return 'Codex';
     case 'claude':
@@ -1331,7 +1347,7 @@ export async function sendPlanningChatMessage(
             appendSessionMessage(
               activeSession,
               'system',
-              'Authentication failed. The planner could not complete this turn. Re-authenticate and try again.',
+              planningAuthenticationFailureMessage(activeSession.presetKey),
               'error',
             );
           }

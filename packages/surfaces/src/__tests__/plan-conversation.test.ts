@@ -1,14 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   PlanConversation,
+  PLANNER_AUTH_REQUIRED_MESSAGE,
   PlanningTurnCancelledError,
   buildPlanSystemPrompt,
+  buildPlannerAuthRequiredError,
   extractYamlPlan,
   globToRegex,
   isDangerousCommand,
   isConfirmation,
+  plannerOutputIndicatesAuthFailure,
+  plannerOutputIndicatesAuthLimbo,
   redactEmbeddedPlanFence,
 } from '../slack/plan-conversation.js';
+import type { PlannerAuthPreflightCommandRunner } from '@invoker/execution-engine';
+
+const authenticatedPreflightRunner: PlannerAuthPreflightCommandRunner = async () => ({
+  exitCode: 0,
+  output: JSON.stringify({ loggedIn: true }),
+  timedOut: false,
+});
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -915,6 +926,226 @@ describe('PlanConversation', () => {
     await expect(promise).rejects.toMatchObject({ message: 'Cancelled.' });
     expect(proc.kill).toHaveBeenCalled();
     expect(conversation.abortActiveTurn()).toBe(false);
+  });
+
+  it('fails fast when Cursor status hangs after unable to fetch user details', async () => {
+    const conv = new PlanConversation({
+      tool: 'cursor',
+      authLimboGraceMs: 40,
+      timeoutMs: 30_000,
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['agent', '--print', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.pid = 5252;
+    proc.exitCode = null;
+    proc.signalCode = null;
+    proc.kill = vi.fn(() => {
+      proc.exitCode = 1;
+      setTimeout(() => proc.emit('close', 1), 0);
+      return true;
+    });
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stderr.emit(
+      'data',
+      Buffer.from('✓ Login successful!\nLogged in (unable to fetch user details)\n'),
+    );
+
+    await expect(promise).rejects.toThrow(/Authentication required.*cursor agent login/i);
+    expect(proc.kill).toHaveBeenCalled();
+  });
+
+  it('fails fast when Codex reconnects on 401 Unauthorized', async () => {
+    const conv = new PlanConversation({
+      tool: 'codex',
+      authLimboGraceMs: 40,
+      timeoutMs: 30_000,
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({ command: 'codex', args: ['exec', '--json', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.pid = 6262;
+    proc.exitCode = null;
+    proc.signalCode = null;
+    proc.kill = vi.fn(() => {
+      proc.exitCode = 1;
+      setTimeout(() => proc.emit('close', 1), 0);
+      return true;
+    });
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stderr.emit(
+      'data',
+      Buffer.from('ERROR codex_api: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses\n'),
+    );
+
+    await expect(promise).rejects.toThrow(/Authentication required.*codex login/i);
+    expect(proc.kill).toHaveBeenCalled();
+  });
+
+  it('maps Authentication required exits to a clear auth error', async () => {
+    const conv = new PlanConversation({
+      tool: 'cursor',
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({ command: 'cursor-agent', args: ['--print', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stderr.emit(
+      'data',
+      Buffer.from('Error: Authentication required. Please run \'cursor agent login\' first.\n'),
+    );
+    proc.emit('close', 1);
+
+    await expect(promise).rejects.toThrow(/Authentication required.*cursor agent login/i);
+  });
+
+  it('maps Claude Not logged in exits to a clear auth error', async () => {
+    const conv = new PlanConversation({
+      tool: 'claude',
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({
+        command: 'claude',
+        args: ['--dangerously-skip-permissions', '-p', 'x'],
+      }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stderr.emit('data', Buffer.from('Not logged in · Please run /login\n'));
+    proc.emit('close', 1);
+
+    await expect(promise).rejects.toThrow(/Authentication required.*\/login/i);
+  });
+
+  it('does not treat a successful login then exit as auth limbo', async () => {
+    const conv = new PlanConversation({
+      tool: 'cursor',
+      authLimboGraceMs: 200,
+      authPreflightRunner: authenticatedPreflightRunner,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['agent', '--print', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stderr.emit('data', Buffer.from('Login successful!\n'));
+    proc.stdout.emit('data', Buffer.from('planner reply'));
+    proc.emit('close', 0);
+
+    await expect(promise).resolves.toBe('planner reply');
+    expect(proc.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe('planner auth failure helpers', () => {
+  it('detects limbo and auth failure markers across harnesses', () => {
+    expect(plannerOutputIndicatesAuthLimbo('Logged in (unable to fetch user details)')).toBe(true);
+    expect(plannerOutputIndicatesAuthLimbo('401 Unauthorized')).toBe(true);
+    expect(plannerOutputIndicatesAuthLimbo('Authentication required')).toBe(false);
+    expect(plannerOutputIndicatesAuthFailure('Authentication required')).toBe(true);
+    expect(plannerOutputIndicatesAuthFailure('Not logged in · Please run /login')).toBe(true);
+    expect(buildPlannerAuthRequiredError('cursor').message).toContain(PLANNER_AUTH_REQUIRED_MESSAGE);
+    expect(buildPlannerAuthRequiredError('codex').message).toMatch(/codex login/i);
+    expect(buildPlannerAuthRequiredError('claude').message).toMatch(/\/login/i);
+    expect(buildPlannerAuthRequiredError('omp').message).toMatch(/OMP/i);
+  });
+});
+
+describe('PlanConversation auth preflight', () => {
+  beforeEach(() => {
+    mockSpawn.mockReset();
+  });
+
+  it('blocks planner spawn when preflight reports unauthenticated', async () => {
+    const runner = vi.fn<PlannerAuthPreflightCommandRunner>(async () => ({
+      exitCode: 1,
+      output: JSON.stringify({ loggedIn: false }),
+      timedOut: false,
+    }));
+    const conv = new PlanConversation({
+      tool: 'claude',
+      authPreflightRunner: runner,
+      planningCommandBuilder: () => ({
+        command: 'claude',
+        args: ['--dangerously-skip-permissions', '-p', 'x'],
+      }),
+    });
+
+    await expect(conv.sendMessage('Hello')).rejects.toThrow(/Authentication required.*\/login/i);
+    expect(runner).toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('continues to spawn when preflight is unknown and still catches runtime auth failures', async () => {
+    const runner = vi.fn<PlannerAuthPreflightCommandRunner>(async () => ({
+      exitCode: 2,
+      output: 'unexpected internal error',
+      timedOut: false,
+    }));
+    const conv = new PlanConversation({
+      tool: 'codex',
+      authPreflightRunner: runner,
+      planningCommandBuilder: () => ({ command: 'codex', args: ['exec', '--json', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stderr.emit('data', Buffer.from('Not logged in\n'));
+    proc.emit('close', 1);
+
+    await expect(promise).rejects.toThrow(/Authentication required.*codex login/i);
+    expect(runner).toHaveBeenCalled();
+  });
+
+  it('skips preflight spawn for unsupported omp and uses runtime detection only', async () => {
+    const runner = vi.fn<PlannerAuthPreflightCommandRunner>();
+    const conv = new PlanConversation({
+      tool: 'omp',
+      authPreflightRunner: runner,
+      planningCommandBuilder: () => ({ command: 'omp', args: ['--no-title', '-p', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    proc.stdout.emit('data', Buffer.from('ok'));
+    proc.emit('close', 0);
+    await expect(promise).resolves.toBe('ok');
+    expect(runner).not.toHaveBeenCalled();
   });
 });
 
