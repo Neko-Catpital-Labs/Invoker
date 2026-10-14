@@ -4,6 +4,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import { PlanConversation, buildPlanSystemPrompt } from '../../../surfaces/src/index.ts';
+
+vi.mock('../system-diagnostics.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../system-diagnostics.js')>();
+  return {
+    ...actual,
+    commandIsOnPath: vi.fn(() => true),
+  };
+});
+
 import {
   PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
   buildPlanningTerminalSummaryBridge,
@@ -15,6 +24,7 @@ import {
   hydrateRemotePlanningTerminalSession,
   listPlanningChatSessions,
   planFromGoal,
+  planningToolMissingFromPathError,
   rebindPlanningChatRepo,
   resetPlanningChat,
   restorePlanningChatSessions,
@@ -286,6 +296,8 @@ describe('planFromGoal', () => {
   });
 });
 describe('listInAppPlanningPresets', () => {
+  const allInstalled = () => true;
+
   it('returns deterministic labels and the configured default', async () => {
     await expect(listInAppPlanningPresets({
       defaultSlackHarnessPreset: 'omp+claude',
@@ -293,7 +305,7 @@ describe('listInAppPlanningPresets', () => {
         custom: { tool: 'codex' },
         'custom+omp': { tool: 'omp', model: 'fast' },
       },
-    })).resolves.toEqual(expect.arrayContaining([
+    }, { isInstalled: allInstalled })).resolves.toEqual(expect.arrayContaining([
       { key: 'codex', label: 'Codex', tool: 'codex', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
       { key: 'claude', label: 'Claude', tool: 'claude', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
       { key: 'omp', label: 'OMP', tool: 'omp', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
@@ -307,11 +319,49 @@ describe('listInAppPlanningPresets', () => {
     const presets = await listInAppPlanningPresets({
       defaultSlackHarnessPreset: 'cursor+claude',
       enabledExecutionAgents: ['codex'],
-    });
+    }, { isInstalled: allInstalled });
     const defaultPreset = presets.find((p) => p.isDefault);
     expect(defaultPreset).toBeDefined();
     expect(defaultPreset?.tool === 'codex' || defaultPreset?.model === 'codex').toBe(true);
     expect(presets.every((p) => p.tool === 'codex' || p.model === 'codex')).toBe(true);
+  });
+
+  it('keeps only presets whose planner tool is on PATH (no harness registration required)', async () => {
+    const presets = await listInAppPlanningPresets({}, {
+      isInstalled: (command) => command === 'cursor',
+    });
+    expect(presets.length).toBeGreaterThan(0);
+    expect(presets.every((p) => p.tool === 'cursor')).toBe(true);
+    expect(presets.map((p) => p.key)).toEqual(
+      expect.arrayContaining(['cursor+claude', 'cursor+codex']),
+    );
+    expect(presets.some((p) => p.key === 'codex' || p.key === 'claude' || p.key === 'omp')).toBe(false);
+  });
+
+  it('returns an empty list when no planner tools are on PATH', async () => {
+    await expect(listInAppPlanningPresets({}, { isInstalled: () => false })).resolves.toEqual([]);
+  });
+
+  it('applies allowlist first, then PATH (intersection)', async () => {
+    const presets = await listInAppPlanningPresets({
+      enabledExecutionAgents: ['codex', 'cursor'],
+    }, {
+      isInstalled: (command) => command === 'cursor',
+    });
+    expect(presets.length).toBeGreaterThan(0);
+    expect(presets.every((p) => p.tool === 'cursor')).toBe(true);
+    expect(presets.some((p) => p.tool === 'codex')).toBe(false);
+  });
+
+  it('promotes a new default when PATH filtering removes the configured default', async () => {
+    const presets = await listInAppPlanningPresets({
+      defaultSlackHarnessPreset: 'codex',
+    }, {
+      isInstalled: (command) => command === 'cursor',
+    });
+    expect(presets.some((p) => p.isDefault)).toBe(true);
+    expect(presets.find((p) => p.isDefault)?.tool).toBe('cursor');
+    expect(presets.every((p) => p.tool === 'cursor')).toBe(true);
   });
 });
 
@@ -349,6 +399,85 @@ describe('planning chat', () => {
     });
     expect(rejected).toEqual({ ok: false, sessionId: undefined, turnId: expect.any(String), error: 'Unknown planner preset "bad".' });
     expect(sessions.size).toBe(0);
+  });
+
+  it('refuses send when the preset tool is missing from PATH without spawning', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner');
+    const sessions = createInAppPlanningChatSessions();
+
+    const rejected = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      isInstalled: () => false,
+    });
+
+    expect(rejected).toEqual({
+      ok: false,
+      sessionId: undefined,
+      turnId: expect.any(String),
+      error: planningToolMissingFromPathError('codex'),
+    });
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
+  });
+
+  it('refuses open when the preset tool is missing from PATH without creating a session', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner');
+    const sessions = createInAppPlanningChatSessions();
+
+    const rejected = await createPlanningChatSession({ presetKey: 'codex' }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      isInstalled: () => false,
+    });
+
+    expect(rejected).toEqual({
+      ok: false,
+      error: planningToolMissingFromPathError('codex'),
+    });
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
+  });
+
+  it('refuses send on an existing session when the tool is missing from PATH', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('ok');
+    const sessions = createInAppPlanningChatSessions();
+    const created = await createPlanningChatSession({ presetKey: 'codex' }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      isInstalled: () => true,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    spawnPlanner.mockClear();
+
+    const rejected = await sendPlanningChatMessage({
+      sessionId: created.session.id,
+      message: 'hello',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      isInstalled: () => false,
+    });
+
+    expect(rejected).toEqual({
+      ok: false,
+      sessionId: created.session.id,
+      turnId: expect.any(String),
+      error: planningToolMissingFromPathError('codex'),
+    });
+    expect(spawnPlanner).not.toHaveBeenCalled();
   });
 
   it('creates a first session and returns the assistant reply', async () => {

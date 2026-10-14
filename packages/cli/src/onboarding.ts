@@ -26,6 +26,7 @@ import { commandExists } from '@invoker/shell';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
 import { installBundledSkills } from './bundled-skills.js';
+import { HARNESS_REGISTRATION_HINT } from '@invoker/shell/bundled-skills';
 import { runRemoteDoctorChecks } from './remote-doctor.js';
 import { applyWorkerToggle, isDesiredStateWorkerToggle, isPolicyWorkerToggle, ONBOARDING_WORKER_TOGGLES, openWorkerDesiredStateStore, applyDesiredStateWorkerToggle, readDesiredStateWorkerToggleValue, readWorkerToggleValue, resolveCliInstanceProfile } from './worker-toggles.js';
 
@@ -703,10 +704,18 @@ interface ParsedSetupArgs {
   plannerPackage?: string;
   fromEnv: boolean;
   assumeYes: boolean;
+  registerHarnesses: boolean;
 }
 
 function parseSetupArgs(argv: string[]): ParsedSetupArgs {
-  const parsed: ParsedSetupArgs = { checkOnly: false, json: false, uninstall: false, fromEnv: false, assumeYes: false };
+  const parsed: ParsedSetupArgs = {
+    checkOnly: false,
+    json: false,
+    uninstall: false,
+    fromEnv: false,
+    assumeYes: false,
+    registerHarnesses: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === 'slack' || arg === 'planner' || arg === 'machines') {
@@ -720,6 +729,8 @@ function parseSetupArgs(argv: string[]): ParsedSetupArgs {
       parsed.fromEnv = true;
     } else if (arg === '--yes' || arg === '-y') {
       parsed.assumeYes = true;
+    } else if (arg === '--register-harnesses') {
+      parsed.registerHarnesses = true;
     } else if (arg === '--uninstall') {
       parsed.uninstall = true;
     } else if (arg === '--target') {
@@ -1141,7 +1152,39 @@ function resolveStandaloneSkillsRoot(): string | null {
   return existsSync(join(candidate, 'skills')) ? candidate : null;
 }
 
-export function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void {
+function printBundledSkillsResult(
+  io: SetupIO,
+  status: ReturnType<typeof installBundledSkills>,
+  registeredHarnesses: boolean,
+): void {
+  if (registeredHarnesses) {
+    const installedTargets = status.targets.filter((target) => target.installed).map((target) => target.name);
+    io.print(
+      `Skills: installed ${status.bundledSkillNames.length} bundled skill(s) into harnesses (${installedTargets.join(', ') || 'no targets'}).`,
+    );
+    const registeredMcp = (status.mcpTargets ?? []).filter((target) => target.installed).map((target) => target.name);
+    io.print(
+      registeredMcp.length > 0
+        ? `Skills MCP: registered into ${registeredMcp.join(', ')}.`
+        : 'Skills MCP: harness registration requested, but no available harness MCP targets were updated.',
+    );
+  } else {
+    io.print('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
+    io.print(`Skills: ${HARNESS_REGISTRATION_HINT}`);
+  }
+  if (status.lastInstallError) {
+    io.print(`Skills MCP: skipped — ${status.lastInstallError}`);
+  }
+}
+
+const HARNESS_REGISTER_PROMPT =
+  'Wire Invoker MCP/skills into detected harnesses (Cursor/Claude/Codex/OMP)? [y/N] ';
+
+export function installSetupBundledSkills(
+  io: SetupIO,
+  options: SetupDeps,
+  installOptions: { registerHarnesses?: boolean } = {},
+): void {
   const resolveSkillsRepoRoot = options.resolveSkillsRepoRoot ?? resolveRepoRoot;
   const resolveStandaloneRoot = options.resolveStandaloneSkillsRoot ?? resolveStandaloneSkillsRoot;
   const install = options.bundledSkillsInstall ?? installBundledSkills;
@@ -1157,12 +1200,13 @@ export function installSetupBundledSkills(io: SetupIO, options: SetupDeps): void
     repoRoot = standaloneRoot;
   }
 
+  const registerHarnesses = installOptions.registerHarnesses === true;
   try {
-    const status = install({ isPackaged: false, repoRoot });
-    const installedTargets = status.targets.filter((target) => target.installed).map((target) => target.name);
-    const installedMcp = status.mcpTargets.filter((target) => target.installed).map((target) => target.name);
-    io.print(`Skills: installed ${status.bundledSkillNames.length} bundled skill(s) for ${installedTargets.join(', ') || 'no targets'}.`);
-    io.print(`Skills MCP: registered invoker-cli mcp for ${installedMcp.join(', ') || 'no detected harnesses'}.`);
+    printBundledSkillsResult(
+      io,
+      install({ isPackaged: false, repoRoot }, 'install', 'all', { registerHarnesses }),
+      registerHarnesses,
+    );
   } catch (error) {
     io.print(`Skills: install skipped — ${formatCaughtException(error)}`);
   }
@@ -1225,7 +1269,13 @@ export async function runSetup(
     io.print(formatReport(buildReport(doctorChecks)));
     io.print('');
 
-    installSetupBundledSkills(io, options);
+    installSetupBundledSkills(io, options, { registerHarnesses: parsed.registerHarnesses });
+    if (!parsed.registerHarnesses && !wantSlack && !wantMachines && !fromEnv && !parsed.assumeYes) {
+      const registerHarnesses = await promptYes(io, HARNESS_REGISTER_PROMPT);
+      if (registerHarnesses) {
+        installSetupBundledSkills(io, options, { registerHarnesses: true });
+      }
+    }
     io.print('');
 
     let doSlack = wantSlack || fromEnv;
