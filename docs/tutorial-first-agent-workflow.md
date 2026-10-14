@@ -158,7 +158,7 @@ Use the in-app planning flow above when you want to review the graph before star
 - If the temporary repository no longer exists, rerun the generator. Operating-system cleanup may remove `$TMPDIR` contents.
 - If the Repo sidebar shows the wrong repository, update `~/.invoker/config.json`, restart Invoker, and create a new planning chat.
 - If Codex reports an expired refresh token, run `codex logout`, then `codex login`, and retry.
-- If Planning Chat reports a harness isn't authenticated (preflight or mid-turn): for Cursor run `cursor agent login` or set `CURSOR_API_KEY`; for Codex run `codex login` (or `invoker-cli agent-login`); for Claude run `/login` in `claude` (or `invoker-cli agent-login`); then retry. Invoker checks Claude/Codex/Cursor auth before spawning a turn when a reliable status command exists; OMP still relies on mid-turn detection.
+- If Planning Chat reports a harness isn't authenticated (preflight or mid-turn): for Cursor run `cursor agent login` or `cursor-agent login` (prefer the latter if the first hangs) or set `CURSOR_API_KEY`; for Codex run `codex login` (or `invoker-cli agent-login`); for Claude run `/login` in `claude` (or `invoker-cli agent-login`); then retry. Invoker checks Claude/Codex/Cursor auth before spawning a turn when a reliable status command exists; OMP still relies on mid-turn detection.
 - If a plan targets GitHub unexpectedly, check its `repoUrl` in Raw YAML before creating the workflow.
 - For a local repository, keep `onFinish: none`; `pull_request` requires a parseable GitHub remote and push permissions.
 - If the app cannot find `npm`, `node`, `git`, `codex`, or `claude`, restart it from a terminal.

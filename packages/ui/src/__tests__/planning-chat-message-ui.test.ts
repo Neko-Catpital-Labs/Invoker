@@ -11,7 +11,7 @@ import {
 describe('planning-chat-message-ui', () => {
   it('humanizes auth failures into a short signed-in title', () => {
     expect(humanizePlanningChatErrorTitle(
-      "Cursor isn't authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.",
+      "Cursor isn't authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.",
     )).toBe("Cursor isn't signed in");
     expect(humanizePlanningChatErrorTitle(
       'codex: Authentication required. Run `codex login`, then try again.',
@@ -20,20 +20,28 @@ describe('planning-chat-message-ui', () => {
 
   it('presents auth errors with recovery body and copyable command', () => {
     const presented = presentPlanningChatError(
-      "Cursor isn't authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.",
+      "Cursor isn't authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.",
     );
     expect(presented.title).toBe("Cursor isn't signed in");
     expect(presented.body).toContain('cursor agent login');
-    expect(presented.copyCommand).toBe('cursor agent login');
+    expect(presented.body).toContain('cursor-agent login');
+    expect(presented.copyCommand).toBe('cursor-agent login');
   });
 
   it('splits inline code chips for recovery hints', () => {
-    expect(splitPlanningChatInlineCode('Run `cursor agent login` or set CURSOR_API_KEY.')).toEqual([
+    expect(splitPlanningChatInlineCode(
+      'Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY.',
+    )).toEqual([
       { kind: 'text', text: 'Run ' },
       { kind: 'code', text: 'cursor agent login' },
+      { kind: 'text', text: ' or ' },
+      { kind: 'code', text: 'cursor-agent login' },
       { kind: 'text', text: ' or set CURSOR_API_KEY.' },
     ]);
     expect(extractPlanningChatCopyCommand('Run `codex login` now.')).toBe('codex login');
+    expect(extractPlanningChatCopyCommand(
+      'Run `cursor agent login` or `cursor-agent login`.',
+    )).toBe('cursor-agent login');
   });
 
   it('collapses consecutive identical system errors and groups by sender', () => {

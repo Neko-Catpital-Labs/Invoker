@@ -61,6 +61,7 @@ describe('planner auth output classification', () => {
 
   it('builds harness-specific recovery hints', () => {
     expect(buildPlannerAuthRequiredMessage('cursor')).toMatch(/cursor agent login/i);
+    expect(buildPlannerAuthRequiredMessage('cursor')).toMatch(/cursor-agent login/i);
     expect(buildPlannerAuthRequiredMessage('codex')).toMatch(/codex login/i);
     expect(buildPlannerAuthRequiredMessage('claude')).toMatch(/\/login/i);
     expect(buildPlannerAuthRequiredMessage('omp')).toMatch(/OMP/i);

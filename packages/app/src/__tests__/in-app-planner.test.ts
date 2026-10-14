@@ -1331,8 +1331,8 @@ tasks:
   it.each([
     {
       presetKey: 'cursor+codex',
-      error: 'cursor: Authentication required. Run `cursor agent login` or set CURSOR_API_KEY, then try again.',
-      systemIncludes: ['Cursor + Codex isn\'t authenticated', 'cursor agent login'],
+      error: 'cursor: Authentication required. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.',
+      systemIncludes: ['Cursor + Codex isn\'t authenticated', 'cursor agent login', 'cursor-agent login'],
     },
     {
       presetKey: 'codex',

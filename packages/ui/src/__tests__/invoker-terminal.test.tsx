@@ -474,9 +474,9 @@ describe('Invoker terminal (component)', () => {
     render(<InvokerTerminal
       {...terminalProps({
         lines: [
-          { id: 1, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
-          { id: 2, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
-          { id: 3, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+          { id: 1, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+          { id: 2, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+          { id: 3, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
         ],
       })}
     />);

@@ -9,9 +9,13 @@ export interface PlanningChatErrorPresentation {
 }
 
 export function extractPlanningChatCopyCommand(text: string): string | null {
-  const match = /`([^`]+)`/.exec(text);
-  const command = match?.[1]?.trim();
-  return command ? command : null;
+  const commands = [...text.matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1]?.trim() ?? '')
+    .filter(Boolean);
+  if (commands.length === 0) return null;
+  // Prefer the direct agent binary — `cursor agent login` can hang on status.
+  const preferred = commands.find((command) => command === 'cursor-agent login');
+  return preferred ?? commands[0] ?? null;
 }
 
 export function splitPlanningChatInlineCode(text: string): PlanningChatInlineSegment[] {

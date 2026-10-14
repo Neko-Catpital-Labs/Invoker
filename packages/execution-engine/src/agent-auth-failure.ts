@@ -35,6 +35,7 @@ const PLANNER_AUTH_FAILURE_OUTPUT_MARKERS = [
   're-authenticate',
   'session expired',
   'cursor agent login',
+  'cursor-agent login',
   'cursor_api_key',
 ] as const;
 
@@ -78,7 +79,7 @@ export function plannerOutputIndicatesAuthFailure(output: string): boolean {
 export function plannerAuthRecoveryHint(plannerLabel: string): string {
   const key = plannerLabel.toLowerCase();
   if (key.includes('cursor')) {
-    return 'Run `cursor agent login` or set CURSOR_API_KEY, then try again.';
+    return 'Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.';
   }
   if (key.includes('codex')) {
     return 'Run `codex login` (or `invoker-cli agent-login` for Codex), then try again.';
