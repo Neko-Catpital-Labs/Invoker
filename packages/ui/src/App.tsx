@@ -807,6 +807,8 @@ export function App() {
           status: 'failed',
           warning: 'Could not load planning presets.',
         });
+        setSelectedPlanningPresetKey('');
+        setSelectedPlanningConfirmationMode('require');
       })
       .finally(() => {
         setPlanningPresetsLoading(false);

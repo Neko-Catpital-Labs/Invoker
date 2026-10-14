@@ -47,13 +47,11 @@ describe('headless install-skills', () => {
     expect(output).toContain('- invoker-make-pr');
   });
 
-  it('prints a one-line install note on stderr and the opt-in hint when registration was skipped', async () => {
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  it('prints a one-line install note on stderr and the opt-in hint when registration was skipped', async () => {    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const installBundledSkills = vi.fn(() => ({
       ...makeStatus(),
-      harnessesRegistered: false,
-      lastInstallError: 'Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object',
+      harnessesRegistered: false,      lastInstallError: 'Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object',
     }));
 
     await runHeadless(['install-skills', 'reinstall'], {
@@ -83,7 +81,6 @@ describe('headless install-skills', () => {
     expect(output).toContain('Installed 2 bundled AI helpers with prefix "invoker-".');
     expect(output).not.toContain('Harness MCP/skills stay opt-in');
   });
-
   it('prints Uninstalled when install-skills uninstall runs', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);

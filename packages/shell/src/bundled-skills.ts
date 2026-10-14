@@ -1,3 +1,15 @@
+/**
+
+* Manages the installation lifecycle of Invoker-bundled skills and harness integrations.
+*
+* Installs, inspects, and uninstalls bundled skills and commands in Invoker home,
+* with optional integration setup for supported harnesses, including MCP server
+* entries, Cursor rules, and always-on instructions for Codex and Claude.
+*
+* Tracks ownership of installed artifacts through manifests, fingerprints, and
+* ownership markers to identify what Invoker manages. Uninstallation removes
+* owned artifacts selectively, preserving unrelated user configuration and data.
+*/
 import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -65,6 +77,7 @@ interface BundledSkillsContext {
 }
 
 export interface InstallBundledSkillsOptions {
+  /** When true, write MCP/skills/commands/always-on into detected harnesses. Default false (no skill materialization). */
   registerHarnesses?: boolean;
 }
 
@@ -1642,6 +1655,7 @@ function discoverHomeArtifactResources(invokerHomeRoot: string): BundledOwnedRes
   return out;
 }
 
+/** Discover Invoker-owned harness/skills artifacts without mutating disk. */
 export function discoverBundledOwnedResources(context: BundledSkillsContext): BundledOwnedResource[] {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
   const isInstalled = context.isInstalled ?? commandExists;
@@ -1699,6 +1713,7 @@ function removeSharedHarnessEntry(
   return STATUS_ABSENT;
 }
 
+/** Surgically remove one discovered owned resource. Skips user-modified dedicated artifacts. */
 export function executeBundledOwnedResourceRemoval(
   resource: BundledOwnedResource,
   context: BundledSkillsContext,
@@ -1728,6 +1743,10 @@ export function executeBundledOwnedResourceRemoval(
   return removeDedicatedPath(resource);
 }
 
+/**
+ * Execute harness/skills cleanup in plan order: shared → dedicated → home.
+ * Does not touch Invoker persistent data or npm packages.
+ */
 export function executeBundledIntegrationsUninstall(
   context: BundledSkillsContext,
 ): Array<{ resource: BundledOwnedResource; status: BundledOwnedRemovalStatus }> {

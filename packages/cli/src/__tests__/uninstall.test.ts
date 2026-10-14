@@ -146,8 +146,7 @@ describe('uninstall discovery + dry-run', () => {
     const coverage = formatCoverageTable(uninstallCoverageTable()).join('\n');
     expect(coverage).toContain('DMG');
     expect(coverage).toContain('worktrees');
-    expect(coverage).toContain('repos');
-    expect(uninstallExitCode([{ status: 'removed' }])).toBe(0);
+    expect(coverage).toContain('repos');    expect(uninstallExitCode([{ status: 'removed' }])).toBe(0);
     expect(uninstallExitCode([{ status: 'failed: boom' }])).toBe(1);
   });
 });

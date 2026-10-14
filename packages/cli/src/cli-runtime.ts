@@ -238,8 +238,7 @@ function argvBeforeDoubleDash(argv: readonly string[]): readonly string[] {
 function maybeThrowArgvHelp(argv: readonly string[]): void {
   const scannable = argvBeforeDoubleDash(argv);
   if (!scannable.some(isHelpFlag)) return;
-  const withoutHelp = scannable.filter((arg) => !isHelpFlag(arg));
-  if (withoutHelp.length === 0) {
+  const withoutHelp = scannable.filter((arg) => !isHelpFlag(arg));  if (withoutHelp.length === 0) {
     throw new CliHelpSignal(usage());
   }
   const commandId = resolveHelpCommandId(withoutHelp);

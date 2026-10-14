@@ -130,6 +130,7 @@ export interface InAppPlannerDeps {
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
   /** Canonical full skill-doctor script. Kept separate from target worktrees. */
   planDoctorScriptPath?: string;
+  /** PATH probe for planner tools (injectable for tests; defaults to {@link commandIsOnPath}). */
   isInstalled?: (command: string) => boolean;
 }
 

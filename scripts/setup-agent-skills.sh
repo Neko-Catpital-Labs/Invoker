@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Install bundled Invoker skills into local agent skill directories.
 # Safe to run repeatedly. Installs prefixed copies such as invoker-plan-to-invoker.
+# Stops this checkout's local DB owner before install-skills so the one-shot
+# headless process can acquire the writer lock.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,7 +11,6 @@ cd "$REPO_ROOT"
 INVOKER_SKILL_CATEGORY="${INVOKER_SKILL_CATEGORY:-}"
 OWNER_STOP_WAIT_SECONDS=15
 CONTRACTS_DIST_INDEX="packages/contracts/dist/index.js"
-
 log() {
   echo "[setup] $*"
 }
@@ -81,7 +82,6 @@ pid_is_invoker_owner() {
   [ -n "$command_line" ] || return 1
   printf '%s\n' "$command_line" | grep -Eqi 'invoker|electron|main\.js'
 }
-
 wait_for_pid_exit() {
   local pid="$1"
   local waited=0
@@ -98,8 +98,7 @@ remove_stale_db_lock() {
   local pid=""
   [ -d "$lock_dir" ] || return 0
   pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
-  if pid_is_alive "$pid" && pid_is_invoker_owner "$pid"; then
-    return 1
+  if pid_is_alive "$pid" && pid_is_invoker_owner "$pid"; then    return 1
   fi
   rm -rf "$lock_dir"
   return 0
@@ -127,7 +126,6 @@ stop_checkout_db_owner() {
     rm -rf "$lock_dir"
     return 0
   fi
-
   log "Stopping local owner PID ${pid} holding ${db_path}"
   kill -TERM "$pid" 2>/dev/null || true
   if ! wait_for_pid_exit "$pid"; then
