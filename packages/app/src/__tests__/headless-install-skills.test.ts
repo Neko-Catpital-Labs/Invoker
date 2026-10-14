@@ -47,12 +47,12 @@ describe('headless install-skills', () => {
     expect(output).toContain('- invoker-make-pr');
   });
 
-  it('prints a one-line MCP skip on stderr and still reports installed helpers', async () => {
+  it('prints a one-line install note on stderr and still reports installed helpers', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const installBundledSkills = vi.fn(() => ({
       ...makeStatus(),
-      lastInstallError: 'Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object',
+      lastInstallError: 'Invalid Claude settings at /tmp/.claude/settings.json: expected a JSON object',
     }));
 
     await runHeadless(['install-skills', 'reinstall'], {
@@ -62,7 +62,8 @@ describe('headless install-skills', () => {
     const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
     const err = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(output).toContain('Installed 2 bundled AI helpers with prefix "invoker-".');
-    expect(err).toContain('MCP skipped: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
+    expect(err).toContain('Install note: Invalid Claude settings at /tmp/.claude/settings.json: expected a JSON object');
+    expect(err).not.toContain('MCP skipped');
     expect(err).not.toContain('at installBundledSkills');
   });
 

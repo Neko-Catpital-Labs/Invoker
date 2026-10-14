@@ -1147,7 +1147,7 @@ function printBundledSkillsResult(io: SetupIO, status: ReturnType<typeof install
   io.print(`Skills: installed ${status.bundledSkillNames.length} bundled skill(s) for ${installedTargets.join(', ') || 'no targets'}.`);
   io.print(`Skills MCP: registered invoker-cli mcp for ${installedMcp.join(', ') || 'no detected harnesses'}.`);
   if (status.lastInstallError) {
-    io.print(`Skills MCP: skipped — ${status.lastInstallError}`);
+    io.print(`Skills: install note — ${status.lastInstallError}`);
   }
 }
 
