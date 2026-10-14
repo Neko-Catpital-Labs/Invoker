@@ -65,7 +65,6 @@ interface BundledSkillsContext {
 }
 
 export interface InstallBundledSkillsOptions {
-  /** When true, also write MCP/skills/commands/always-on into detected harnesses. Default false. */
   registerHarnesses?: boolean;
 }
 
