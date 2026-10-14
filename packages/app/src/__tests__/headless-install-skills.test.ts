@@ -63,7 +63,8 @@ describe('headless install-skills', () => {
     const err = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(output).toContain('Installed 2 bundled AI helpers with prefix "invoker-".');
     expect(output).toContain('Harness MCP/skills stay opt-in');
-    expect(err).toContain('MCP skipped: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
+    expect(err).toContain('Install note: Invalid MCP config at /tmp/.cursor/mcp.json: expected a JSON object');
+    expect(err).not.toContain('MCP skipped');
     expect(err).not.toContain('at installBundledSkills');
   });
 
