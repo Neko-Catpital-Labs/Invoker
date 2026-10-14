@@ -78,6 +78,28 @@ invoker-cli run plans/fixtures/hello-world.yaml --standalone
 
 `invoker-cli install` installs the first-party Invoker AI helper skills under `~/.invoker`, writes an MCP snippet at `~/.invoker/mcp-servers/invoker.json`, and enables default workers (`pr-status`, `autofix`, `auto-approve`). It does **not** modify Cursor / Claude / Codex / OMP configs by default, and it skips Slack/machines. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in without a prompt (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
 
+To remove what install/setup added:
+
+```bash
+invoker-cli uninstall --dry-run   # plan + coverage only (no disk changes)
+invoker-cli uninstall             # interactive confirm, then clean integrations + home data + npm
+invoker-cli uninstall --yes       # same without prompt (required when stdin is not a TTY)
+invoker-cli uninstall --yes --keep-data   # keep config/DB/outputs; still clean integrations + npm
+invoker-cli uninstall --help      # flags, exit codes, and coverage table
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--dry-run` | Print the deletion plan and coverage table; never mutates disk |
+| `--yes` | Skip the confirmation prompt (required in non-interactive shells) |
+| `--keep-data` | Skip Invoker home data purge; still remove integrations and global npm packages |
+
+**Coverage (supported):** `invoker-cli install` / `setup` skills and local MCP; `setup --register-harnesses` surgical MCP/instruction entries; quick-install worker toggles; experimental planner MCP entry; current CLI home data (`config.json`, `.env`, DB, outputs) plus standalone `~/.invoker-cli` when present; global npm packages `@neko-catpital-labs/invoker-{cli,ui,slack,watcher}` (removed last).
+
+**Coverage (excluded):** desktop `scripts/install.sh` channels (DMG / AppImage / `.deb`) — listed in help/output, not removed. Other `~/.invoker/dev/*` profiles that are not the active CLI home are also out of scope.
+
+Prefer `invoker-cli uninstall` over headless `install-skills uninstall` (skills-only fallback). User-modified dedicated managed files are kept and reported as `kept (user-modified)`; shared host configs only lose Invoker-managed entries.
+
 Or download the platform binary from GitHub Releases:
 
 ```bash
