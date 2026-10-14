@@ -39,12 +39,44 @@ export function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
   });
 }
 
+function taskStatusSignature(value: unknown): string {
+  const tasks = (value as { tasks?: unknown })?.tasks;
+  if (!Array.isArray(tasks)) return '';
+  return tasks
+    .map((task) => {
+      const item = task as { id?: unknown; status?: unknown; execution?: { phase?: unknown } };
+      return `${String(item.id)}:${String(item.status)}:${String(item.execution?.phase)}`;
+    })
+    .sort()
+    .join('|');
+}
+
+function hasRunningTask(value: unknown): boolean {
+  const tasks = (value as { tasks?: unknown })?.tasks;
+  return Array.isArray(tasks) && tasks.some((task) => (task as { status?: unknown }).status === 'running');
+}
+
 // Invoke channels: each becomes (...args) => ipcRenderer.invoke(channel, ...args)
 for (const channel of Object.keys(IpcChannels)) {
   const method = channelToMethod(channel);
   api[method] = async (...args: unknown[]) => {
     if (process.env.NODE_ENV === 'test' && channel === 'invoker:get-tasks') {
       await yieldToPendingRendererInput(50);
+      let result = await ipcRenderer.invoke(channel, ...args);
+      let signature = taskStatusSignature(result);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await yieldToPendingRendererInput(300);
+        const next = await ipcRenderer.invoke(channel, ...args);
+        const nextSignature = taskStatusSignature(next);
+        result = next;
+        if (nextSignature === signature) break;
+        signature = nextSignature;
+      }
+      for (let attempt = 0; attempt < 2 && hasRunningTask(result); attempt += 1) {
+        await yieldToPendingRendererInput(300);
+        result = await ipcRenderer.invoke(channel, ...args);
+      }
+      return result;
     }
     return ipcRenderer.invoke(channel, ...args);
   };
