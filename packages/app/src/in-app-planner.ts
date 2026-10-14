@@ -65,11 +65,24 @@ import {
   releasePlanningWorktree,
   type PlanningRepoPool,
 } from './planning-chat-worktree.js';
+import { commandIsOnPath } from './system-diagnostics.js';
 
 function logPlanningWorktreeReadyError(sessionId: string, step: string, error: unknown): void {
   console.error(`[planning-chat] ensurePlanningWorktreeReady ${step} failed session="${sessionId}": ${
     error instanceof Error ? error.message : String(error)
   }`);
+}
+
+export function planningToolMissingFromPathError(tool: string): string {
+  return `Planning tool "${tool}" is not on Invoker’s PATH. Install it or pick an available harness, then restart Invoker if it already works in a terminal.`;
+}
+
+function refuseIfPlanningToolMissingFromPath(
+  tool: string,
+  isInstalled: (command: string) => boolean = commandIsOnPath,
+): string | undefined {
+  if (isInstalled(tool)) return undefined;
+  return planningToolMissingFromPathError(tool);
 }
 
 export interface LoadedGeneratedPlan {
@@ -99,6 +112,8 @@ export interface InAppPlannerDeps {
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
   /** Canonical full skill-doctor script. Kept separate from target worktrees. */
   planDoctorScriptPath?: string;
+  /** PATH probe for planner tools (injectable for tests; defaults to {@link commandIsOnPath}). */
+  isInstalled?: (command: string) => boolean;
 }
 
 export interface InAppPlanningChatSession {
@@ -779,6 +794,13 @@ async function createSession(
   if (!preset) {
     return { error: `Unknown planner preset "${presetKey}".` };
   }
+  const missingTool = refuseIfPlanningToolMissingFromPath(
+    preset.tool,
+    deps.isInstalled ?? commandIsOnPath,
+  );
+  if (missingTool) {
+    return { error: missingTool };
+  }
 
   const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
@@ -887,8 +909,14 @@ async function activatePlanningSessionWorktree(
  * The `enabledExecutionAgents` allowlist is applied HERE (not at the IPC/web
  * dispatch surfaces) so every caller — the Electron IPC handler and the web
  * dispatch — gets the same filtered view without double-filtering.
+ * After the allowlist, presets whose planner `tool` is not on Invoker’s PATH
+ * are dropped (injectable for tests; defaults to {@link commandIsOnPath}).
  */
-export async function listInAppPlanningPresets(config: InvokerConfig): Promise<PlanningPresetOption[]> {
+export async function listInAppPlanningPresets(
+  config: InvokerConfig,
+  opts?: { isInstalled?: (command: string) => boolean },
+): Promise<PlanningPresetOption[]> {
+  const isInstalled = opts?.isInstalled ?? commandIsOnPath;
   const presets = await resolveHarnessPresets(config);
   const defaultPresetKey = await resolveDefaultPresetKey(config);
   const defaultConfirmationMode = resolveDefaultPlanningConfirmationMode(config);
@@ -900,7 +928,8 @@ export async function listInAppPlanningPresets(config: InvokerConfig): Promise<P
     isDefault: key === defaultPresetKey,
     defaultConfirmationMode,
   }));
-  const filtered = filterPlanningPresets(options, config);
+  const allowlisted = filterPlanningPresets(options, config);
+  const filtered = allowlisted.filter((opt) => isInstalled(opt.tool));
   const hasDefault = filtered.some((opt) => opt.isDefault);
   if (!hasDefault && filtered.length > 0) {
     filtered[0] = { ...filtered[0], isDefault: true };
@@ -1041,6 +1070,23 @@ export async function sendPlanningChatMessage(
     }
     if (session.activeTurnStatus === 'running' && session.activeTurnId === turnId) {
       return { ok: false, sessionId: session.id, turnId, error: 'duplicate-turn' };
+    }
+    const sessionPresets = await resolveHarnessPresets(deps.config);
+    const sessionPreset = sessionPresets[session.presetKey];
+    if (!sessionPreset) {
+      return {
+        ok: false,
+        sessionId: session.id,
+        turnId,
+        error: `Unknown planner preset "${session.presetKey}".`,
+      };
+    }
+    const missingTool = refuseIfPlanningToolMissingFromPath(
+      sessionPreset.tool,
+      deps.isInstalled ?? commandIsOnPath,
+    );
+    if (missingTool) {
+      return { ok: false, sessionId: session.id, turnId, error: missingTool };
     }
     const isRetry = session.activeTurnStatus === 'failed' && session.activeTurnId === turnId;
 

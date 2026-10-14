@@ -62,6 +62,7 @@ describe('playwright / 2-of-9 repro: sidecar-style test-override draft', () => {
         loadGeneratedPlan: () => ({ planName: 'stub', workflowId: 'stub-workflow' }),
         sessions,
         planningCommandBuilder: () => ({ command: 'planner', args: ['prompt'] }),
+        isInstalled: () => true,
         plannerReplyOverride: async () => buildOverrideReply({
           reply: 'I wrote the 3-slice plan to the draft file.',
           planYaml: PLAN_YAML,

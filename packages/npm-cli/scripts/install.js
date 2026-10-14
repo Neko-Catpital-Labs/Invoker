@@ -51,9 +51,9 @@ function expectedHash(sums, name) {
   return undefined;
 }
 
+// Safety invariant: wipe vendor so a cancelled prior postinstall cannot leave extract dirs that collide on retry.
+await rm(vendor, { recursive: true, force: true });
 await mkdir(vendor, { recursive: true });
-await rm(binaryPath, { force: true });
-await rm(skillsPath, { force: true, recursive: true });
 await download(`${baseUrl}/SHA256SUMS`, sumsPath);
 await download(`${baseUrl}/${asset}`, archivePath);
 
