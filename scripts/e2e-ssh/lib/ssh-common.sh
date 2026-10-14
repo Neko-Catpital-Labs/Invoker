@@ -234,9 +234,13 @@ invoker_e2e_ssh_install_login_path() {
   chmod 600 "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   invoker_e2e_ssh_prune_login_path_file "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
+    local skip_managed_install_export=""
+    if [ "${INVOKER_E2E_SSH_SKIP_MANAGED_PNPM_INSTALL:-0}" = "1" ]; then
+      skip_managed_install_export='; export INVOKER_SKIP_MANAGED_PNPM_INSTALL=1'
+    fi
     {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
-      printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+      printf 'export PATH="%s:%s:$PATH"%s\n' "$node_dir" "$pnpm_dir" "$skip_managed_install_export"
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   fi
   electron_cache="${electron_config_cache:-}"
