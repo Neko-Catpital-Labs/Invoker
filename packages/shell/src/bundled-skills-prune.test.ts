@@ -109,7 +109,8 @@ describe('installBundledSkills pruning', () => {
     try {
       installBundledSkills(sourceContext(repoRoot, invokerHomeRoot));
 
-      expect(existsSync(join(fakeHome, '.codex/skills/invoker-legacy-source-skill'))).toBe(true);
+      expect(existsSync(join(invokerHomeRoot, 'skills', 'invoker-legacy-source-skill'))).toBe(true);
+      expect(existsSync(join(fakeHome, '.codex/skills/invoker-legacy-source-skill'))).toBe(false);
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
