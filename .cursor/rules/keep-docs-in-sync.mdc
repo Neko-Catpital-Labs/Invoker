@@ -27,3 +27,8 @@ Search for and revise every stale reference, typically under:
 
 - Do not invent large new doc sets for tiny internal refactors with no operator impact.
 - Do not update untracked personal notes unless the user asks.
+- Do not document expected reliability fixes that operators already assume — e.g. idempotent
+  re-run after a cancelled/partial install, clean wipe/retry of leftover state, or other
+  “it just recovers” behavior. Users do not need an implementation note for that; cover it
+  with tests, not README / getting-started prose. Still update docs when the *operator
+  steps*, flags, paths, or defaults change.
