@@ -107,6 +107,52 @@ describe('GitLabMergeGateProvider', () => {
     );
   });
 
+  it('refreshes refs without embedding the branch name when retrying a ref lock race', async () => {
+    const { spawn } = await import('node:child_process');
+    const spawnMock = vi.mocked(spawn);
+    let pushAttempts = 0;
+
+    spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'push') {
+        pushAttempts++;
+        if (pushAttempts === 1) {
+          return mockSpawnResult('', 1, [
+            'To gitlab.com:Group/Sub/Project.git',
+            " ! [remote rejected] feature/x -> feature/x (cannot lock ref 'refs/heads/feature/x': reference already exists)",
+            "error: failed to push some refs to 'gitlab.com:Group/Sub/Project.git'",
+          ].join('\n'));
+        }
+        return mockSpawnResult('', 0);
+      }
+      if (cmd === 'git') return mockSpawnResult('', 0);
+      if (cmd === 'glab' && args.some((arg) => String(arg).includes('state=opened'))) {
+        return mockSpawnResult('[]', 0);
+      }
+      if (cmd === 'glab' && args.includes('--method') && args.includes('POST')) {
+        return mockSpawnResult(JSON.stringify({
+          web_url: 'https://gitlab.com/Group/Sub/Project/-/merge_requests/3',
+          iid: 3,
+        }), 0);
+      }
+      return mockSpawnResult('{}', 0);
+    }) as any);
+
+    await provider.createReview({
+      baseBranch: 'master',
+      featureBranch: 'feature/x',
+      title: 'Test MR',
+      cwd: '/tmp/repo',
+      body: '## Summary\n\nbody',
+    });
+
+    expect(pushAttempts).toBe(2);
+    expect(spawnMock.mock.calls).toContainEqual([
+      'git',
+      ['fetch', '--prune', '--end-of-options', 'origin'],
+      expect.objectContaining({ cwd: '/tmp/repo' }),
+    ]);
+  });
+
   it('maps approvals and failed pipelines onto MergeGateApprovalStatus', async () => {
     const { spawn } = await import('node:child_process');
     const spawnMock = vi.mocked(spawn);
