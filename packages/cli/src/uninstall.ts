@@ -587,6 +587,7 @@ async function disableQuickInstallWorkers(): Promise<UninstallResultEntry[]> {
       writeInvokerConfigFile(configPath, config);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      markPolicyToggleResultsFailed(results, configPath, message);
       results.push({
         resource: {
           id: 'worker:config-write',
@@ -602,6 +603,19 @@ async function disableQuickInstallWorkers(): Promise<UninstallResultEntry[]> {
     }
   }
   return results;
+}
+
+export function markPolicyToggleResultsFailed(
+  results: Array<{ resource: UninstallResource; status: UninstallResourceStatus }>,
+  configPath: string,
+  message: string,
+): void {
+  for (const entry of results) {
+    if (entry.status !== 'removed') continue;
+    if (entry.resource.kind !== 'worker_toggle') continue;
+    if (entry.resource.path !== configPath) continue;
+    entry.status = `failed: ${message}`;
+  }
 }
 
 async function defaultExecuteIntegrations(

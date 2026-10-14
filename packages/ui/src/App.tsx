@@ -3158,15 +3158,25 @@ export function App() {
       }
     }
     try {
-      await invoker.planningChatCancel({
+      const result = await invoker.planningChatCancel({
         ...(backendSessionId ? { sessionId: backendSessionId } : {}),
         turnId: session.activeTurnId,
       });
+      if (!result.ok || !result.cancelled) {
+        appendTerminalLine(
+          result.ok
+            ? 'The planner has not started this turn yet. Try Cancel again in a moment.'
+            : `Could not cancel: ${result.error}`,
+          'system',
+          'muted',
+          session.id,
+        );
+      }
     } catch (err) {
       console.error('[planning] planningChatCancel transport failure', err);
       void refreshPlanningSessionsNow();
     }
-  }, [activePlanningSession, invoker, refreshPlanningSessionsNow]);
+  }, [activePlanningSession, appendTerminalLine, invoker, refreshPlanningSessionsNow]);
 
   const makeFreshLocalPlanningSession = useCallback((): PlanningSessionView => {
     const index = nextPlanningSessionLocalIdRef.current;

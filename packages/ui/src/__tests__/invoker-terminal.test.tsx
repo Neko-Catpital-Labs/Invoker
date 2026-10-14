@@ -969,6 +969,30 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
   });
 
+  it('Cancel before the turn is registered tells the user to try again', async () => {
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => {}) as any) as any;
+    mock.api.planningChatCancel = vi.fn(async () => ({
+      ok: true,
+      cancelled: false,
+      sessionId: 'session-1',
+      turnId: 'turn-cancel-early',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('hi');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByTestId('invoker-terminal-cancel'));
+    await waitFor(() => expect(mock.api.planningChatCancel).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'The planner has not started this turn yet. Try Cancel again in a moment.',
+      );
+    });
+  });
+
   it('shows concise planning activity while busy and removes it when the final reply arrives', async () => {
     let resolveSend: ((value: any) => void) | null = null;
     mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => {

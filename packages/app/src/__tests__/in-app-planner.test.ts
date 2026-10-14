@@ -1406,13 +1406,13 @@ tasks:
     },
     {
       presetKey: 'claude',
-      error: 'Not logged in · Please run /login',
+      error: 'claude: Authentication required. Run `claude` and complete `/login` (or `invoker-cli agent-login` for Claude), then try again.',
       systemIncludes: ['Claude isn\'t authenticated', '/login'],
     },
     {
       presetKey: 'omp+codex',
-      error: 'failed to authenticate: oauth session expired and could not be refreshed',
-      systemIncludes: ['Codex via OMP isn\'t authenticated', 'codex login'],
+      error: 'omp: Authentication required. Re-authenticate the OMP provider (Claude/Codex behind OMP), then try again.',
+      systemIncludes: ['Codex via OMP isn\'t authenticated'],
     },
   ] as const)('surfaces a harness-specific auth error for $presetKey', async ({
     presetKey,
@@ -1443,6 +1443,33 @@ tasks:
     for (const snippet of systemIncludes) {
       expect(systemError?.text).toContain(snippet);
     }
+  });
+
+  it('does not reclassify exited-with-code stdout auth text as planner_error', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const result = await sendPlanningChatMessage({
+      message: 'hi',
+      presetKey: 'codex',
+      turnId: 'turn-auth-stdout-false-positive',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        throw new Error(
+          "codex exited with code 1: Error: Authentication required. Please run 'codex login' first.",
+        );
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.sessionId).toBeTruthy();
+    const session = sessions.get(result.sessionId!);
+    expect(session).toBeDefined();
+    expect(session!.status).not.toBe('planner_error');
+    expect(session!.messages.some((line) => line.role === 'system' && line.tone === 'error')).toBe(false);
   });
 
   it('cancelPlanningChatTurn marks a running turn cancelled and aborts the planner', async () => {

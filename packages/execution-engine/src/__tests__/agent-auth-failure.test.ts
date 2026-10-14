@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPlannerAuthRequiredMessage,
   classifyAgentAuthFailure,
+  isPlannerAuthRequiredErrorMessage,
   plannerOutputIndicatesAuthFailure,
   plannerOutputIndicatesAuthLimbo,
 } from '../agent-auth-failure.js';
@@ -65,6 +66,16 @@ describe('planner auth output classification', () => {
     expect(buildPlannerAuthRequiredMessage('codex')).toMatch(/codex login/i);
     expect(buildPlannerAuthRequiredMessage('claude')).toMatch(/\/login/i);
     expect(buildPlannerAuthRequiredMessage('omp')).toMatch(/OMP/i);
+  });
+
+  it('recognizes only the shaped buildPlannerAuthRequiredError message', () => {
+    expect(isPlannerAuthRequiredErrorMessage(buildPlannerAuthRequiredMessage('cursor'))).toBe(true);
+    expect(isPlannerAuthRequiredErrorMessage(
+      "cursor exited with code 1: Error: Authentication required. Please run 'cursor agent login' first.",
+    )).toBe(false);
+    expect(isPlannerAuthRequiredErrorMessage(
+      'failed to authenticate: oauth session expired and could not be refreshed',
+    )).toBe(false);
   });
 });
 

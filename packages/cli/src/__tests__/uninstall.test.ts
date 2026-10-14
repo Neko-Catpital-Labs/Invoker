@@ -11,6 +11,7 @@ import {
   formatCoverageTable,
   formatUninstallHelp,
   formatUninstallPlan,
+  markPolicyToggleResultsFailed,
   parseUninstallArgs,
   runUninstall,
   uninstallCoverageTable,
@@ -148,6 +149,33 @@ describe('uninstall discovery + dry-run', () => {
     expect(coverage).toContain('worktrees');
     expect(coverage).toContain('repos');    expect(uninstallExitCode([{ status: 'removed' }])).toBe(0);
     expect(uninstallExitCode([{ status: 'failed: boom' }])).toBe(1);
+  });
+
+  it('marks policy-toggle removals failed when config write fails', () => {
+    const configPath = '/tmp/invoker-config.json';
+    const results = [
+      {
+        resource: resource({
+          id: 'worker:auto-approve',
+          kind: 'worker_toggle',
+          path: configPath,
+          scope: 'integration',
+        }),
+        status: 'removed' as const,
+      },
+      {
+        resource: resource({
+          id: 'worker:pr-status',
+          kind: 'worker_toggle',
+          path: '/tmp/invoker.db',
+          scope: 'integration',
+        }),
+        status: 'removed' as const,
+      },
+    ];
+    markPolicyToggleResultsFailed(results, configPath, 'EACCES');
+    expect(results[0]?.status).toBe('failed: EACCES');
+    expect(results[1]?.status).toBe('removed');
   });
 });
 

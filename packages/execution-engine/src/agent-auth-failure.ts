@@ -96,3 +96,7 @@ export function buildPlannerAuthRequiredMessage(plannerLabel: string): string {
 export function buildPlannerAuthRequiredError(plannerLabel: string): Error {
   return new Error(buildPlannerAuthRequiredMessage(plannerLabel));
 }
+
+export function isPlannerAuthRequiredErrorMessage(message: string): boolean {
+  return /^[^:\n]+: Authentication required\. /.test(message);
+}

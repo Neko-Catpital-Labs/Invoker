@@ -43,37 +43,13 @@ LOCK_DIR="$TMP/invoker.db.lock"
 mkdir -p "$LOCK_DIR"
 printf '%s\n' "$SLEEP_PID" >"$LOCK_DIR/pid"
 
-pid_is_alive() {
-  local pid="$1"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
-}
+REPO_ROOT="$ROOT"
+eval "$(sed -n '/^pid_is_alive()/,/^}/p' "$SETUP")"
+eval "$(sed -n '/^pid_is_invoker_owner()/,/^}/p' "$SETUP")"
+eval "$(sed -n '/^remove_stale_db_lock()/,/^}/p' "$SETUP")"
 
-pid_is_invoker_owner() {
-  local pid="$1"
-  local command_line=""
-  pid_is_alive "$pid" || return 1
-  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [ -n "$command_line" ] || return 1
-  printf '%s\n' "$command_line" | grep -Eqi 'invoker|electron|main\.js'
-}
-
-remove_stale_db_lock() {
-  local lock_dir="$1"
-  local pid=""
-  [ -d "$lock_dir" ] || return 0
-  pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
-  if pid_is_alive "$pid" && pid_is_invoker_owner "$pid"; then
-    return 1
-  fi
-  rm -rf "$lock_dir"
-  return 0
-}
-
-# Mirror the identity regex from setup-agent-skills.sh so drift fails this test.
-setup_regex="$(
-  grep -E "grep -Eqi 'invoker\|electron\|main\\\\.js'" "$SETUP" || true
-)"
-[ -n "$setup_regex" ] || fail "could not find pid_is_invoker_owner grep pattern in setup-agent-skills.sh"
+grep -Fq 'packages/app/dist/main.js' "$SETUP" || fail "pid_is_invoker_owner must match packages/app/dist/main.js"
+grep -Fq '*"$REPO_ROOT"*' "$SETUP" || fail "pid_is_invoker_owner must match processes under REPO_ROOT"
 
 pid_is_invoker_owner "$SLEEP_PID" && fail "sleep pid should not classify as an Invoker owner"
 

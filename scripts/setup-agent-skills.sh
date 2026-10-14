@@ -80,7 +80,10 @@ pid_is_invoker_owner() {
   pid_is_alive "$pid" || return 1
   command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   [ -n "$command_line" ] || return 1
-  printf '%s\n' "$command_line" | grep -Eqi 'invoker|electron|main\.js'
+  case "$command_line" in
+    *"$REPO_ROOT"*) return 0 ;;
+  esac
+  printf '%s\n' "$command_line" | grep -Fq 'packages/app/dist/main.js'
 }
 wait_for_pid_exit() {
   local pid="$1"

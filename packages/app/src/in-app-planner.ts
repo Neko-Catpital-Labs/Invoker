@@ -55,8 +55,8 @@ import type {
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
 import {
+  isPlannerAuthRequiredErrorMessage,
   plannerAuthRecoveryHint,
-  plannerOutputIndicatesAuthFailure,
   type AgentRegistry,
 } from '@invoker/execution-engine';
 import {
@@ -200,15 +200,7 @@ function isModuleResolutionError(error: unknown): boolean {
 
 function isAuthenticationError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const message = error.message;
-  if (plannerOutputIndicatesAuthFailure(message)) return true;
-  const lower = message.toLowerCase();
-  return (
-    lower.includes('oauth')
-    || lower.includes('401')
-    || lower.includes('token has expired')
-    || lower.includes('api error: 401')
-  );
+  return isPlannerAuthRequiredErrorMessage(error.message);
 }
 
 function planningAuthToolHint(presetKey: string): string {
