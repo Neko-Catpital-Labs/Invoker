@@ -87,6 +87,40 @@ describe('GitHubMergeGateProvider', () => {
     });
   });
 
+  describe('fetchFailedJobLog', () => {
+    it('targets the repository from GitHub Actions details URLs', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') return mockSpawnResult('failed log', 0);
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await expect(provider.fetchFailedJobLog({
+        detailsUrl: 'https://github.com/owner/repo/actions/runs/123',
+        cwd: '/tmp/worktree',
+      })).resolves.toBe('failed log');
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        ['run', 'view', '123', '--log-failed', '--repo', 'owner/repo'],
+        expect.objectContaining({ cwd: '/tmp/worktree' }),
+      );
+
+      await expect(provider.fetchFailedJobLog({
+        detailsUrl: 'https://github.com/other/project/actions/runs/456/job/789',
+        cwd: '/tmp/worktree',
+      })).resolves.toBe('failed log');
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        ['run', 'view', '--log-failed', '--job', '789', '--repo', 'other/project'],
+        expect.objectContaining({ cwd: '/tmp/worktree' }),
+      );
+    });
+  });
+
   describe('createReview', () => {
     it('logs createReview without dumping PR body or create stdout JSON', async () => {
       const { spawn } = await import('node:child_process');
@@ -282,11 +316,11 @@ describe('GitHubMergeGateProvider', () => {
 
       expect(result.url).toBe('https://github.com/owner/repo/pull/42');
       expect(result.identifier).toBe('42');
-      expect(spawnMock).toHaveBeenCalledWith(
+      expect(spawnMock.mock.calls).toContainEqual([
         'git',
-        ['push', '--force', 'origin', 'feature/test:refs/heads/feature/test'],
+        ['push', '--force', '--end-of-options', 'origin', 'feature/test:refs/heads/feature/test'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
-      );
+      ]);
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         [
@@ -392,11 +426,11 @@ describe('GitHubMergeGateProvider', () => {
 
       expect(result.url).toBe('https://github.com/owner/repo/pull/42');
       expect(pushAttempts).toBe(2);
-      expect(spawnMock).toHaveBeenCalledWith(
+      expect(spawnMock.mock.calls).toContainEqual([
         'git',
-        ['fetch', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        ['fetch', '--prune', '--end-of-options', 'origin'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
-      );
+      ]);
     });
 
     it('retries branch push after GitHub reports a stale expected-sha ref lock race', async () => {
@@ -437,11 +471,11 @@ describe('GitHubMergeGateProvider', () => {
 
       expect(result.url).toBe('https://github.com/owner/repo/pull/42');
       expect(pushAttempts).toBe(2);
-      expect(spawnMock).toHaveBeenCalledWith(
+      expect(spawnMock.mock.calls).toContainEqual([
         'git',
-        ['fetch', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        ['fetch', '--prune', '--end-of-options', 'origin'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
-      );
+      ]);
     });
 
     it('retries transient REST PR lookup failures before creating a PR', async () => {
