@@ -1685,6 +1685,9 @@ jobs:
           CI_INSTALL_SUDO_UNAVAILABLE_ERROR: 'docker / comprehensive requires libgtk-3 (Electron GUI dependency); run as root or provide passwordless sudo for apt-get.'
         run: bash scripts/ci/install-node-system-libraries.sh
 
+      - name: Ensure Electron binary is installed
+        run: node scripts/electron.cjs --install-only
+
       - name: Build invoker agent base image
         run: bash scripts/build-agent-base-image.sh
 
