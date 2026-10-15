@@ -24,6 +24,7 @@ try:
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
         REBASE_ONTO_MASTER_LEDGER_KIND,
+        RETARGET_BASE_REJECTED_LEDGER_KIND,
         ClaimRepairFiling,
         ReleaseRepairFiling,
         build_stack_report_sections,
@@ -58,6 +59,7 @@ except ImportError:
         REBASE_CONFLICT_REPAIR_FILING_KIND,
         REBASE_ONTO_MASTER_FILING_KIND,
         REBASE_ONTO_MASTER_LEDGER_KIND,
+        RETARGET_BASE_REJECTED_LEDGER_KIND,
         ClaimRepairFiling,
         ReleaseRepairFiling,
         build_stack_report_sections,
@@ -166,6 +168,21 @@ def report_repair_dispatch_failure(
             action_kind=action_kind,
             error=str(exc),
         )
+
+
+def _exception_text(exc: BaseException) -> str:
+    parts = [str(exc)]
+    for attr in ("stderr", "stdout", "output"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        if value:
+            parts.append(str(value))
+    return "\n".join(parts)
+
+
+def _is_stack_retarget_rejection(exc: BaseException) -> bool:
+    return "part of a stack" in _exception_text(exc).lower()
 
 
 def run_cycle(
@@ -433,7 +450,27 @@ def run_cycle(
                     should_poll = True
                 continue
             else:
-                performed = executor.execute(action, pr, now)
+                try:
+                    performed = executor.execute(action, pr, now)
+                except Exception as exc:
+                    if action.kind != "retarget_base" or not _is_stack_retarget_rejection(exc):
+                        raise
+                    logger.trace(
+                        "admin-bypass-retarget-rejected",
+                        repo=args.repo,
+                        pr_number=action.pr_number,
+                        action_kind=action.kind,
+                        key=action.key,
+                        error=_exception_text(exc),
+                    )
+                    ledger.record(
+                        RETARGET_BASE_REJECTED_LEDGER_KIND,
+                        pr.number,
+                        pr.head_ref_oid,
+                        f"{pr.base_ref_name}->{action.key}",
+                        now,
+                    )
+                    continue
                 if not performed:
                     should_poll = True
                     continue
