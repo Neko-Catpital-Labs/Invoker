@@ -166,7 +166,7 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker AI helpers inside the app. Run `invoker-cli setup` (or System Setup in the desktop app) to optionally register harness MCP/skills (`--register-harnesses` or answer yes to the prompt) and to configure Slack / remote machines.
+`invoker-cli install` (and interactive `invoker-cli setup`) installs the first-party Invoker AI helper skills under `~/.invoker`. Packaged installs also bundle those helpers inside the app. Run setup (or System Setup in the desktop app) to optionally register harness MCP/skills (`--register-harnesses` or answer yes to the prompt) and to configure Slack / remote machines.
 
 Then, in Codex, Claude, Cursor, or OMP (after harness registration), ask in normal chat to plan and run durable work through Invoker. `invoker-chat-submit` plus MCP review/submit/status tools prepare a review, wait for one approval, submit, and watch without a slash command.
 
