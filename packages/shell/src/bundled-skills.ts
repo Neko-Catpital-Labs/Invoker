@@ -43,7 +43,7 @@ const INVOKER_SKILLS_DIR = 'skills';
 const INVOKER_COMMANDS_DIR = 'commands';
 const INVOKER_MCP_SNIPPET_RELATIVE = path.join('mcp-servers', 'invoker.json');
 export const HARNESS_REGISTRATION_HINT =
-  'Harness MCP/skills stay opt-in. Snippet at ~/.invoker/mcp-servers/invoker.json — merge into Cursor/Claude/OMP or Codex when you want chat submit.';
+  'Harness MCP/skills stay opt-in. Re-run setup and answer yes, or pass --register-harnesses.';
 
 interface BundledSkillsManifest {
   bundledHash: string;
@@ -356,15 +356,6 @@ function syncCommandTargets(params: {
 
 function resolveInvokerMcpSnippetPath(invokerHomeRoot: string): string {
   return path.join(invokerHomeRoot, INVOKER_MCP_SNIPPET_RELATIVE);
-}
-
-function writeInvokerMcpSnippet(invokerHomeRoot: string): void {
-  const snippetPath = resolveInvokerMcpSnippetPath(invokerHomeRoot);
-  mkdirSync(path.dirname(snippetPath), { recursive: true });
-  writeFileAtomic(
-    snippetPath,
-    `${JSON.stringify({ mcpServers: { [INVOKER_MCP_SERVER_NAME]: INVOKER_MCP_SERVER } }, null, 2)}\n`,
-  );
 }
 
 function removeInvokerMcpSnippet(invokerHomeRoot: string): void {
@@ -1151,8 +1142,8 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
       managedPrefix: MANAGED_PREFIX,
       bundledSkillNames: [],
       harnessesRegistered: previousHarnessesRegistered(manifest, invokerHomeRoot),
-      targets: resolveManagedTargets(invokerHomeRoot),
-      commandTargets: resolveManagedCommandTargets(invokerHomeRoot),
+      targets: resolveHarnessSkillTargets(),
+      commandTargets: resolveHarnessCommandTargets(),
       mcpTargets: resolveManagedMcpTargets(isInstalled),
       instructionTargets,
     };
@@ -1161,11 +1152,11 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
   const bundledSkillNames = listBundledSkillNames(sourceRoot);
   const installedNames = prefixedSkillNames(bundledSkillNames);
   const bundledHash = hashDirectory(sourceRoot);
-  const targets = resolveManagedTargets(invokerHomeRoot).map((target) =>
+  const targets = resolveHarnessSkillTargets().map((target) =>
     buildTargetStatus(target, installedNames, bundledHash, manifest),
   );
   const commandFiles = listCommandNames(sourceRoot);
-  const commandTargets = resolveManagedCommandTargets(invokerHomeRoot).map((target) =>
+  const commandTargets = resolveHarnessCommandTargets().map((target) =>
     buildCommandConfigState(target, commandFiles, bundledHash, manifest),
   );
   const mcpTargets = resolveManagedMcpTargets(isInstalled).map((target) =>
@@ -1210,6 +1201,18 @@ export function installBundledSkills(
   const previousManifest = readManifest(invokerHomeRoot);
   const registerHarnesses =
     options.registerHarnesses === true || previousHarnessesRegistered(previousManifest, invokerHomeRoot);
+
+  removeLeftoverHomeSkillArtifacts(invokerHomeRoot);
+  removeInvokerMcpSnippet(invokerHomeRoot);
+
+  if (!registerHarnesses) {
+    const status = resolveBundledSkillsStatus(context);
+    return {
+      ...status,
+      harnessesRegistered: false,
+    };
+  }
+
   const bundledSkillNames = listBundledSkillNames(sourceRoot, category);
   for (const skillName of bundledSkillNames) {
     assertSkillSourceValid(path.join(sourceRoot, skillName), skillName);
@@ -1227,7 +1230,7 @@ export function installBundledSkills(
     [...currentBundledSkillNames],
     commandFiles,
     isInstalled,
-    { preserveHarnessRegistrations: registerHarnesses },
+    { preserveHarnessRegistrations: true },
   );
 
   const skillSync = {
@@ -1238,50 +1241,33 @@ export function installBundledSkills(
     previousManifest,
     manifestTargets,
   };
-  syncSkillTargets({ ...skillSync, targets: resolveManagedTargets(invokerHomeRoot) });
+  syncSkillTargets({ ...skillSync, targets: resolveHarnessSkillTargets() });
   syncCommandTargets({
-    targets: resolveManagedCommandTargets(invokerHomeRoot),
+    targets: resolveHarnessCommandTargets(),
     sourceRoot,
     commandFiles,
     previousManifest,
     manifestCommandTargets,
   });
-  writeInvokerMcpSnippet(invokerHomeRoot);
-
-  let mcpRecorded: NonNullable<BundledSkillsManifest['mcpTargets']> = {};
-  let instructionRecorded: NonNullable<BundledSkillsManifest['instructionTargets']> = {};
-  let lastInstallError: string | undefined = joinInstallErrors(cleanupErrors);
+  const mcpInstall = installAvailableMcpTargets(resolveManagedMcpTargets(isInstalled));
+  const instructionErrors: string[] = [];
+  const instructionRecorded = installInstructionTargets(invokerHomeRoot, instructionErrors) ?? {};
+  const lastInstallError = joinInstallErrors([
+    ...cleanupErrors,
+    ...mcpInstall.errors,
+    ...instructionErrors,
+  ]);
   const instructionHash = hashAlwaysOnFragments();
-
-  if (registerHarnesses) {
-    syncSkillTargets({ ...skillSync, targets: resolveHarnessSkillTargets() });
-    syncCommandTargets({
-      targets: resolveHarnessCommandTargets(),
-      sourceRoot,
-      commandFiles,
-      previousManifest,
-      manifestCommandTargets,
-    });
-    const mcpInstall = installAvailableMcpTargets(resolveManagedMcpTargets(isInstalled));
-    const instructionErrors: string[] = [];
-    instructionRecorded = installInstructionTargets(invokerHomeRoot, instructionErrors) ?? {};
-    mcpRecorded = mcpInstall.recorded;
-    lastInstallError = joinInstallErrors([
-      ...cleanupErrors,
-      ...mcpInstall.errors,
-      ...instructionErrors,
-    ]);
-  }
 
   const manifest: BundledSkillsManifest = {
     bundledHash,
     bundledSkillNames,
     installedAt: new Date().toISOString(),
     lastInstallError,
-    harnessesRegistered: registerHarnesses || undefined,
+    harnessesRegistered: true,
     targets: manifestTargets,
     commandTargets: manifestCommandTargets,
-    mcpTargets: mcpRecorded,
+    mcpTargets: mcpInstall.recorded,
     instructionTargets: instructionRecorded,
     instructionHash,
     sourceRepoRoot: context.isPackaged ? undefined : context.repoRoot,
@@ -1293,8 +1279,7 @@ export function installBundledSkills(
   const status = resolveBundledSkillsStatus(context);
   return {
     ...status,
-    harnessesRegistered: registerHarnesses,
-    promptRecommended: context.isPackaged && mode === 'install' ? false : status.promptRecommended,
+    harnessesRegistered: true,
   };
 }
 
