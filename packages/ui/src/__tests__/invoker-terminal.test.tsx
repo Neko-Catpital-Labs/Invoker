@@ -124,6 +124,7 @@ const { App } = await import('../App.js');
 const {
   InvokerTerminal,
   PLANNING_TOOLS_EMPTY_PATH_MESSAGE,
+  PLANNING_TURN_CANCELLED_MESSAGE,
   buildPlanningHarnessChoices,
 } = await import('../components/InvokerTerminal.js');
 
@@ -352,6 +353,41 @@ describe('Invoker terminal (component)', () => {
     ]);
   });
 
+  it('shows Cancel while busy and invokes onCancelTurn', () => {
+    const onCancelTurn = vi.fn();
+    render(<InvokerTerminal {...terminalProps({ busy: true, onCancelTurn })} />);
+
+    const cancel = screen.getByTestId('invoker-terminal-cancel');
+    expect(cancel).toHaveAttribute('aria-label', 'Cancel');
+    expect(screen.queryByTestId('invoker-terminal-send-icon')).not.toBeInTheDocument();
+    fireEvent.click(cancel);
+    expect(onCancelTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows Planning cancelled without a spinner and hides the Cancelled turn-error card', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        busy: false,
+        turnError: null,
+        planningStream: { text: PLANNING_TURN_CANCELLED_MESSAGE, status: 'failed' },
+      })}
+    />);
+
+    const panel = screen.getByTestId('invoker-terminal-planner-stream');
+    expect(panel).toHaveAttribute('data-state', 'failed');
+    expect(panel).toHaveTextContent('Planning cancelled');
+    expect(screen.getByTestId('invoker-terminal-planner-stream-idle')).toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+  });
+
+  it('keeps the send spinner while binding instead of Cancel', () => {
+    render(<InvokerTerminal {...terminalProps({ busy: true, binding: true })} />);
+
+    expect(screen.queryByTestId('invoker-terminal-cancel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-send-spinner')).toBeInTheDocument();
+  });
+
   it('renders separate harness and model selectors while emitting configured preset keys', () => {
     const onPresetChange = vi.fn();
     render(<InvokerTerminal
@@ -409,16 +445,17 @@ describe('Invoker terminal (component)', () => {
     expect(harness.querySelectorAll('option')).toHaveLength(0);
   });
 
-  it('announces the turn error and only renders Retry when a handler is provided', () => {
+  it('announces the turn error in-thread and only renders Retry when a handler is provided', () => {
     const { rerender } = render(<InvokerTerminal
       {...terminalProps({
         turnError: 'Planner was interrupted before it could answer.',
       })}
     />);
 
-    const errorBar = screen.getByTestId('invoker-terminal-turn-error');
-    expect(errorBar).toHaveAttribute('role', 'alert');
-    expect(errorBar).toHaveTextContent('Planner was interrupted before it could answer.');
+    const errorBanner = screen.getByTestId('invoker-terminal-turn-error');
+    expect(errorBanner).toHaveAttribute('role', 'alert');
+    expect(errorBanner).toHaveTextContent('Planning was interrupted');
+    expect(errorBanner).toHaveTextContent('Planner was interrupted before it could answer.');
     expect(screen.queryByTestId('invoker-terminal-retry-turn')).not.toBeInTheDocument();
 
     const onRetryTurn = vi.fn();
@@ -433,6 +470,36 @@ describe('Invoker terminal (component)', () => {
     expect(onRetryTurn).toHaveBeenCalledTimes(1);
   });
 
+  it('collapses consecutive identical system errors into one banner with a count', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        lines: [
+          { id: 1, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+          { id: 2, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+          { id: 3, text: 'Cursor isn\'t authenticated. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.', role: 'system', tone: 'error' },
+        ],
+      })}
+    />);
+
+    expect(screen.getAllByTestId('invoker-terminal-error-banner')).toHaveLength(1);
+    expect(screen.getByTestId('invoker-terminal-error-count')).toHaveTextContent('3×');
+    expect(screen.getByText("Cursor isn't signed in")).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-copy-command')).toBeInTheDocument();
+  });
+
+  it('renders a right-aligned user bubble without a You label', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        lines: [{ id: 1, text: 'Plan a feature', role: 'user' }],
+      })}
+    />);
+
+    const bubble = screen.getByTestId('invoker-terminal-user-bubble');
+    expect(bubble.className).toContain('justify-end');
+    expect(bubble).toHaveTextContent('Plan a feature');
+    expect(screen.queryByText('You')).not.toBeInTheDocument();
+  });
+
   it('preserves a still-valid model when switching harnesses', () => {
     const onPresetChange = vi.fn();
     render(<InvokerTerminal
@@ -441,8 +508,8 @@ describe('Invoker terminal (component)', () => {
         presetOptions: [
           { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude' },
           { key: 'omp+codex', label: 'Codex via OMP', tool: 'omp', model: 'codex' },
-          { key: 'cursor+claude', label: 'Claude via Cursor', tool: 'cursor', model: 'claude' },
-          { key: 'cursor+codex', label: 'Codex via Cursor', tool: 'cursor', model: 'codex' },
+          { key: 'cursor+claude', label: 'Claude Sonnet 4.5', tool: 'cursor', model: 'claude-4.5-sonnet' },
+          { key: 'cursor+codex', label: 'GPT-5.3 Codex', tool: 'cursor', model: 'gpt-5.3-codex' },
           { key: 'codex', label: 'Codex', tool: 'codex' },
         ],
         onPresetChange,
@@ -455,6 +522,67 @@ describe('Invoker terminal (component)', () => {
 
     fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'codex' } });
     expect(onPresetChange).toHaveBeenLastCalledWith('codex');
+  });
+
+  it('groups Cursor More… models and shows discovery loading/warning without changing selection', () => {
+    const onPresetChange = vi.fn();
+    const { rerender } = render(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'cursor+claude',
+        planningPresetsLoading: true,
+        cursorDiscoveryWarning: null,
+        presetOptions: [
+          {
+            key: 'cursor+claude',
+            label: 'Claude Sonnet 4.5',
+            tool: 'cursor',
+            model: 'claude-4.5-sonnet',
+            availability: 'unverified',
+            section: 'recommended',
+          },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+    expect(screen.getByTestId('invoker-terminal-models-loading')).toHaveTextContent('Checking Cursor models');
+    expect(screen.getByTestId('invoker-terminal-model')).toHaveValue('cursor+claude');
+
+    rerender(<InvokerTerminal
+      {...terminalProps({
+        selectedPresetKey: 'cursor+claude',
+        planningPresetsLoading: false,
+        cursorDiscoveryWarning: 'Could not verify Cursor models (timed out). Showing recommended list as unverified.',
+        presetOptions: [
+          {
+            key: 'cursor+claude',
+            label: 'Claude Sonnet 4.5',
+            tool: 'cursor',
+            model: 'claude-4.5-sonnet',
+            availability: 'unverified',
+            section: 'recommended',
+          },
+          {
+            key: 'cursor+brand-new-model',
+            label: 'Brand New Model',
+            tool: 'cursor',
+            model: 'brand-new-model',
+            availability: 'confirmed',
+            section: 'more',
+          },
+        ],
+        onPresetChange,
+      })}
+    />);
+
+    expect(screen.queryByTestId('invoker-terminal-models-loading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-models-warning')).toHaveTextContent('Could not verify Cursor models');
+    expect(screen.getByTestId('invoker-terminal-model')).toHaveValue('cursor+claude');
+    expect(onPresetChange).not.toHaveBeenCalled();
+    const modelSelect = screen.getByTestId('invoker-terminal-model');
+    expect(within(modelSelect).getByText('Claude Sonnet 4.5 (unverified)')).toBeInTheDocument();
+    expect(within(modelSelect).getByText('Brand New Model')).toBeInTheDocument();
   });
 
   it('shows the submitted-plan bar running state while the workflow is still running', () => {
@@ -801,6 +929,70 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
   });
 
+  it('Cancel while busy calls planningChatCancel with the active turn id', async () => {
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => {}) as any) as any;
+    mock.api.planningChatCancel = vi.fn(async () => ({
+      ok: true,
+      cancelled: true,
+      sessionId: 'session-1',
+      turnId: 'turn-cancel-ui',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('hi');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    const turnId = vi.mocked(mock.api.planningChatSend).mock.calls[0][0].turnId;
+    expect(turnId).toEqual(expect.any(String));
+
+    fireEvent.click(await screen.findByTestId('invoker-terminal-cancel'));
+    await waitFor(() => expect(mock.api.planningChatCancel).toHaveBeenCalledTimes(1));
+    expect(mock.api.planningChatCancel).toHaveBeenCalledWith({
+      turnId,
+    });
+
+    // First-message turns stay on the local session id until send resolves;
+    // the cancel stream event must target that same view id.
+    await act(async () => {
+      mock.firePlanningChatStream({
+        sessionId: 'local-planning-session-1',
+        turnId,
+        turn: { status: 'failed', error: PLANNING_TURN_CANCELLED_MESSAGE },
+      });
+    });
+
+    const panel = await screen.findByTestId('invoker-terminal-planner-stream');
+    expect(panel).toHaveTextContent('Planning cancelled');
+    expect(screen.queryByTestId('invoker-terminal-turn-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
+  });
+
+  it('Cancel before the turn is registered tells the user to try again', async () => {
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => {}) as any) as any;
+    mock.api.planningChatCancel = vi.fn(async () => ({
+      ok: true,
+      cancelled: false,
+      sessionId: 'session-1',
+      turnId: 'turn-cancel-early',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('hi');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByTestId('invoker-terminal-cancel'));
+    await waitFor(() => expect(mock.api.planningChatCancel).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'The planner has not started this turn yet. Try Cancel again in a moment.',
+      );
+    });
+  });
+
   it('shows concise planning activity while busy and removes it when the final reply arrives', async () => {
     let resolveSend: ((value: any) => void) | null = null;
     mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => {
@@ -868,7 +1060,10 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       const panel = screen.getByTestId('invoker-terminal-planner-stream');
       expect(panel).toHaveAttribute('data-state', 'failed');
-      expect(panel).toHaveTextContent('Planning stopped. Try again when ready.');
+      expect(panel).toHaveTextContent('Planning stopped');
+      expect(panel).not.toHaveTextContent('Try again when ready.');
+      expect(screen.getByTestId('invoker-terminal-planner-stream-idle')).toBeInTheDocument();
+      expect(screen.queryByTestId('invoker-terminal-planner-stream-spinner')).not.toBeInTheDocument();
     });
 
     const firstTurnId = vi.mocked(mock.api.planningChatSend).mock.calls[0][0].turnId;
@@ -1039,7 +1234,7 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
-  it('renders chat role labels and fenced YAML in a mono code panel', async () => {
+  it('renders user bubbles and fenced YAML without You/System/Invoker labels', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
@@ -1057,12 +1252,15 @@ describe('Invoker terminal (component)', () => {
       expect(transcript).toHaveTextContent('I drafted the plan.');
       expect(transcript).toHaveTextContent('name: Fence Plan');
     });
-    expect(transcript).toHaveTextContent('You');
-    expect(transcript).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('invoker-terminal-user-bubble')).toHaveTextContent('draft it');
+    expect(screen.getByTestId('invoker-terminal-assistant-message')).toBeInTheDocument();
     expect(transcript.querySelector('pre code')).toBeTruthy();
     expect(transcript.querySelector('pre')?.className ?? '').toContain('font-mono');
-    expect(screen.queryByText('you ›')).not.toBeInTheDocument();
-    expect(screen.queryByText('invoker ›')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('You')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('System')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('Invoker')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('you ›')).not.toBeInTheDocument();
+    expect(within(transcript).queryByText('invoker ›')).not.toBeInTheDocument();
   });
 
   it('does not render reasoning details when a response includes reasoning', async () => {
@@ -1617,9 +1815,9 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('continue without losing context');
 
     await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-        'This planning chat lost its server session. Start a new chat to continue planning.',
-      );
+      const transcript = screen.getByTestId('invoker-terminal-transcript');
+      expect(transcript).toHaveTextContent('This planning chat lost its server session.');
+      expect(transcript).toHaveTextContent('Start a new chat to continue planning.');
     });
     expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('What do you want to build?');
@@ -2265,8 +2463,8 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getByTestId('invoker-terminal-input')).toHaveAttribute('placeholder', 'This window is read-only.');
   });
 
-  it('swaps the send icon for a pending spinner while a turn is running', () => {
-    render(<InvokerTerminal {...terminalProps({ busy: true })} />);
+  it('swaps the send icon for a pending spinner while binding', () => {
+    render(<InvokerTerminal {...terminalProps({ busy: true, binding: true })} />);
 
     const sendButton = screen.getByRole('button', { name: 'Send' });
     expect(sendButton).toBeDisabled();
@@ -2283,11 +2481,11 @@ describe('Invoker terminal (component)', () => {
     expect(sendButton).toHaveClass('hover:bg-amber-300');
   });
 
-  it('keeps the icon-only Send button disabled for empty input, busy state, and read-only sessions', () => {
+  it('keeps the icon-only Send button disabled for empty input, binding, and read-only sessions', () => {
     const { rerender } = render(<InvokerTerminal {...terminalProps({ value: '' })} />);
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
 
-    rerender(<InvokerTerminal {...terminalProps({ busy: true, value: 'draft a plan' })} />);
+    rerender(<InvokerTerminal {...terminalProps({ busy: true, binding: true, value: 'draft a plan' })} />);
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
 
     rerender(<InvokerTerminal {...terminalProps({ readOnly: true, value: 'draft a plan' })} />);

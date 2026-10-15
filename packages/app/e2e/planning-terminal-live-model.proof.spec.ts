@@ -197,7 +197,7 @@ base.describe('Planning terminal live model proof', () => {
       await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('READY_TO_DRAFT_BLACK_TO_PINK', {
         timeout: 10000,
       });
-      await expect(page.getByText('Planning stopped. Try again when ready.')).toHaveCount(0);
+      await expect(page.getByText('Planning stopped')).toHaveCount(0);
 
       await submitPlanningText(page, [
         'Continue this same planning conversation and draft the complete Invoker YAML plan now.',

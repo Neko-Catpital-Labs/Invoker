@@ -50,11 +50,14 @@ A preset names the **CLI tool** that plans conversationally and converts the pla
 | --- | --- | --- |
 | `codex` (default) | codex | (CLI default) |
 | `claude` | claude | (CLI default) |
-| `cursor+claude` | cursor | claude |
-| `cursor+codex` | cursor | codex |
+| `cursor+claude` | cursor | `claude-4.5-sonnet` |
+| `cursor+codex` | cursor | `gpt-5.3-codex` |
+| `cursor+auto` | cursor | `auto` |
 | `omp+claude` | omp | claude |
 | `omp+codex` | omp | codex |
 | `omp` | omp | (CLI default) |
+
+Cursor presets use real `cursor-agent --list-models` ids (not aliases like `claude` / `codex`). The in-app planning picker also probes `cursor-agent --list-models` at runtime to confirm recommended models and surface extras under **More…**, falling back to an unverified curated list when discovery fails.
 
 Add or override presets with the surface's `harnessPresets` option, and change the default with `defaultHarnessPreset` (see [Running the surface](#running-the-surface)). An unknown `[<preset>]` tag is answered with the list of valid presets.
 

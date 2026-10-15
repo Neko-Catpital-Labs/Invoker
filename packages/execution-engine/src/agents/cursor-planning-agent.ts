@@ -4,6 +4,7 @@
  * Extracted from plan-conversation.ts spawnCursor().
  */
 
+import { resolveCursorPlanningModel } from '@invoker/contracts';
 import type { PlanningAgent } from '../agent.js';
 
 export interface CursorPlanningAgentConfig {
@@ -24,9 +25,10 @@ export class CursorPlanningAgent implements PlanningAgent {
     prompt: string,
     options?: { model?: string },
   ): { command: string; args: string[] } {
+    const model = resolveCursorPlanningModel(options?.model);
     return {
       command: this.command,
-      args: ['agent', '--print', '--trust', ...(options?.model ? ['--model', options.model] : []), prompt],
+      args: ['agent', '--print', '--trust', ...(model ? ['--model', model] : []), prompt],
     };
   }
 }

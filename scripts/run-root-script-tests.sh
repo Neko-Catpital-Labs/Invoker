@@ -77,6 +77,7 @@ bash scripts/test-plan-effectiveness-gate.sh
 bash scripts/test-remote-ci-verify-env-quoting.sh
 bash scripts/test-workspace-test-flaky-wiring.sh
 bash scripts/test-linear-ticket-intake.sh
+bash scripts/test-setup-agent-skills.sh
 
 bash scripts/repro/repro-coderabbit-pr3242-close-app-exit.sh
 bash scripts/repro/repro-pending-task-did-not-run-wf-1781538160448-3-final-regression.sh

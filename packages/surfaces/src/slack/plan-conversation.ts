@@ -10,13 +10,36 @@
  * client-side when the user sends a confirmation message.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository, PlanningDraft } from '@invoker/data-store';
-import { formatCodexPlannerStdout } from '@invoker/execution-engine';
-import type { HarnessSessionDriver } from '@invoker/execution-engine';
+import {
+  PLANNER_AUTH_LIMBO_GRACE_MS,
+  buildPlannerAuthRequiredError,
+  childProcessHasExited,
+  formatCodexPlannerStdout,
+  plannerOutputIndicatesAuthFailure,
+  plannerOutputIndicatesAuthLimbo,
+  runPlannerAuthPreflight,
+  throwIfPlannerAuthPreflightUnauthenticated,
+  terminateChildProcessGroup,
+} from '@invoker/execution-engine';
+import type {
+  HarnessSessionDriver,
+  PlannerAuthPreflightCommandRunner,
+} from '@invoker/execution-engine';
+
+export {
+  PLANNER_AUTH_LIMBO_GRACE_MS,
+  buildPlannerAuthRequiredError,
+  buildPlannerAuthRequiredMessage,
+  plannerAuthRecoveryHint,
+  plannerOutputIndicatesAuthFailure,
+  plannerOutputIndicatesAuthLimbo,
+  runPlannerAuthPreflight,
+} from '@invoker/execution-engine';
 import {
   buildPlanningHandoffInstructions,
   formatPlanningHostedTurn,
@@ -108,6 +131,20 @@ class RetryableEmptyPlannerOutputError extends Error {
   }
 }
 
+export class PlanningTurnCancelledError extends Error {
+  constructor() {
+    super('Cancelled.');
+    this.name = 'PlanningTurnCancelledError';
+  }
+}
+
+export function isPlanningTurnCancelledError(error: unknown): boolean {
+  return error instanceof PlanningTurnCancelledError
+    || (error instanceof Error && error.name === 'PlanningTurnCancelledError');
+}
+
+export const PLANNER_AUTH_REQUIRED_MESSAGE = 'Authentication required.';
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -128,6 +165,10 @@ export interface PlanConversationConfig {
   plannerScratchRoot?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
   timeoutMs?: number;
+  authLimboGraceMs?: number;
+  authPreflightTimeoutMs?: number;
+  authPreflightRunner?: PlannerAuthPreflightCommandRunner;
+  authPreflightEnabled?: boolean;
   /** Slack thread timestamp. Required for persistence. */
   threadTs?: string;
   /** Slack channel id this thread belongs to. Persisted alongside threadTs so a
@@ -529,6 +570,10 @@ export class PlanConversation {
   private plannerScratchRoot?: string;
   private planDraftDirUnavailable = false;
   private timeoutMs: number;
+  private authLimboGraceMs: number;
+  private authPreflightTimeoutMs?: number;
+  private authPreflightRunner?: PlannerAuthPreflightCommandRunner;
+  private authPreflightEnabled: boolean;
   private threadTs?: string;
   private channelId?: string;
   private conversationRepo?: ConversationRepository;
@@ -565,6 +610,9 @@ export class PlanConversation {
   private harnessSessionDriver?: HarnessSessionDriver;
   private _harnessSessionId?: string;
   private onHarnessSessionId?: (sessionId: string) => void;
+  private activePlannerChild: ChildProcess | null = null;
+  private activePlannerReject: ((error: Error) => void) | null = null;
+  private activePlannerAbortRequested = false;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -575,6 +623,10 @@ export class PlanConversation {
     this.workingDir = config.workingDir;
     this.plannerScratchRoot = config.plannerScratchRoot;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.authLimboGraceMs = Math.max(0, config.authLimboGraceMs ?? PLANNER_AUTH_LIMBO_GRACE_MS);
+    this.authPreflightTimeoutMs = config.authPreflightTimeoutMs;
+    this.authPreflightRunner = config.authPreflightRunner;
+    this.authPreflightEnabled = config.authPreflightEnabled !== false;
     this.threadTs = config.threadTs;
     this.channelId = config.channelId;
     this.conversationRepo = config.conversationRepo;
@@ -687,6 +739,7 @@ export class PlanConversation {
     const t0 = Date.now();
     const turn = this.messages.filter(m => m.role === 'user').length + 1;
     this.log('plan-conversation', 'info', `[TRACE] sendMessage() start (threadTs=${this.threadTs}, initialized=${this._initialized}, msgCount=${this.messages.length}, turn=${turn})`);
+    this.activePlannerAbortRequested = false;
 
     if (!this._initialized) await this.init();
     const tInit = Date.now();
@@ -1142,6 +1195,42 @@ export class PlanConversation {
 
   // ── Planner CLI Subprocess ─────────────────────────────
 
+  rebindHarness(options: {
+    tool?: string;
+    model?: string;
+    harnessSessionDriver?: HarnessSessionDriver;
+  }): void {
+    this.tool = options.tool;
+    this.model = options.model;
+    this.harnessSessionDriver = options.harnessSessionDriver;
+    this._harnessSessionId = undefined;
+  }
+
+  get planningTool(): string | undefined {
+    return this.tool;
+  }
+
+  abortActiveTurn(): boolean {
+    const hadInFlight = Boolean(this.activePlannerChild || this.activePlannerReject);
+    if (!hadInFlight && this.activePlannerAbortRequested) return false;
+    if (!hadInFlight && !this.turnInFlight) return false;
+    this.activePlannerAbortRequested = true;
+    const child = this.activePlannerChild;
+    const reject = this.activePlannerReject;
+    this.activePlannerReject = null;
+    if (child) {
+      void terminateChildProcessGroup(child, () => childProcessHasExited(child));
+    }
+    reject?.(new PlanningTurnCancelledError());
+    return true;
+  }
+
+  private throwIfAbortRequested(): void {
+    if (this.activePlannerAbortRequested) {
+      throw new PlanningTurnCancelledError();
+    }
+  }
+
   async spawnPlanner(prompt: string, turn?: number): Promise<string> {
     if (this.harnessSessionDriver) {
       return this.spawnPlannerWithDriver(prompt, this.harnessSessionDriver, turn);
@@ -1192,6 +1281,9 @@ export class PlanConversation {
     args: string[],
     plannerLabel: string,
   ): Promise<string> {
+    await this.runAuthPreflightOrThrow(command, plannerLabel);
+    this.throwIfAbortRequested();
+
     const totalAttempts = this.plannerRetryLimit + 1;
     let lastStderrTail = '';
 
@@ -1201,10 +1293,13 @@ export class PlanConversation {
         this.log('plan-conversation', 'warn',
           `[PLANNER_RETRY] backing off ${backoffMs}ms before attempt=${attempt + 1}/${totalAttempts} (planner=${plannerLabel})`);
         await delay(backoffMs);
+        this.throwIfAbortRequested();
       }
+      this.throwIfAbortRequested();
       try {
         return await this.spawnPlannerAttempt(prompt, command, args, plannerLabel, attempt + 1, totalAttempts);
       } catch (err) {
+        if (isPlanningTurnCancelledError(err)) throw err;
         if (err instanceof RetryableEmptyPlannerOutputError) {
           lastStderrTail = err.stderrTail;
           const isLast = attempt >= totalAttempts - 1;
@@ -1220,6 +1315,32 @@ export class PlanConversation {
     throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
   }
 
+  private async runAuthPreflightOrThrow(command: string, plannerLabel: string): Promise<void> {
+    if (!this.authPreflightEnabled) return;
+    const preflight = await runPlannerAuthPreflight({
+      tool: this.tool ?? plannerLabel,
+      plannerCommand: command,
+      env: { ...process.env },
+      cwd: this.workingDir ?? process.cwd(),
+      timeoutMs: this.authPreflightTimeoutMs,
+      runner: this.authPreflightRunner,
+    });
+    this.log(
+      'plan-conversation',
+      'info',
+      `[PERF] planner_auth_preflight: harness=${preflight.harness}, status=${preflight.status}, detail=${preflight.detail ?? 'none'}`,
+    );
+    throwIfPlannerAuthPreflightUnauthenticated(preflight, plannerLabel);
+  }
+
+  private clearActivePlannerChild(child: ChildProcess): void {
+    if (this.activePlannerChild === child) {
+      this.activePlannerChild = null;
+      this.activePlannerReject = null;
+      this.activePlannerAbortRequested = false;
+    }
+  }
+
   private spawnPlannerAttempt(
     prompt: string,
     command: string,
@@ -1230,16 +1351,61 @@ export class PlanConversation {
   ): Promise<string> {
     const spawnStart = Date.now();
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let authLimboTimer: ReturnType<typeof setTimeout> | undefined;
+
       const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
+        detached: process.platform !== 'win32',
       });
+
+      const clearTimers = (): void => {
+        if (timer !== undefined) clearTimeout(timer);
+        if (authLimboTimer !== undefined) clearTimeout(authLimboTimer);
+      };
+
+      const settle = (action: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        this.clearActivePlannerChild(child);
+        action();
+      };
 
       let stdout = '';
       let stderr = '';
       let stdoutChunks = 0;
       let stderrChunks = 0;
+
+      const abortForAuthLimbo = (): void => {
+        this.log(
+          'plan-conversation',
+          'error',
+          `[PERF] cursor_auth_limbo: pid=${child.pid ?? 'none'}, graceMs=${this.authLimboGraceMs}, elapsed=${Date.now() - spawnStart}ms`,
+        );
+        void terminateChildProcessGroup(child, () => childProcessHasExited(child) || settled);
+        settle(() => reject(buildPlannerAuthRequiredError(plannerLabel)));
+      };
+
+      const armAuthLimboWatch = (stderrOutput: string): void => {
+        if (authLimboTimer !== undefined || settled) return;
+        if (stdout.length > 0) return;
+        if (!plannerOutputIndicatesAuthLimbo(stderrOutput)) return;
+        authLimboTimer = setTimeout(abortForAuthLimbo, this.authLimboGraceMs);
+      };
+
+      this.activePlannerChild = child;
+      this.activePlannerReject = (error) => settle(() => reject(error));
+      if (this.activePlannerAbortRequested) {
+        const rejectForAbort = this.activePlannerReject;
+        this.activePlannerReject = null;
+        void terminateChildProcessGroup(child, () => childProcessHasExited(child) || settled);
+        rejectForAbort?.(new PlanningTurnCancelledError());
+        return;
+      }
 
       this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, tool=${plannerLabel}, model=${this.model ?? 'default'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}, attempt=${attemptNumber}/${totalAttempts}`);
 
@@ -1262,33 +1428,44 @@ export class PlanConversation {
         stderr += chunkStr;
         stderrChunks++;
         this.log('plan-conversation', 'info', `[PERF] cursor_stderr chunk #${stderrChunks}: +${chunkStr.length} bytes (total=${stderr.length}, elapsed=${Date.now() - spawnStart}ms), preview="${chunkStr.slice(0, 200).replace(/\n/g, '\\n')}"`);
+        armAuthLimboWatch(stderr);
       });
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         this.log('plan-conversation', 'error', `[PERF] cursor_timeout: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, stderrTail="${stderr.slice(-500).replace(/\n/g, '\\n')}"`);
-        try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
+        void terminateChildProcessGroup(child, () => childProcessHasExited(child) || settled);
+        settle(() => reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`)));
       }, this.timeoutMs);
 
       child.on('close', (code) => {
-        clearTimeout(timer);
         this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, attempt=${attemptNumber}/${totalAttempts}`);
+        if (this.activePlannerAbortRequested) {
+          settle(() => reject(new PlanningTurnCancelledError()));
+          return;
+        }
         if (code === 0) {
           const trimmed = stdout.trim();
           if (trimmed) {
-            resolve(trimmed);
+            settle(() => resolve(trimmed));
           } else {
-            reject(new RetryableEmptyPlannerOutputError(stderr));
+            settle(() => reject(new RetryableEmptyPlannerOutputError(stderr)));
           }
-        } else {
-          const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
-          reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
+          return;
         }
+        if (plannerOutputIndicatesAuthFailure(stderr)) {
+          settle(() => reject(buildPlannerAuthRequiredError(plannerLabel)));
+          return;
+        }
+        const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
+        settle(() => reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`)));
       });
 
       child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
+        if (this.activePlannerAbortRequested) {
+          settle(() => reject(new PlanningTurnCancelledError()));
+          return;
+        }
+        settle(() => reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`)));
       });
     });
   }

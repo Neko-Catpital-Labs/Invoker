@@ -35,7 +35,7 @@ describe('planning presets PATH empty state', () => {
   }
 
   it('shows empty PATH copy with invoker-cli doctor and no Codex option when presets are empty', async () => {
-    mock.api.getPlanningPresets = vi.fn(async () => []) as typeof mock.api.getPlanningPresets;
+    mock.api.getPlanningPresets = vi.fn(async () => ({ options: [], cursorDiscovery: { status: 'skipped' } })) as typeof mock.api.getPlanningPresets;
 
     render(<App />);
     await openComposerOptions();

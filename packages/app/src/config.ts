@@ -8,8 +8,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { resolveInvokerConfigPath } from '@invoker/contracts';
-import type { PlanningConfirmationMode } from '@invoker/contracts';
+import { BUILTIN_PLANNING_PRESETS, resolveInvokerConfigPath } from '@invoker/contracts';
+import type { PlanningConfirmationMode, PlanningPresetSpec } from '@invoker/contracts';
 import { validateInvokerConfig, type ConfigValidationOptions } from './config-validation.js';
 import type {
   E2eAutoFixWorkerConfig,
@@ -444,7 +444,7 @@ export interface InvokerConfig {
    */
   plannerRetryBaseDelayMs?: number;
   /** Named Slack planning harness presets: preset key → {tool, model}; built-ins apply when omitted. */
-  slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex' | 'claude'; model?: string }>;
+  slackHarnessPresets?: Record<string, PlanningPresetSpec>;
   /** Default harness preset key when the message carries no `[preset]` tag. Default: 'cursor+claude'. */
   defaultSlackHarnessPreset?: string;
   /** Slack repo aliases: alias → git URL, resolved from a `[repo:<alias>]` tag. */
@@ -709,13 +709,7 @@ export function materializeResolvedConfig(config: InvokerConfig): InvokerConfig 
 }
 
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
-  'cursor+claude': { tool: 'cursor', model: 'claude' },
-  'cursor+codex': { tool: 'cursor', model: 'codex' },
-  'omp+claude': { tool: 'omp', model: 'claude' },
-  'omp+codex': { tool: 'omp', model: 'codex' },
-  omp: { tool: 'omp' },
-  codex: { tool: 'codex' },
-  claude: { tool: 'claude' },
+  ...BUILTIN_PLANNING_PRESETS,
 };
 
 function readJsonSafe(path: string): InvokerConfig {
@@ -786,13 +780,30 @@ export function filterExecutionHarnesses<T extends { name: string }>(harnesses: 
 /** Planning tools that wrap another agent; their `model` names the wrapped agent. */
 const WRAPPER_PLANNING_TOOLS: Record<string, true> = { cursor: true, omp: true };
 
+function wrapperPresetMatchesAllowlist(
+  preset: { key?: string; tool: string; model?: string },
+  enabled: Set<string>,
+): boolean {
+  const tool = preset.tool.trim().toLowerCase();
+  if (!WRAPPER_PLANNING_TOOLS[tool]) return false;
+  const model = preset.model?.trim().toLowerCase();
+  if (model && enabled.has(model)) return true;
+  const keySuffix = preset.key?.split('+').pop()?.trim().toLowerCase();
+  if (keySuffix && enabled.has(keySuffix)) return true;
+  if (model && enabled.has('claude') && model.includes('claude')) return true;
+  if (model && enabled.has('codex') && (model.includes('codex') || model.startsWith('gpt-'))) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Filter planning presets down to the configured allowlist.
  * A preset is kept when its `tool` is allowlisted, or when the tool is a
- * wrapper ('cursor'/'omp') whose `model` names an allowlisted agent.
+ * wrapper ('cursor'/'omp') whose model/key maps to an allowlisted agent.
  * No allowlist configured -> input returned unchanged.
  */
-export function filterPlanningPresets<T extends { tool: string; model?: string }>(
+export function filterPlanningPresets<T extends { key?: string; tool: string; model?: string }>(
   presets: T[],
   config: InvokerConfig,
 ): T[] {
@@ -801,9 +812,7 @@ export function filterPlanningPresets<T extends { tool: string; model?: string }
   return presets.filter((preset) => {
     const tool = preset.tool.trim().toLowerCase();
     if (enabled.has(tool)) return true;
-    if (!WRAPPER_PLANNING_TOOLS[tool]) return false;
-    const model = preset.model?.trim().toLowerCase();
-    return Boolean(model && enabled.has(model));
+    return wrapperPresetMatchesAllowlist(preset, enabled);
   });
 }
 

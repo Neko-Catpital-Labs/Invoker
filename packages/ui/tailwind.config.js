@@ -60,6 +60,7 @@ export default {
           border: 'var(--border-color)',
           ring: 'rgb(var(--sidebar-ring) / <alpha-value>)',
         },
+        'planning-chat-user': 'rgb(var(--planning-chat-user-fill) / <alpha-value>)',
       },
       borderRadius: {
         lg: 'var(--radius)',

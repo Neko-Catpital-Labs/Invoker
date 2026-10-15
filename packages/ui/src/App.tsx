@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningChatResponse, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnOutcome, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, CursorModelDiscoverySummary, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningChatResponse, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningTurnOutcome, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, PlanningPresetOption, PlanningPresetsResponse, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { resolvePlanningSubmitAction } from '@invoker/contracts/planning-surface';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
@@ -77,7 +77,12 @@ import {
   type PlanningSessionView,
   type PlanningStreamState,
 } from './lib/planning-session-view.js';
-import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } from './components/InvokerTerminal.js';
+import {
+  InvokerTerminal,
+  PLANNING_TURN_CANCELLED_MESSAGE,
+  type InvokerTerminalLine,
+  type PlanningTerminalMode,
+} from './components/InvokerTerminal.js';
 import { WorkflowContextMenu, type ContextMenuCloseOptions } from './components/WorkflowContextMenu.js';
 import { MarkdownText } from './components/MarkdownText.js';
 import { Toaster, toast } from 'sonner';
@@ -591,8 +596,11 @@ export function App() {
   const planningTurnGoneCountsRef = useRef<Map<string, number>>(new Map());
   const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
   const [planningPresetOptions, setPlanningPresetOptions] = useState<PlanningPresetOption[]>([]);
+  const [planningPresetsLoading, setPlanningPresetsLoading] = useState(true);
+  const [cursorDiscoverySummary, setCursorDiscoverySummary] = useState<CursorModelDiscoverySummary | undefined>();
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [selectedPlanningConfirmationMode, setSelectedPlanningConfirmationMode] = useState<PlanningConfirmationMode>('require');
+  const planningPresetSelectionInitializedRef = useRef(false);
   const [keptPlanningDraftSessionIds, setKeptPlanningDraftSessionIds] = useState<Set<string>>(new Set());
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
@@ -765,28 +773,45 @@ export function App() {
     window.invoker?.getExecutionHarnesses?.().then(setExecutionHarnesses).catch(() => {});
     window.invoker?.getExecutionDefaults?.().then(setExecutionDefaults).catch(() => {});
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
+    setPlanningPresetsLoading(true);
     window.invoker?.getPlanningPresets?.()
-      .then((options) => {
-        const resolved = Array.isArray(options)
-          ? options.map((option) => ({
-              key: option.key,
-              label: option.label,
-              tool: option.tool,
-              model: option.model,
-              isDefault: option.isDefault,
-              defaultConfirmationMode: option.defaultConfirmationMode,
-            }))
-          : [];
+      .then((response) => {
+        const normalized: PlanningPresetsResponse = Array.isArray(response)
+          ? { options: response }
+          : (response ?? { options: [] });
+        const resolved = (normalized.options ?? []).map((option) => ({
+          key: option.key,
+          label: option.label,
+          tool: option.tool,
+          model: option.model,
+          isDefault: option.isDefault,
+          defaultConfirmationMode: option.defaultConfirmationMode,
+          availability: option.availability,
+          section: option.section,
+        }));
         setPlanningPresetOptions(resolved);
-        const defaultOption = resolved.find((option) => option.isDefault) ?? resolved[0];
-        setSelectedPlanningPresetKey(defaultOption?.key ?? '');
-        setSelectedPlanningConfirmationMode(defaultOption?.defaultConfirmationMode ?? 'require');
+        setCursorDiscoverySummary(normalized.cursorDiscovery);
+        if (!planningPresetSelectionInitializedRef.current) {
+          planningPresetSelectionInitializedRef.current = true;
+          const defaultOption = resolved.find((option) => option.isDefault) ?? resolved[0];
+          setSelectedPlanningPresetKey(defaultOption?.key ?? '');
+          setSelectedPlanningConfirmationMode(defaultOption?.defaultConfirmationMode ?? 'require');
+        } else {
+          setSelectedPlanningPresetKey((previous) => previous);
+        }
       })
       .catch((err) => {
         console.error('Failed to load planning presets', err);
         setPlanningPresetOptions([]);
+        setCursorDiscoverySummary({
+          status: 'failed',
+          warning: 'Could not load planning presets.',
+        });
         setSelectedPlanningPresetKey('');
         setSelectedPlanningConfirmationMode('require');
+      })
+      .finally(() => {
+        setPlanningPresetsLoading(false);
       });
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
@@ -2517,7 +2542,9 @@ export function App() {
     planningSessionsRef.current = planningSessionsRef.current.map(applyFailed);
     setPlanningSessions((prev) => prev.map(applyFailed));
     if (!wasAlreadyFailed) {
-      appendTerminalLine(outcome.error, 'system', 'error', targetId);
+      if (outcome.error !== PLANNING_TURN_CANCELLED_MESSAGE) {
+        appendTerminalLine(outcome.error, 'system', 'error', targetId);
+      }
       keepPlanningStreamFailureForSessionIds([sessionId, targetId], outcome.error);
     }
     forgetPlanningStreamAliasesForSessionIds([sessionId, targetId]);
@@ -3116,6 +3143,40 @@ export function App() {
     selectedPlanningConfirmationMode,
     selectedPlanningPresetKey,
   ]);
+
+  const handleCancelPlanningTurn = useCallback(async () => {
+    const session = activePlanningSession;
+    if (!session.busy || !session.activeTurnId) return;
+    if (!invoker?.planningChatCancel) return;
+    let backendSessionId = session.id.startsWith('local-') ? undefined : session.id;
+    if (!backendSessionId) {
+      for (const [streamSessionId, targetSessionId] of planningStreamSessionAliasesRef.current) {
+        if (targetSessionId === session.id) {
+          backendSessionId = streamSessionId;
+          break;
+        }
+      }
+    }
+    try {
+      const result = await invoker.planningChatCancel({
+        ...(backendSessionId ? { sessionId: backendSessionId } : {}),
+        turnId: session.activeTurnId,
+      });
+      if (!result.ok || !result.cancelled) {
+        appendTerminalLine(
+          result.ok
+            ? 'The planner has not started this turn yet. Try Cancel again in a moment.'
+            : `Could not cancel: ${result.error}`,
+          'system',
+          'muted',
+          session.id,
+        );
+      }
+    } catch (err) {
+      console.error('[planning] planningChatCancel transport failure', err);
+      void refreshPlanningSessionsNow();
+    }
+  }, [activePlanningSession, appendTerminalLine, invoker, refreshPlanningSessionsNow]);
 
   const makeFreshLocalPlanningSession = useCallback((): PlanningSessionView => {
     const index = nextPlanningSessionLocalIdRef.current;
@@ -4789,6 +4850,8 @@ export function App() {
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
+            planningPresetsLoading={planningPresetsLoading}
+            cursorDiscoveryWarning={cursorDiscoverySummary?.warning ?? null}
             selectedConfirmationMode={selectedPlanningConfirmationMode}
             draftPlanAvailable={draftPlanAvailable}
             draftReviewOpen={activeDraftReviewOpen}
@@ -4807,8 +4870,14 @@ export function App() {
             repoLocked={activePlanningRepoLocked}
             repoSuggestions={planningRepoSuggestions}
             repoError={activePlanningSession.repoError ?? null}
-            turnError={activePlanningSession.activeTurnStatus === 'failed' ? activePlanningSession.activeTurnError ?? 'The planner turn failed.' : null}
+            turnError={
+              activePlanningSession.activeTurnStatus === 'failed'
+              && activePlanningSession.activeTurnError !== PLANNING_TURN_CANCELLED_MESSAGE
+                ? activePlanningSession.activeTurnError ?? 'The planner turn failed.'
+                : null
+            }
             onRetryTurn={() => void handleRetryPlanningTurn()}
+            onCancelTurn={() => void handleCancelPlanningTurn()}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
             onPresetChange={handlePlanningPresetChange}

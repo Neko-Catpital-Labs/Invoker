@@ -144,7 +144,7 @@ describe('collectSystemDiagnostics — shared canonical contract', () => {
   it('assembles a config-aware readiness report with config, planning-tools, and default-preset checks', () => {
     const diag = collectWithStubbedTools({
       config: { path: '/tmp/invoker-nonexistent/config.json', exists: false },
-      presets: { 'cursor+claude': { tool: 'cursor', model: 'claude' } },
+      presets: { 'cursor+claude': { tool: 'cursor', model: 'claude-4.5-sonnet' } },
       defaultPreset: 'cursor+claude',
     });
     const ids = diag.readiness.map((c) => c.id);

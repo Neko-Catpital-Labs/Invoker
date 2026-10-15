@@ -15,7 +15,9 @@ vi.mock('../system-diagnostics.js', async (importOriginal) => {
 
 import {
   PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
+  PLANNING_TURN_CANCELLED_MESSAGE,
   buildPlanningTerminalSummaryBridge,
+  cancelPlanningChatTurn,
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
@@ -297,15 +299,17 @@ describe('planFromGoal', () => {
 });
 describe('listInAppPlanningPresets', () => {
   const allInstalled = () => true;
+  const skipDiscovery = { skipCursorDiscovery: true as const };
 
   it('returns deterministic labels and the configured default', async () => {
-    await expect(listInAppPlanningPresets({
+    const { options } = await listInAppPlanningPresets({
       defaultSlackHarnessPreset: 'omp+claude',
       slackHarnessPresets: {
         custom: { tool: 'codex' },
         'custom+omp': { tool: 'omp', model: 'fast' },
       },
-    }, { isInstalled: allInstalled })).resolves.toEqual(expect.arrayContaining([
+    }, { isInstalled: allInstalled, ...skipDiscovery });
+    expect(options).toEqual(expect.arrayContaining([
       { key: 'codex', label: 'Codex', tool: 'codex', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
       { key: 'claude', label: 'Claude', tool: 'claude', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
       { key: 'omp', label: 'OMP', tool: 'omp', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
@@ -316,37 +320,50 @@ describe('listInAppPlanningPresets', () => {
   });
 
   it('promotes the first allowed preset to default when the configured default is filtered out', async () => {
-    const presets = await listInAppPlanningPresets({
+    const { options: presets } = await listInAppPlanningPresets({
       defaultSlackHarnessPreset: 'cursor+claude',
       enabledExecutionAgents: ['codex'],
-    }, { isInstalled: allInstalled });
+    }, { isInstalled: allInstalled, ...skipDiscovery });
     const defaultPreset = presets.find((p) => p.isDefault);
     expect(defaultPreset).toBeDefined();
-    expect(defaultPreset?.tool === 'codex' || defaultPreset?.model === 'codex').toBe(true);
-    expect(presets.every((p) => p.tool === 'codex' || p.model === 'codex')).toBe(true);
+    const isCodexFamily = (preset: { key: string; tool: string; model?: string }): boolean => (
+      preset.tool === 'codex'
+      || preset.model === 'codex'
+      || Boolean(preset.model?.includes('codex'))
+      || preset.key.includes('codex')
+      || Boolean(preset.model?.startsWith('gpt-'))
+    );
+    expect(isCodexFamily(defaultPreset!)).toBe(true);
+    expect(presets.every(isCodexFamily)).toBe(true);
   });
 
   it('keeps only presets whose planner tool is on PATH (no harness registration required)', async () => {
-    const presets = await listInAppPlanningPresets({}, {
+    const { options: presets } = await listInAppPlanningPresets({}, {
       isInstalled: (command) => command === 'cursor',
+      ...skipDiscovery,
     });
     expect(presets.length).toBeGreaterThan(0);
     expect(presets.every((p) => p.tool === 'cursor')).toBe(true);
     expect(presets.map((p) => p.key)).toEqual(
-      expect.arrayContaining(['cursor+claude', 'cursor+codex']),
+      expect.arrayContaining(['cursor+claude', 'cursor+codex', 'cursor+auto']),
     );
+    expect(presets.find((p) => p.key === 'cursor+claude')?.model).toBe('claude-4.5-sonnet');
+    expect(presets.find((p) => p.key === 'cursor+codex')?.model).toBe('gpt-5.3-codex');
+    expect(presets.every((p) => p.model !== 'claude' && p.model !== 'codex')).toBe(true);
     expect(presets.some((p) => p.key === 'codex' || p.key === 'claude' || p.key === 'omp')).toBe(false);
   });
 
   it('returns an empty list when no planner tools are on PATH', async () => {
-    await expect(listInAppPlanningPresets({}, { isInstalled: () => false })).resolves.toEqual([]);
+    await expect(listInAppPlanningPresets({}, { isInstalled: () => false, ...skipDiscovery }))
+      .resolves.toEqual({ options: [], cursorDiscovery: { status: 'skipped' } });
   });
 
   it('applies allowlist first, then PATH (intersection)', async () => {
-    const presets = await listInAppPlanningPresets({
+    const { options: presets } = await listInAppPlanningPresets({
       enabledExecutionAgents: ['codex', 'cursor'],
     }, {
       isInstalled: (command) => command === 'cursor',
+      ...skipDiscovery,
     });
     expect(presets.length).toBeGreaterThan(0);
     expect(presets.every((p) => p.tool === 'cursor')).toBe(true);
@@ -354,10 +371,11 @@ describe('listInAppPlanningPresets', () => {
   });
 
   it('promotes a new default when PATH filtering removes the configured default', async () => {
-    const presets = await listInAppPlanningPresets({
+    const { options: presets } = await listInAppPlanningPresets({
       defaultSlackHarnessPreset: 'codex',
     }, {
       isInstalled: (command) => command === 'cursor',
+      ...skipDiscovery,
     });
     expect(presets.some((p) => p.isDefault)).toBe(true);
     expect(presets.find((p) => p.isDefault)?.tool).toBe('cursor');
@@ -548,7 +566,7 @@ describe('planning chat', () => {
     const second = await sendPlanningChatMessage({
       sessionId: first.sessionId,
       message: 'more detail',
-      presetKey: 'omp+claude',
+      presetKey: 'codex',
     }, {
       config: {},
       loadGeneratedPlan: vi.fn(),
@@ -1288,6 +1306,393 @@ tasks:
     if (!result.ok) throw new Error(result.error);
     expect(result.turnId).toBe('turn-explicit');
     expect(plannerReplyOverride).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies a mid-session preset switch from the send request to the live conversation', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const created = await sendPlanningChatMessage({
+      message: 'start on cursor',
+      presetKey: 'cursor+codex',
+      turnId: 'turn-preset-1',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'cursor hello',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    expect(session?.presetKey).toBe('cursor+codex');
+    expect(session?.conversation.planningTool).toBe('cursor');
+
+    const switched = await sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'now use codex',
+      presetKey: 'codex',
+      turnId: 'turn-preset-2',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'codex hello',
+    });
+    expect(switched.ok).toBe(true);
+    expect(session?.presetKey).toBe('codex');
+    expect(session?.conversation.planningTool).toBe('codex');
+  });
+
+  it('starts and switches with a discovered cursor+ More… model key', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const rebindSpy = vi.spyOn(PlanConversation.prototype, 'rebindHarness');
+    try {
+      const created = await createPlanningChatSession({
+        title: 'More model',
+        presetKey: 'cursor+brand-new-model',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+      });
+      expect(created).toEqual({
+        ok: true,
+        session: expect.objectContaining({
+          presetKey: 'cursor+brand-new-model',
+        }),
+      });
+      if (!created.ok || !created.session) throw new Error('expected create to succeed');
+      const session = sessions.get(created.session.id);
+      expect(session?.conversation.planningTool).toBe('cursor');
+      expect((session?.conversation as unknown as { model?: string }).model).toBe('brand-new-model');
+
+      const switched = await sendPlanningChatMessage({
+        sessionId: created.session.id,
+        message: 'switch to another discovered model',
+        presetKey: 'cursor+another-discovered',
+        turnId: 'turn-more-switch',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        plannerReplyOverride: async () => 'switched',
+      });
+      expect(switched.ok).toBe(true);
+      expect(session?.presetKey).toBe('cursor+another-discovered');
+      expect(session?.conversation.planningTool).toBe('cursor');
+      expect(rebindSpy).toHaveBeenCalledWith(expect.objectContaining({
+        tool: 'cursor',
+        model: 'another-discovered',
+      }));
+      expect((session?.conversation as unknown as { model?: string }).model).toBe('another-discovered');
+    } finally {
+      rebindSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      presetKey: 'cursor+codex',
+      error: 'cursor: Authentication required. Run `cursor agent login` or `cursor-agent login` or set CURSOR_API_KEY, then try again.',
+      systemIncludes: ['GPT-5.3 Codex isn\'t authenticated', 'cursor agent login', 'cursor-agent login'],
+    },
+    {
+      presetKey: 'codex',
+      error: 'codex: Authentication required. Run `codex login` (or `invoker-cli agent-login` for Codex), then try again.',
+      systemIncludes: ['Codex isn\'t authenticated', 'codex login'],
+    },
+    {
+      presetKey: 'claude',
+      error: 'claude: Authentication required. Run `claude` and complete `/login` (or `invoker-cli agent-login` for Claude), then try again.',
+      systemIncludes: ['Claude isn\'t authenticated', '/login'],
+    },
+    {
+      presetKey: 'omp+codex',
+      error: 'omp: Authentication required. Re-authenticate the OMP provider (Claude/Codex behind OMP), then try again.',
+      systemIncludes: ['Codex via OMP isn\'t authenticated'],
+    },
+  ] as const)('surfaces a harness-specific auth error for $presetKey', async ({
+    presetKey,
+    error,
+    systemIncludes,
+  }) => {
+    const sessions = createInAppPlanningChatSessions();
+    const result = await sendPlanningChatMessage({
+      message: 'hi',
+      presetKey,
+      turnId: `turn-auth-${presetKey}`,
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        throw new Error(error);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected auth failure');
+    const session = sessions.get(result.sessionId!);
+    expect(session?.status).toBe('planner_error');
+    const systemError = session?.messages.find((line) => line.role === 'system' && line.tone === 'error');
+    expect(systemError?.text).toBeTruthy();
+    for (const snippet of systemIncludes) {
+      expect(systemError?.text).toContain(snippet);
+    }
+  });
+
+  it('does not reclassify exited-with-code stdout auth text as planner_error', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const result = await sendPlanningChatMessage({
+      message: 'hi',
+      presetKey: 'codex',
+      turnId: 'turn-auth-stdout-false-positive',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        throw new Error(
+          "codex exited with code 1: Error: Authentication required. Please run 'codex login' first.",
+        );
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected failure');
+    expect(result.sessionId).toBeTruthy();
+    const session = sessions.get(result.sessionId!);
+    expect(session).toBeDefined();
+    expect(session!.status).not.toBe('planner_error');
+    expect(session!.messages.some((line) => line.role === 'system' && line.tone === 'error')).toBe(false);
+  });
+
+  it('cancelPlanningChatTurn marks a running turn cancelled and aborts the planner', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const events: Array<{ turnId?: string; error?: string }> = [];
+    const created = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+      turnId: 'turn-cancel',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello back',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    if (!session) throw new Error('expected session');
+
+    session.activeTurnId = 'turn-cancel';
+    session.activeTurnStatus = 'running';
+    const abort = vi.spyOn(session.conversation, 'abortActiveTurn').mockReturnValue(true);
+
+    const cancelled = cancelPlanningChatTurn(
+      { sessionId: created.sessionId, turnId: 'turn-cancel' },
+      {
+        sessions,
+        onRawPlannerOutput: (event) => {
+          if (event.turn?.status === 'failed') {
+            events.push({ turnId: event.turnId, error: event.turn.error });
+          }
+        },
+      },
+    );
+
+    expect(cancelled).toEqual({
+      ok: true,
+      cancelled: true,
+      sessionId: created.sessionId,
+      turnId: 'turn-cancel',
+    });
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(session.activeTurnStatus).toBe('failed');
+    expect(session.activeTurnError).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(session.messages.some((line) => line.role === 'user' && line.text === 'hello')).toBe(true);
+    expect(events).toEqual([{ turnId: 'turn-cancel', error: PLANNING_TURN_CANCELLED_MESSAGE }]);
+  });
+
+  it('cancel during pre-spawn planner work stays cancelled and does not emit completed', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const streamEvents: Array<{ status?: string; error?: string }> = [];
+    let releaseOverride!: (value: string) => void;
+    const overrideGate = new Promise<string>((resolve) => { releaseOverride = resolve; });
+    let overrideStarted!: () => void;
+    const started = new Promise<void>((resolve) => { overrideStarted = resolve; });
+
+    const created = await sendPlanningChatMessage({
+      message: 'bootstrap',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'ready',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    if (!session) throw new Error('expected session');
+    vi.spyOn(session.conversation, 'abortActiveTurn').mockReturnValue(false);
+
+    const sendPromise = sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'slow turn',
+      turnId: 'turn-pre-spawn-cancel',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        overrideStarted();
+        return overrideGate;
+      },
+      onRawPlannerOutput: (event) => {
+        if (event.turn) {
+          streamEvents.push({ status: event.turn.status, error: event.turn.error });
+        }
+      },
+    });
+
+    const recordStream = {
+      sessions,
+      onRawPlannerOutput: (event: { turn?: { status?: string; error?: string } }) => {
+        if (event.turn) {
+          streamEvents.push({ status: event.turn.status, error: event.turn.error });
+        }
+      },
+    };
+    await started;
+    const cancelled = cancelPlanningChatTurn(
+      { sessionId: created.sessionId, turnId: 'turn-pre-spawn-cancel' },
+      recordStream,
+    );
+    expect(cancelled.ok && cancelled.cancelled).toBe(true);
+    expect(session.activeTurnStatus).toBe('failed');
+    expect(session.activeTurnError).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+
+    releaseOverride('should not complete');
+    const result = await sendPromise;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected cancelled turn');
+    expect(result.error).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(session.activeTurnStatus).toBe('failed');
+    expect(session.activeTurnError).toBe(PLANNING_TURN_CANCELLED_MESSAGE);
+    expect(streamEvents.some((event) => event.status === 'completed')).toBe(false);
+    expect(streamEvents.filter((event) => event.status === 'failed')).toEqual([
+      { status: 'failed', error: PLANNING_TURN_CANCELLED_MESSAGE },
+    ]);
+  });
+
+  it('next send after a cancelled turn clears the latch and can complete', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    let releaseOverride!: (value: string) => void;
+    const overrideGate = new Promise<string>((resolve) => { releaseOverride = resolve; });
+    let overrideStarted!: () => void;
+    const started = new Promise<void>((resolve) => { overrideStarted = resolve; });
+
+    const created = await sendPlanningChatMessage({
+      message: 'bootstrap',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'ready',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+
+    const cancelledSend = sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'cancel me',
+      turnId: 'turn-latch-clear-1',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => {
+        overrideStarted();
+        return overrideGate;
+      },
+    });
+    await started;
+    cancelPlanningChatTurn(
+      { sessionId: created.sessionId, turnId: 'turn-latch-clear-1' },
+      { sessions },
+    );
+    releaseOverride('ignored');
+    const cancelledResult = await cancelledSend;
+    expect(cancelledResult.ok).toBe(false);
+
+    const next = await sendPlanningChatMessage({
+      sessionId: created.sessionId,
+      message: 'try again',
+      turnId: 'turn-latch-clear-2',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello again',
+    });
+    expect(next.ok && next.reply).toBe('hello again');
+  });
+
+  it('cancelPlanningChatTurn is a no-op when no turn is running', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const created = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello back',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+
+    const result = cancelPlanningChatTurn({ sessionId: created.sessionId }, { sessions });
+    expect(result).toEqual({ ok: true, cancelled: false, sessionId: created.sessionId });
+  });
+
+  it('cancelPlanningChatTurn finds a running turn by turnId when sessionId is omitted', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const created = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+      turnId: 'turn-by-id',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'hello back',
+    });
+    if (!created.ok || !created.sessionId) throw new Error('expected create to succeed');
+    const session = sessions.get(created.sessionId);
+    if (!session) throw new Error('expected session');
+    session.activeTurnId = 'turn-by-id';
+    session.activeTurnStatus = 'running';
+    vi.spyOn(session.conversation, 'abortActiveTurn').mockReturnValue(true);
+
+    const cancelled = cancelPlanningChatTurn({ turnId: 'turn-by-id' }, { sessions });
+    expect(cancelled).toEqual({
+      ok: true,
+      cancelled: true,
+      sessionId: created.sessionId,
+      turnId: 'turn-by-id',
+    });
   });
 
   it('records a failed turn and a retry with the same turnId re-runs without duplicating the user line', async () => {
