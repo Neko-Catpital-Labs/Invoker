@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 describe('bundled-skills', () => {
-  it.fails('reports promptRecommended for packaged apps before skills are installed', () => {
+  it('reports promptRecommended for packaged apps before skills are installed', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -134,7 +134,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('default install writes no home or harness skill copies', () => {
+  it('default install writes no home or harness skill copies', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -191,7 +191,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('re-running default install stays idempotent and never writes skills or MCP', () => {
+  it('re-running default install stays idempotent and never writes skills or MCP', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -218,7 +218,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('does not modify an existing Codex config.toml during default install', () => {
+  it('does not modify an existing Codex config.toml during default install', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -252,7 +252,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('leaves a mismatched Codex TOML MCP entry untouched on default install', () => {
+  it('leaves a mismatched Codex TOML MCP entry untouched on default install', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -303,7 +303,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('default install leaves the OMP agent skill root untouched', () => {
+  it('default install leaves the OMP agent skill root untouched', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -407,7 +407,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('succeeds when harness MCP JSON is invalid because it no longer reads those files', () => {
+  it('succeeds when harness MCP JSON is invalid because it no longer reads those files', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -435,7 +435,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('succeeds when harness MCP JSON is malformed because it no longer reads those files', () => {
+  it('succeeds when harness MCP JSON is malformed because it no longer reads those files', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -463,7 +463,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('leaves a bad Cursor MCP file untouched and does not write home skills', () => {
+  it('leaves a bad Cursor MCP file untouched and does not write home skills', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -725,7 +725,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('does not install always-on routing into Cursor, Codex, or Claude on default install', () => {
+  it('does not install always-on routing into Cursor, Codex, or Claude on default install', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -772,7 +772,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('registerHarnesses writes MCP/skills into detected harnesses', () => {
+  it('registerHarnesses writes MCP/skills into detected harnesses', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -819,7 +819,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('uninstall reverses harness registration and leftover home artifacts', () => {
+  it('uninstall reverses harness registration and leftover home artifacts', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -873,7 +873,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('leaves invalid Claude settings.json untouched because default install never opens it', () => {
+  it('leaves invalid Claude settings.json untouched because default install never opens it', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
@@ -900,7 +900,7 @@ describe('bundled-skills', () => {
     }
   });
 
-  it.fails('reports instruction targets as not installed after default install', () => {
+  it('reports instruction targets as not installed after default install', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
