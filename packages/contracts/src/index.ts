@@ -17,6 +17,8 @@ export * from './invoker-config-io.ts';
 export * from './config-diagnostics.ts';
 export * from './remote-target-onboarding.ts';
 export * from './prerequisites.ts';
+export * from './planning-presets.ts';
+export * from './cursor-model-discovery.ts';
 export * from './headless-owner-launch.ts';
 export * from './planning-surface.ts';
 export * from './verification-contract.ts';

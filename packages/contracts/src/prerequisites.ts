@@ -15,8 +15,10 @@ export interface PrerequisiteCheck {
   remediation?: string;
 }
 
+export type PlanningHarnessTool = 'cursor' | 'omp' | 'codex' | 'claude';
+
 export interface PlanningPresetSpec {
-  tool: string;
+  tool: PlanningHarnessTool;
   model?: string;
 }
 

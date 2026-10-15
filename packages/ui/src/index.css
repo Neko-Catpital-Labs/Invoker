@@ -50,6 +50,9 @@
   --graph-grid: rgb(255 255 255 / 0.06);
   --graph-controls: rgb(var(--card));
   --graph-controls-border: var(--border-color);
+
+  /* Muted blue wash for planning-chat user bubbles (sky-ish, not saturated). */
+  --planning-chat-user-fill: 96 165 250;
 }
 
 :root[data-theme='light'] {
@@ -83,6 +86,8 @@
   --graph-grid: rgb(0 0 0 / 0.08);
   --graph-controls: rgb(var(--card));
   --graph-controls-border: var(--border-color);
+
+  --planning-chat-user-fill: 37 99 235;
 }
 
 html,

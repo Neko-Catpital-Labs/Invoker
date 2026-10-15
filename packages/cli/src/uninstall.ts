@@ -187,9 +187,9 @@ export function uninstallCoverageTable(): UninstallCoverageRow[] {
       note: 'Removed last after integrations and home data',
     },
     {
-      area: 'Invoker home data (config, .env, DB, outputs)',
+      area: 'Invoker home data (config, .env, DB, outputs, worktrees, repos)',
       coverage: 'supported',
-      note: 'Current CLI home + ~/.invoker-cli when present; skip with --keep-data',
+      note: 'Deletes the whole home root (including worktrees/ and repos/); skip with --keep-data',
     },
     {
       area: 'Desktop install.sh channels (DMG / AppImage / .deb)',
@@ -252,6 +252,8 @@ function homeDataPaths(homeRoot: string): Array<{ id: string; path: string; deta
     { id: `data:db:${homeRoot}`, path: join(homeRoot, 'invoker.db'), detail: 'invoker.db' },
     { id: `data:outputs:${homeRoot}`, path: join(homeRoot, 'outputs'), detail: 'outputs/' },
     { id: `data:log:${homeRoot}`, path: join(homeRoot, 'invoker.log'), detail: 'invoker.log' },
+    { id: `data:worktrees:${homeRoot}`, path: join(homeRoot, 'worktrees'), detail: 'worktrees/' },
+    { id: `data:repos:${homeRoot}`, path: join(homeRoot, 'repos'), detail: 'repos/' },
   ];
 }
 

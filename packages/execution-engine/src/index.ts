@@ -111,3 +111,4 @@ export * from './lifecycle-events.js';
 export * from './external-worker.js';
 export * from './agent-auth-failure.js';
 export * from './agent-auth-reauth-retry.js';
+export * from './planner-auth-preflight.js';

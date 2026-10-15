@@ -278,8 +278,9 @@ describe('planning turn durability', () => {
         await vi.advanceTimersByTimeAsync(5100);
       });
 
-      expect(screen.getByTestId('invoker-terminal-turn-error'))
-        .toHaveTextContent('The planner session no longer exists on the server. It may have been reset.');
+      const turnError = screen.getByTestId('invoker-terminal-turn-error');
+      expect(turnError).toHaveTextContent('The planner session no longer exists on the server.');
+      expect(turnError).toHaveTextContent('It may have been reset.');
       expect(screen.getByTestId('invoker-terminal-retry-turn')).toBeInTheDocument();
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('hello planner');
       expect(screen.queryByTestId('invoker-terminal-send-spinner')).not.toBeInTheDocument();
@@ -331,8 +332,9 @@ describe('planning turn durability', () => {
         await vi.advanceTimersByTimeAsync(5100);
       });
 
-      expect(screen.getByTestId('invoker-terminal-turn-error'))
-        .toHaveTextContent('The planner session no longer exists on the server. It may have been reset.');
+      const turnError = screen.getByTestId('invoker-terminal-turn-error');
+      expect(turnError).toHaveTextContent('The planner session no longer exists on the server.');
+      expect(turnError).toHaveTextContent('It may have been reset.');
       expect(screen.getByTestId('invoker-terminal-retry-turn')).toBeInTheDocument();
       expect(screen.getAllByText('Busy chat').length).toBeGreaterThan(0);
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Draft the plan');

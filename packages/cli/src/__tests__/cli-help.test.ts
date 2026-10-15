@@ -217,6 +217,15 @@ describe('invoker-cli --help integration', () => {
     expect(output.stdout).toContain('Exit codes:');
     expect(output.stdout).toContain('--keep-data');
     expect(output.stdout).toContain('Coverage:');
+    expect(output.stdout).toContain('worktrees');
+  });
+
+  it('does not treat -h after -- as a help request', async () => {
+    const output = captureProcessOutput();
+    const code = await main(['set', 'prompt', 'missing-task', '--', '-h']);
+    output.restore();
+    expect(output.stdout).not.toContain('Usage: invoker-cli set');
+    expect(code).not.toBe(0);
   });
 
   it('--version still prints only the version', async () => {

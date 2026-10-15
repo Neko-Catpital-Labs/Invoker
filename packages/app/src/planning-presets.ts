@@ -1,16 +1,11 @@
-import type { PlanningPresetSpec } from '@invoker/contracts';
+import {
+  BUILTIN_PLANNING_PRESETS,
+  DEFAULT_PLANNING_PRESET,
+  resolvePlanningPresetByKey,
+  type PlanningPresetSpec,
+} from '@invoker/contracts';
 
-export const BUILTIN_PLANNING_PRESETS: Record<string, PlanningPresetSpec> = {
-  'cursor+claude': { tool: 'cursor', model: 'claude' },
-  'cursor+codex': { tool: 'cursor', model: 'codex' },
-  'omp+claude': { tool: 'omp', model: 'claude' },
-  'omp+codex': { tool: 'omp', model: 'codex' },
-  omp: { tool: 'omp' },
-  codex: { tool: 'codex' },
-  claude: { tool: 'claude' },
-};
-
-export const DEFAULT_PLANNING_PRESET = 'cursor+claude';
+export { BUILTIN_PLANNING_PRESETS, DEFAULT_PLANNING_PRESET };
 
 export function resolvePlanningPreset(
   harnessPreset: string | undefined,
@@ -23,11 +18,19 @@ export function resolvePlanningPreset(
   };
   const preferredPresetKey = harnessPreset ?? defaultSlackHarnessPreset ?? DEFAULT_PLANNING_PRESET;
   const fallbackPresetKey = defaultSlackHarnessPreset ?? DEFAULT_PLANNING_PRESET;
-  const preset = presets[preferredPresetKey] ?? presets[fallbackPresetKey] ?? BUILTIN_PLANNING_PRESETS[DEFAULT_PLANNING_PRESET];
-  const presetKey = presets[preferredPresetKey] ? preferredPresetKey : fallbackPresetKey;
+  const preferred = resolvePlanningPresetByKey(presets, preferredPresetKey);
+  if (preferred) {
+    return {
+      presetKey: preferredPresetKey,
+      tool: preferred.tool as PlanningPresetSpec['tool'],
+      model: preferred.model,
+    };
+  }
+  const fallback = resolvePlanningPresetByKey(presets, fallbackPresetKey)
+    ?? BUILTIN_PLANNING_PRESETS[DEFAULT_PLANNING_PRESET];
   return {
-    presetKey,
-    tool: preset.tool,
-    model: preset.model,
+    presetKey: fallbackPresetKey,
+    tool: fallback.tool as PlanningPresetSpec['tool'],
+    model: fallback.model,
   };
 }
