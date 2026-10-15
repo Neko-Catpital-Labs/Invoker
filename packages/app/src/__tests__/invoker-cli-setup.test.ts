@@ -60,7 +60,7 @@ else process.exit(9);
     expect(deps.installBundledSkills).toHaveBeenCalledWith('install');
   });
 
-  it.fails('keeps helper install ok and mentions a skipped MCP file', async () => {
+  it('keeps helper install ok and mentions a skipped MCP file', async () => {
     const cliPath = makeCli('process.exit(0);');
     const deps = makeDeps(cliPath);
     deps.installBundledSkills.mockReturnValue({

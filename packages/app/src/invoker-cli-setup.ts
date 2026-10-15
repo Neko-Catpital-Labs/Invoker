@@ -91,7 +91,9 @@ function summarizeCliInstall(result: CliInstallResult): string {
 function summarizeHelpers(status: BundledSkillsStatus): string {
   const targets = [...status.targets, ...status.commandTargets];
   const installed = targets.filter((target) => target.installed && target.upToDate).length;
-  const summary = `Installed ${status.bundledSkillNames.length} bundled helper set(s) under Invoker home (${installed}/${targets.length} target(s)). Harness MCP stays opt-in.`;
+  const summary = status.harnessesRegistered
+    ? `Installed ${status.bundledSkillNames.length} bundled helper set(s) into harnesses (${installed}/${targets.length} target(s)).`
+    : `Harness MCP/skills stay opt-in (${installed}/${targets.length} harness target(s) registered).`;
   if (!status.lastInstallError) return summary;
   return `${summary} Install note: ${status.lastInstallError}`;
 }
