@@ -1116,6 +1116,25 @@ function removeManagedCommandFiles(targetPath: string, fileNames: string[]): voi
   }
 }
 
+function previousHarnessesRegistered(
+  manifest: BundledSkillsManifest | null,
+  invokerHomeRoot: string,
+): boolean {
+  if (!manifest) return false;
+  if (manifest.harnessesRegistered === true) return true;
+  if (manifest.mcpTargets && Object.keys(manifest.mcpTargets).length > 0) return true;
+  if (manifest.instructionTargets && Object.keys(manifest.instructionTargets).length > 0) return true;
+  const keepSkillPath = path.join(invokerHomeRoot, INVOKER_SKILLS_DIR);
+  for (const entry of Object.values(manifest.targets ?? {})) {
+    if (entry.path !== keepSkillPath) return true;
+  }
+  const keepCommandPath = path.join(invokerHomeRoot, INVOKER_COMMANDS_DIR);
+  for (const entry of Object.values(manifest.commandTargets ?? {})) {
+    if (entry.path !== keepCommandPath) return true;
+  }
+  return false;
+}
+
 export function resolveBundledSkillsStatus(context: BundledSkillsContext): BundledSkillsStatus {
   const invokerHomeRoot = context.invokerHomeRoot ?? resolveInvokerHomeRoot();
   const isInstalled = context.isInstalled ?? commandExists;
@@ -1131,6 +1150,7 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
       promptRecommended: false,
       managedPrefix: MANAGED_PREFIX,
       bundledSkillNames: [],
+      harnessesRegistered: previousHarnessesRegistered(manifest, invokerHomeRoot),
       targets: resolveManagedTargets(invokerHomeRoot),
       commandTargets: resolveManagedCommandTargets(invokerHomeRoot),
       mcpTargets: resolveManagedMcpTargets(isInstalled),
@@ -1163,6 +1183,7 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
     bundledSkillNames,
     lastInstallAt: manifest?.installedAt,
     lastInstallError: manifest?.lastInstallError,
+    harnessesRegistered: previousHarnessesRegistered(manifest, invokerHomeRoot),
     targets,
     commandTargets,
     mcpTargets,
@@ -1170,24 +1191,6 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
   };
 }
 
-function previousHarnessesRegistered(
-  manifest: BundledSkillsManifest | null,
-  invokerHomeRoot: string,
-): boolean {
-  if (!manifest) return false;
-  if (manifest.harnessesRegistered === true) return true;
-  if (manifest.mcpTargets && Object.keys(manifest.mcpTargets).length > 0) return true;
-  if (manifest.instructionTargets && Object.keys(manifest.instructionTargets).length > 0) return true;
-  const keepSkillPath = path.join(invokerHomeRoot, INVOKER_SKILLS_DIR);
-  for (const entry of Object.values(manifest.targets ?? {})) {
-    if (entry.path !== keepSkillPath) return true;
-  }
-  const keepCommandPath = path.join(invokerHomeRoot, INVOKER_COMMANDS_DIR);
-  for (const entry of Object.values(manifest.commandTargets ?? {})) {
-    if (entry.path !== keepCommandPath) return true;
-  }
-  return false;
-}
 export function installBundledSkills(
   context: BundledSkillsContext,
   mode: BundledSkillsInstallMode = 'install',
@@ -1290,6 +1293,7 @@ export function installBundledSkills(
   const status = resolveBundledSkillsStatus(context);
   return {
     ...status,
+    harnessesRegistered: registerHarnesses,
     promptRecommended: context.isPackaged && mode === 'install' ? false : status.promptRecommended,
   };
 }

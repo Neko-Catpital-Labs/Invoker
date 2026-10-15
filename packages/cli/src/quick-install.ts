@@ -108,7 +108,7 @@ export function formatQuickInstallDemoTranscript(): string {
     '==> Running doctor --fix...',
     '    Doctor finished (optional tools may still be missing).',
     '',
-    '==> Skills/MCP (opt-in only)...',
+    '==> Installing skills + local MCP...',
     '    Skills/MCP: installed under Invoker home (harness wiring stays opt-in: invoker-cli setup --register-harnesses).',
     '    Slack: skipped (optional: invoker-cli setup slack)',
     '    Remote machines: skipped (optional: invoker-cli setup machines)',
@@ -193,7 +193,7 @@ export async function runInstall(
   }
   io.print('');
 
-  io.print('==> Skills/MCP (opt-in only)...');
+  io.print('==> Installing skills + local MCP...');
   installSetupBundledSkills(io, deps);
   io.print('    Slack: skipped (optional: invoker-cli setup slack)');
   io.print('    Remote machines: skipped (optional: invoker-cli setup machines)');
