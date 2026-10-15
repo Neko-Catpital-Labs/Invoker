@@ -1065,6 +1065,7 @@ describe('runSetup in a non-interactive shell', () => {
           promptRecommended: false,
           managedPrefix: 'invoker-',
           bundledSkillNames: ['plan-to-invoker'],
+          harnessesRegistered: true,
           targets: [{ id: 'invoker', name: 'Invoker', path: '/x', available: true, installed: true, upToDate: true, installedSkillNames: [] }],
           commandTargets: [],
           mcpTargets: [
@@ -1077,6 +1078,37 @@ describe('runSetup in a non-interactive shell', () => {
     expect(code).toBe(0);
     expect(installCalls).toEqual([{ registerHarnesses: true }]);
     expect(lines.join('\n')).toContain('Skills MCP: registered into Cursor.');
+  });
+
+  it('reports preserved harness registration when default setup reuses a sticky install', async () => {
+    const { lines, io } = collectingIO({
+      prompt: async () => { throw new Error('should not prompt under --yes'); },
+    });
+
+    const code = await runSetup(['--yes'], io, readySetupDeps({
+      resolveSkillsRepoRoot: () => '/fake/repo',
+      bundledSkillsInstall: ((_ctx, _mode, _category, options) => {
+        expect(options).toEqual({ registerHarnesses: false });
+        return {
+          available: true,
+          promptRecommended: false,
+          managedPrefix: 'invoker-',
+          bundledSkillNames: ['plan-to-invoker'],
+          harnessesRegistered: true,
+          targets: [{ id: 'invoker', name: 'Invoker', path: '/x', available: true, installed: true, upToDate: true, installedSkillNames: [] }],
+          commandTargets: [],
+          mcpTargets: [
+            { id: 'cursor', name: 'Cursor', path: '/x/mcp.json', available: true, installed: true, upToDate: true, serverName: 'invoker' },
+          ],
+        };
+      }) as SetupDeps['bundledSkillsInstall'],
+    }));
+
+    expect(code).toBe(0);
+    const output = lines.join('\n');
+    expect(output).toContain('Skills MCP: registered into Cursor.');
+    expect(output).not.toContain('Skills MCP: wrote Invoker MCP snippet only');
+    expect(output).not.toContain('Harness MCP/skills stay opt-in');
   });
 
   it('writes nothing under --yes since planner, Slack, and machines all stay opt-in', async () => {

@@ -112,6 +112,7 @@ pull_request_rules:
       - base=master
       - -draft
       - label=admin-bypass
+      - -label=dequeued
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
     actions:

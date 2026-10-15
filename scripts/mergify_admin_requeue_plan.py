@@ -86,6 +86,7 @@ REBASE_CONFLICT_REPAIR_FILING_KIND = "admin-requeue:rebase-conflict"
 # Safety invariant: GitHub DIRTY conflicts and no-CI Mergify dequeue-while-behind share the same rebase-onto-master filing kind.
 REBASE_ONTO_MASTER_FILING_KIND = "admin-requeue:rebase-onto-master"
 REBASE_ONTO_MASTER_LEDGER_KIND = "rebase-onto-master"
+RETARGET_BASE_REJECTED_LEDGER_KIND = "retarget-base-rejected"
 
 # Safety invariant: repair-filing subjects remain raw PR numbers, so retarget-recreated PRs start fresh and old closed-PR claims may go stale instead of following stack lineage.
 
@@ -1438,6 +1439,9 @@ def plan_bottom_progress(
                 "external-open-base-pr",
                 f"lowest open stack PR #{root.number} is based on `{root.base_ref_name}`, which still belongs to open PR(s) {owners} outside this stack; leaving it alone to avoid dropping dependency changes",
             )
+        reject_key = f"{root.base_ref_name}->{facts.trunk}"
+        if ledger.count(RETARGET_BASE_REJECTED_LEDGER_KIND, root.number, root.head_ref_oid, reject_key) > 0:
+            return None
         return Action(
             "retarget_base",
             root.number,
