@@ -1036,6 +1036,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     new WorktreeExecutor({
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
+      invokerHome: invokerHomeRoot,
       maxWorktrees: effectiveMaxConcurrency,
       agentRegistry: executionAgentRegistry,
     }),
