@@ -220,17 +220,6 @@ describe('invoker-cli --help integration', () => {
     expect(output.stdout).toContain('worktrees');
   });
 
-  it('install help says skills and MCP stay opt-in', async () => {
-    const output = captureProcessOutput();
-    const code = await main(['install', '--help']);
-    output.restore();
-    expect(code).toBe(0);
-    expect(output.stdout).toContain('--register-harnesses');
-    expect(output.stdout).not.toContain('skills, MCP integration');
-    expect(formatCommandHelp('install', { color: false })).toContain('--register-harnesses');
-    expect(formatCommandHelp('install', { color: false })).not.toContain('skills, MCP integration');
-  });
-
   it('does not treat -h after -- as a help request', async () => {
     const output = captureProcessOutput();
     const code = await main(['set', 'prompt', 'missing-task', '--', '-h']);

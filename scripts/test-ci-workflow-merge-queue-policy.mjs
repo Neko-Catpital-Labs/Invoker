@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import YAML from 'yaml';
 
@@ -509,6 +510,12 @@ for (const checkName of requiredChecks) {
   );
 }
 
+const adminBypassAutoqueue = (mergify.pull_request_rules ?? []).find((rule) => rule.name === 'autoqueue admin-bypass PRs to master');
+assert(
+  (adminBypassAutoqueue?.conditions ?? []).includes('-label=dequeued'),
+  'admin-bypass autoqueue must stay quiet after Mergify dequeues a PR; the land worker requeues with a cap',
+);
+
 assert(existsSync(INSTALLER_SCRIPT_PATH), `Missing shared installer owner ${INSTALLER_SCRIPT_PATH}`);
 const installerScript = readFileSync(INSTALLER_SCRIPT_PATH, 'utf8');
 assert(
@@ -516,6 +523,17 @@ assert(
     && installerScript.includes('sudo -n apt-get')
     && !/^\s*sudo\s+(?!-n\b)/m.test(installerScript),
   'shared installer must prove passwordless sudo and use it noninteractively, the same way every caller previously did',
+);
+assert(
+  installerScript.includes('stop_unattended_upgrades')
+    && installerScript.indexOf('stop_unattended_upgrades') < installerScript.indexOf('run_apt_get apt-get update')
+    && installerScript.indexOf('stop_unattended_upgrades') < installerScript.indexOf('run_apt_get sudo -n apt-get update'),
+  'shared installer must stop unattended-upgrades before apt-get, or a fresh runner keeps the dpkg lock and the merge queue dequeues the PR',
+);
+const lockRepro = spawnSync('bash', ['scripts/test-install-node-system-libraries-lock.sh'], { encoding: 'utf8' });
+assert(
+  lockRepro.status === 0,
+  `installer must succeed once unattended-upgrades is stopped, got ${lockRepro.status}: ${lockRepro.stderr || lockRepro.stdout}`,
 );
 assert(
   installerScript.includes('Dir::State')

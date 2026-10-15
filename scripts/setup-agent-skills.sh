@@ -101,7 +101,8 @@ remove_stale_db_lock() {
   local pid=""
   [ -d "$lock_dir" ] || return 0
   pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
-  if pid_is_alive "$pid" && pid_is_invoker_owner "$pid"; then    return 1
+  if pid_is_alive "$pid" && pid_is_invoker_owner "$pid"; then
+    return 1
   fi
   rm -rf "$lock_dir"
   return 0
