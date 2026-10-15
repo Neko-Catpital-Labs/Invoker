@@ -10,7 +10,7 @@ cd "$REPO_ROOT"
 
 INVOKER_SKILL_CATEGORY="${INVOKER_SKILL_CATEGORY:-}"
 OWNER_STOP_WAIT_SECONDS=15
-
+CONTRACTS_DIST_INDEX="packages/contracts/dist/index.js"
 log() {
   echo "[setup] $*"
 }
@@ -35,6 +35,12 @@ check_required_commands() {
 }
 
 build_headless_installer() {
+  log "Building @invoker/contracts (DB path resolver + shared types)..."
+  pnpm --filter @invoker/contracts build
+  if [ ! -f "$CONTRACTS_DIST_INDEX" ]; then
+    fail "expected $CONTRACTS_DIST_INDEX after building @invoker/contracts"
+  fi
+
   log "Checking shared shell policy..."
   pnpm --filter @invoker/shell test
 
@@ -46,6 +52,9 @@ build_headless_installer() {
 }
 
 resolve_checkout_db_path() {
+  if [ ! -f "$CONTRACTS_DIST_INDEX" ]; then
+    fail "missing $CONTRACTS_DIST_INDEX; run pnpm --filter @invoker/contracts build first"
+  fi
   node --input-type=module <<'EOF'
 import { resolveInvokerInstanceProfile, resolveRepoRoot } from './packages/contracts/dist/index.js';
 
@@ -65,6 +74,17 @@ pid_is_alive() {
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+pid_is_invoker_owner() {
+  local pid="$1"
+  local command_line=""
+  pid_is_alive "$pid" || return 1
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [ -n "$command_line" ] || return 1
+  case "$command_line" in
+    *"$REPO_ROOT"*) return 0 ;;
+  esac
+  printf '%s\n' "$command_line" | grep -Fq 'packages/app/dist/main.js'
+}
 wait_for_pid_exit() {
   local pid="$1"
   local waited=0
@@ -81,7 +101,7 @@ remove_stale_db_lock() {
   local pid=""
   [ -d "$lock_dir" ] || return 0
   pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
-  if pid_is_alive "$pid"; then
+  if pid_is_alive "$pid" && pid_is_invoker_owner "$pid"; then
     return 1
   fi
   rm -rf "$lock_dir"
@@ -105,6 +125,11 @@ stop_checkout_db_owner() {
     return 0
   fi
 
+  if ! pid_is_invoker_owner "$pid"; then
+    log "Lock PID ${pid} is not an Invoker owner; treating ${lock_dir} as stale"
+    rm -rf "$lock_dir"
+    return 0
+  fi
   log "Stopping local owner PID ${pid} holding ${db_path}"
   kill -TERM "$pid" 2>/dev/null || true
   if ! wait_for_pid_exit "$pid"; then

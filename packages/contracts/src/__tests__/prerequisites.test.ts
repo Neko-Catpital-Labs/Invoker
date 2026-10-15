@@ -22,7 +22,7 @@ import {
 
 const installed = (...tools: string[]) => (cmd: string) => tools.includes(cmd);
 const presets: Record<string, PlanningPresetSpec> = {
-  'cursor+claude': { tool: 'cursor', model: 'claude' },
+  'cursor+claude': { tool: 'cursor', model: 'claude-4.5-sonnet' },
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
 };

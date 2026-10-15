@@ -1,9 +1,17 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type { PlanningConfirmationMode } from '@invoker/contracts';
-import { SendIcon } from './icons/index.js';
+import {
+  collapsePlanningChatLines,
+  groupPlanningChatLines,
+  presentPlanningChatError,
+  splitPlanningChatInlineCode,
+  type PlanningChatCollapsedLine,
+} from '../lib/planning-chat-message-ui.js';
+import { Button } from './primitives/Button.js';
+import { AlertCircleIcon, RefreshIcon, SendIcon, StopIcon } from './icons/index.js';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -25,6 +33,8 @@ export interface PlanningPresetOptionView {
   label: string;
   tool: string;
   model?: string;
+  availability?: 'confirmed' | 'unverified' | 'unavailable';
+  section?: 'recommended' | 'more';
 }
 
 export interface PlanningHarnessChoice {
@@ -36,6 +46,23 @@ export interface PlanningHarnessChoice {
 
 export const PLANNING_TOOLS_EMPTY_PATH_MESSAGE =
   "No planning tools on Invoker's PATH. Install one (e.g. Cursor), then restart Invoker. Check with: invoker-cli doctor";
+
+export const PLANNING_TURN_CANCELLED_MESSAGE = 'Cancelled.';
+
+export function isPlanningCancelledFailure(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const trimmed = message.trim();
+  return trimmed === PLANNING_TURN_CANCELLED_MESSAGE
+    || trimmed.endsWith(`\n${PLANNING_TURN_CANCELLED_MESSAGE}`);
+}
+
+function planningStreamStatusLabel(stream: InvokerTerminalPlanningStream | null | undefined): string {
+  if (!stream) return 'Working…';
+  if (stream.status !== 'failed') return 'Drafting your plan…';
+  return isPlanningCancelledFailure(stream.text)
+    ? 'Planning cancelled'
+    : 'Planning stopped';
+}
 
 function titleCaseIdentifier(value: string): string {
   return value
@@ -50,8 +77,21 @@ function formatPlanningHarnessLabel(tool: string, options: PlanningPresetOptionV
   return directPreset?.label ?? titleCaseIdentifier(tool);
 }
 
-function formatPlanningModelLabel(model: string): string {
+function formatPlanningModelLabel(model: string, fallbackLabel?: string): string {
+  const trimmed = fallbackLabel?.trim();
+  if (trimmed && !/[+]|\bvia\b/i.test(trimmed)) {
+    return trimmed;
+  }
   return titleCaseIdentifier(model);
+}
+
+function formatPlanningModelOptionLabel(option: PlanningPresetOptionView): string {
+  const base = option.model
+    ? formatPlanningModelLabel(option.model, option.label)
+    : 'Default';
+  if (option.availability === 'unavailable') return `${base} (unavailable)`;
+  if (option.availability === 'unverified') return `${base} (unverified)`;
+  return base;
 }
 
 export function buildPlanningHarnessChoices(options: PlanningPresetOptionView[]): PlanningHarnessChoice[] {
@@ -115,6 +155,8 @@ interface InvokerTerminalProps {
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
+  planningPresetsLoading?: boolean;
+  cursorDiscoveryWarning?: string | null;
   selectedConfirmationMode: PlanningConfirmationMode;
   draftPlanAvailable: boolean;
   draftReviewOpen?: boolean;
@@ -140,6 +182,7 @@ interface InvokerTerminalProps {
   repoError?: string | null;
   turnError?: string | null;
   onRetryTurn?: () => void;
+  onCancelTurn?: () => void;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
@@ -153,12 +196,6 @@ interface InvokerTerminalProps {
   onReviewDraft?: () => void;
   submittedPlanName?: string;
   activeConversationKey: string;
-}
-
-function roleLabel(role: InvokerTerminalLine['role']): string {
-  if (role === 'user') return 'You';
-  if (role === 'assistant') return 'Invoker';
-  return 'System';
 }
 
 type MessageSegment =
@@ -211,6 +248,198 @@ function MessageBody({ text, toneClass }: { text: string; toneClass: string }): 
       })}
     </div>
   );
+}
+
+function InlineCodeBody({ text }: { text: string }): JSX.Element {
+  return (
+    <>
+      {splitPlanningChatInlineCode(text).map((segment, index) => {
+        if (segment.kind === 'code') {
+          return (
+            <code
+              key={`code-${index}`}
+              className="rounded bg-secondary px-1.5 py-px font-mono text-[12px] text-foreground"
+            >
+              {segment.text}
+            </code>
+          );
+        }
+        return (
+          <span key={`text-${index}`} className="whitespace-pre-wrap">
+            {segment.text}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+function UserMessageBubble({
+  text,
+  isLastInGroup,
+}: {
+  text: string;
+  isLastInGroup: boolean;
+}): JSX.Element {
+  const radiusClass = isLastInGroup
+    ? 'rounded-[16px] rounded-br-[4px]'
+    : 'rounded-[16px]';
+  return (
+    <div className="flex justify-end" data-testid="invoker-terminal-user-bubble">
+      <div
+        className={`max-w-[70%] bg-planning-chat-user/15 px-[14px] py-[9px] text-left text-[15px] leading-[1.5] text-foreground ${radiusClass}`}
+      >
+        <div className="whitespace-pre-wrap font-sans">{text}</div>
+      </div>
+    </div>
+  );
+}
+
+function SystemErrorBanner({
+  text,
+  count,
+  isLastInGroup,
+  showRetry,
+  retryDisabled,
+  onRetry,
+  isActiveTurnError,
+}: {
+  text: string;
+  count: number;
+  isLastInGroup: boolean;
+  showRetry: boolean;
+  retryDisabled: boolean;
+  onRetry?: () => void;
+  isActiveTurnError: boolean;
+}): JSX.Element {
+  const presentation = presentPlanningChatError(text);
+  const radiusClass = isLastInGroup
+    ? 'rounded-[12px] rounded-tl-[4px]'
+    : 'rounded-[12px]';
+
+  const handleCopyCommand = (): void => {
+    if (!presentation.copyCommand) return;
+    void navigator.clipboard?.writeText(presentation.copyCommand);
+  };
+
+  return (
+    <div className="flex justify-start">
+      <div
+        role="alert"
+        data-testid={isActiveTurnError ? 'invoker-terminal-turn-error' : 'invoker-terminal-error-banner'}
+        className={`flex max-w-[85%] gap-2.5 border-[0.5px] border-destructive/40 bg-destructive/10 px-3.5 py-3 ${radiusClass}`}
+      >
+        <AlertCircleIcon
+          aria-hidden="true"
+          className="mt-0.5 h-[18px] w-[18px] shrink-0 text-destructive"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[14px] font-medium leading-5 text-destructive">
+              {presentation.title}
+            </p>
+            {count > 1 ? (
+              <span
+                data-testid="invoker-terminal-error-count"
+                className="rounded bg-destructive/20 px-1.5 py-0.5 text-[11px] font-medium text-destructive"
+              >
+                {count}×
+              </span>
+            ) : null}
+          </div>
+          {presentation.body ? (
+            <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
+              <InlineCodeBody text={presentation.body} />
+            </p>
+          ) : null}
+          {(showRetry || presentation.copyCommand) ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {showRetry && onRetry ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-testid="invoker-terminal-retry-turn"
+                  disabled={retryDisabled}
+                  onClick={onRetry}
+                  className="h-7 gap-1.5 text-[13px]"
+                >
+                  <RefreshIcon aria-hidden="true" className="h-3.5 w-3.5" />
+                  Retry
+                </Button>
+              ) : null}
+              {presentation.copyCommand ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  data-testid="invoker-terminal-copy-command"
+                  aria-label={`Copy command ${presentation.copyCommand}`}
+                  onClick={handleCopyCommand}
+                  className="h-7 text-[13px]"
+                >
+                  Copy command
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SystemNotice({ text }: { text: string }): JSX.Element {
+  return (
+    <div className="max-w-[85%] text-[13px] leading-5 text-muted-foreground" data-testid="invoker-terminal-system-notice">
+      <div className="whitespace-pre-wrap font-sans">{text}</div>
+    </div>
+  );
+}
+
+function AssistantMessage({ text }: { text: string }): JSX.Element {
+  return (
+    <div className="max-w-[90%]" data-testid="invoker-terminal-assistant-message">
+      <MessageBody text={text} toneClass="text-foreground" />
+    </div>
+  );
+}
+
+function renderCollapsedLine(
+  item: PlanningChatCollapsedLine,
+  isLastInGroup: boolean,
+  turnError: string | null,
+  busy: boolean,
+  onRetryTurn?: () => void,
+): ReactNode {
+  if (item.kind === 'user') {
+    return (
+      <UserMessageBubble
+        key={item.id}
+        text={item.text}
+        isLastInGroup={isLastInGroup}
+      />
+    );
+  }
+  if (item.kind === 'assistant') {
+    return <AssistantMessage key={item.id} text={item.text} />;
+  }
+  if (item.kind === 'system-error') {
+    const isActiveTurnError = Boolean(turnError && item.text === turnError);
+    return (
+      <SystemErrorBanner
+        key={item.id}
+        text={item.text}
+        count={item.count}
+        isLastInGroup={isLastInGroup}
+        showRetry={Boolean(onRetryTurn && isActiveTurnError)}
+        retryDisabled={busy}
+        onRetry={onRetryTurn}
+        isActiveTurnError={isActiveTurnError}
+      />
+    );
+  }
+  return <SystemNotice key={item.id} text={item.text} />;
 }
 
 type SeededOutputSnapshot = {
@@ -548,6 +777,8 @@ export function InvokerTerminal({
   value,
   selectedPresetKey,
   presetOptions,
+  planningPresetsLoading = false,
+  cursorDiscoveryWarning = null,
   selectedConfirmationMode,
   draftPlanAvailable,
   draftReviewOpen = false,
@@ -570,6 +801,7 @@ export function InvokerTerminal({
   repoError = null,
   turnError = null,
   onRetryTurn,
+  onCancelTurn,
   onPresetChange,
   onConfirmationModeChange,
   onRepoInputChange,
@@ -697,25 +929,40 @@ export function InvokerTerminal({
   const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
   const harnessChoices = useMemo(() => buildPlanningHarnessChoices(presetOptions), [presetOptions]);
   const hasPlanningTools = harnessChoices.length > 0;
-  const selectedPreset = useMemo(
-    () => findPresetOption(presetOptions, selectedPresetKey) ?? presetOptions[0],
-    [presetOptions, selectedPresetKey],
-  );
+  const selectedPreset = useMemo(() => {
+    const matched = findPresetOption(presetOptions, selectedPresetKey);
+    if (matched) return matched;
+    if (selectedPresetKey) return undefined;
+    return presetOptions[0];
+  }, [presetOptions, selectedPresetKey]);
   const selectedHarness = useMemo(
     () => harnessChoices.find((choice) => choice.tool === selectedPreset?.tool) ?? harnessChoices[0],
     [harnessChoices, selectedPreset?.tool],
   );
   const selectedHarnessValue = selectedHarness?.tool ?? '';
-  const modelSelectOptions = selectedHarness
-    ? [
-        ...(selectedHarness.directPreset ? [selectedHarness.directPreset] : []),
-        ...selectedHarness.modelPresets,
-      ]
-    : [];
+  const modelSelectOptions = useMemo(() => {
+    const base = selectedHarness
+      ? [
+          ...(selectedHarness.directPreset ? [selectedHarness.directPreset] : []),
+          ...selectedHarness.modelPresets,
+        ]
+      : [];
+    if (!selectedPresetKey || base.some((option) => option.key === selectedPresetKey)) return base;
+    return [
+      ...base,
+      {
+        key: selectedPresetKey,
+        label: selectedPresetKey,
+        tool: selectedHarness?.tool ?? 'cursor',
+        availability: 'unavailable' as const,
+        section: 'recommended' as const,
+      },
+    ];
+  }, [selectedHarness, selectedPresetKey]);
+  const recommendedModelOptions = modelSelectOptions.filter((option) => option.section !== 'more');
+  const moreModelOptions = modelSelectOptions.filter((option) => option.section === 'more');
   const showModelSelect = Boolean(selectedHarness && selectedHarness.modelPresets.length > 0);
-  const selectedModelPresetKey = selectedPreset && modelSelectOptions.some((option) => option.key === selectedPreset.key)
-    ? selectedPreset.key
-    : modelSelectOptions[0]?.key ?? '';
+  const selectedModelPresetKey = selectedPresetKey || modelSelectOptions[0]?.key || '';
 
   const handleHarnessChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
     const nextHarness = harnessChoices.find((choice) => choice.tool === event.target.value);
@@ -776,51 +1023,65 @@ export function InvokerTerminal({
     }
   };
 
-  const transcriptContent = useMemo(() => (
-    <>
-      {lines.map((line) => {
-        const toneClass = line.tone === 'error'
-          ? 'text-destructive'
-          : line.tone === 'success'
-            ? 'text-emerald-400'
-            : line.tone === 'muted'
-              ? 'text-muted-foreground'
-              : line.role === 'assistant'
-                ? 'text-foreground'
-                : 'text-foreground/90';
-        const bubbleClass = line.role === 'user'
-          ? 'rounded-2xl border border-border/70 bg-secondary/40 px-3.5 py-2.5'
-          : line.role === 'system'
-            ? 'rounded-xl border border-border/50 bg-background/50 px-3.5 py-2.5'
-            : 'rounded-2xl px-1 py-1';
-        return (
-          <div key={line.id} className={`space-y-1.5 ${bubbleClass}`}>
-            <div className="text-[11px] font-medium tracking-wide text-muted-foreground">
-              {roleLabel(line.role)}
-            </div>
-            <MessageBody text={line.text} toneClass={toneClass} />
+  const transcriptContent = useMemo(() => {
+    const collapsed = collapsePlanningChatLines(lines);
+    const hasMatchingTurnErrorLine = Boolean(
+      turnError && collapsed.some((item) => item.kind === 'system-error' && item.text === turnError),
+    );
+    const groups = groupPlanningChatLines(collapsed);
+    const streamFailed = planningStream?.status === 'failed';
+
+    return (
+      <div className="flex flex-col gap-3.5">
+        {groups.map((group, groupIndex) => (
+          <div key={`group-${group.kind}-${groupIndex}`} className="flex flex-col gap-1">
+            {group.items.map((item, itemIndex) => (
+              renderCollapsedLine(
+                item,
+                itemIndex === group.items.length - 1,
+                turnError && !readOnly ? turnError : null,
+                busy,
+                onRetryTurn,
+              )
+            ))}
           </div>
-        );
-      })}
-      {busy || planningStream ? (
-        <div
-          data-testid="invoker-terminal-planner-stream"
-          data-state={planningStream?.status ?? 'working'}
-          className={`flex items-center gap-2 text-xs ${
-            planningStream?.status === 'failed'
-              ? 'text-destructive'
-              : 'text-muted-foreground'
-          }`}
-        >
-          <span
-            aria-hidden="true"
-            className="inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-muted-foreground border-t-foreground"
+        ))}
+        {turnError && !readOnly && !hasMatchingTurnErrorLine ? (
+          <SystemErrorBanner
+            text={turnError}
+            count={1}
+            isLastInGroup
+            showRetry={Boolean(onRetryTurn)}
+            retryDisabled={busy}
+            onRetry={onRetryTurn}
+            isActiveTurnError
           />
-          <span>{planningStream ? (planningStream.status === 'failed' ? 'Planning stopped. Try again when ready.' : 'Drafting your plan…') : 'Working…'}</span>
-        </div>
-      ) : null}
-    </>
-  ), [busy, lines, planningStream]);
+        ) : null}
+        {busy || planningStream ? (
+          <div
+            data-testid="invoker-terminal-planner-stream"
+            data-state={planningStream?.status ?? 'working'}
+            className="flex items-center justify-center gap-1.5 text-[12px] text-muted-foreground"
+          >
+            {streamFailed ? (
+              <StopIcon
+                aria-hidden="true"
+                data-testid="invoker-terminal-planner-stream-idle"
+                className="h-3 w-3 shrink-0"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                data-testid="invoker-terminal-planner-stream-spinner"
+                className="inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-muted-foreground border-t-foreground"
+              />
+            )}
+            <span>{planningStreamStatusLabel(planningStream)}</span>
+          </div>
+        ) : null}
+      </div>
+    );
+  }, [busy, lines, onRetryTurn, planningStream, readOnly, turnError]);
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex items-center justify-end gap-2 border-b border-border bg-background px-4 py-2.5">
@@ -895,9 +1156,9 @@ export function InvokerTerminal({
             ref={transcriptRef}
             data-testid="invoker-terminal-transcript"
             onScroll={handleTranscriptScroll}
-            className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-background px-5 py-5 font-sans text-[13.5px] leading-6"
+            className="min-h-0 flex-1 overflow-y-auto bg-background px-5 py-5 font-sans text-[13.5px] leading-6"
           >
-            {lines.length === 0 && !planningStream?.text && !busy ? (
+            {lines.length === 0 && !planningStream?.text && !busy && !turnError ? (
               <div data-testid="invoker-terminal-empty-hero" className="flex h-full min-h-[220px] flex-col justify-center gap-4">
                 <div>
                   <h3 className="text-lg font-semibold tracking-tight text-foreground">What do you want to build?</h3>
@@ -926,27 +1187,6 @@ export function InvokerTerminal({
               transcriptContent
             )}
           </div>
-
-          {turnError && !readOnly && (
-            <div
-              data-testid="invoker-terminal-turn-error"
-              role="alert"
-              className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-card/80 px-4 py-3.5 backdrop-blur-sm"
-            >
-              <span className="min-w-0 flex-1 text-xs text-red-400">{turnError}</span>
-              {onRetryTurn && (
-                <button
-                  type="button"
-                  data-testid="invoker-terminal-retry-turn"
-                  disabled={busy}
-                  onClick={onRetryTurn}
-                  className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Retry
-                </button>
-              )}
-            </div>
-          )}
 
           {draftPlanAvailable && !draftReviewOpen && !readOnly && (
             <div
@@ -1066,16 +1306,55 @@ export function InvokerTerminal({
                             data-testid="invoker-terminal-model"
                             value={selectedModelPresetKey}
                             onChange={(event) => onPresetChange(event.target.value)}
-                            disabled={readOnly}
-                            className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                            disabled={readOnly || planningPresetsLoading}
+                            className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            {modelSelectOptions.map((option) => (
-                              <option key={option.key} value={option.key}>
-                                {option.model ? formatPlanningModelLabel(option.model) : 'Default'}
-                              </option>
-                            ))}
+                            {planningPresetsLoading && modelSelectOptions.length === 0 && (
+                              <option value="">Loading models…</option>
+                            )}
+                            {recommendedModelOptions.length > 0 && moreModelOptions.length > 0 ? (
+                              <>
+                                <optgroup label="Recommended">
+                                  {recommendedModelOptions.map((option) => (
+                                    <option key={option.key} value={option.key}>
+                                      {formatPlanningModelOptionLabel(option)}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="More…">
+                                  {moreModelOptions.map((option) => (
+                                    <option key={option.key} value={option.key}>
+                                      {formatPlanningModelOptionLabel(option)}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              </>
+                            ) : (
+                              modelSelectOptions.map((option) => (
+                                <option key={option.key} value={option.key}>
+                                  {formatPlanningModelOptionLabel(option)}
+                                </option>
+                              ))
+                            )}
                           </select>
                         </label>
+                      )}
+                      {planningPresetsLoading && (
+                        <span
+                          data-testid="invoker-terminal-models-loading"
+                          className="text-[11px] text-muted-foreground"
+                        >
+                          Checking Cursor models…
+                        </span>
+                      )}
+                      {cursorDiscoveryWarning && !planningPresetsLoading && (
+                        <span
+                          data-testid="invoker-terminal-models-warning"
+                          className="max-w-md text-[11px] text-amber-600 dark:text-amber-400"
+                          title={cursorDiscoveryWarning}
+                        >
+                          {cursorDiscoveryWarning}
+                        </span>
                       )}
                       <label className="text-xs text-muted-foreground">
                         Review
@@ -1127,25 +1406,37 @@ export function InvokerTerminal({
                     </div>
                   )}
                 </div>
-                <button
-                  type="submit"
-                  aria-label="Send"
-                  disabled={sendButtonDisabled}
-                  className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
-                >
-                  {busy || binding ? (
-                    <span
-                      data-testid="invoker-terminal-send-spinner"
-                      aria-hidden="true"
-                      className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-500 border-t-gray-100"
-                    />
-                  ) : (
-                    <SendIcon
-                      data-testid="invoker-terminal-send-icon"
-                      className="h-4 w-4"
-                    />
-                  )}
-                </button>
+                {busy && !binding ? (
+                  <button
+                    type="button"
+                    aria-label="Cancel"
+                    data-testid="invoker-terminal-cancel"
+                    onClick={() => onCancelTurn?.()}
+                    className="inline-flex h-8 shrink-0 items-center justify-center rounded-sm border border-border bg-secondary px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    Cancel
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    aria-label="Send"
+                    disabled={sendButtonDisabled}
+                    className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
+                  >
+                    {binding ? (
+                      <span
+                        data-testid="invoker-terminal-send-spinner"
+                        aria-hidden="true"
+                        className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-500 border-t-gray-100"
+                      />
+                    ) : (
+                      <SendIcon
+                        data-testid="invoker-terminal-send-icon"
+                        className="h-4 w-4"
+                      />
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </form>

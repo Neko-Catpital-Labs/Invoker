@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { runStartupPrerequisites } from '../startup-prerequisites.js';
 
-const presets = { 'cursor+claude': { tool: 'cursor', model: 'claude' }, omp: { tool: 'omp' } };
+const presets = { 'cursor+claude': { tool: 'cursor', model: 'claude-4.5-sonnet' }, omp: { tool: 'omp' } };
 
 describe('runStartupPrerequisites', () => {
   it('returns no failures when the default preset tool is installed', () => {

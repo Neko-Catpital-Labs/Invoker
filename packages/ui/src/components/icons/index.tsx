@@ -1,9 +1,11 @@
 import type { JSX, SVGProps } from 'react';
 import {
+  AlertCircle,
   AlertTriangle,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleStop,
   Clock,
   Compass,
   Cpu,
@@ -13,6 +15,7 @@ import {
   Moon,
   Network,
   Play,
+  RefreshCw,
   Settings,
   Sun,
   TerminalSquare,
@@ -35,6 +38,9 @@ function withDefaults<C extends React.FC<LucideProps>>(Icon: C, defaults?: Lucid
 }
 
 export const AttentionIcon = withDefaults(AlertTriangle);
+export const AlertCircleIcon = withDefaults(AlertCircle);
+export const RefreshIcon = withDefaults(RefreshCw);
+export const StopIcon = withDefaults(CircleStop);
 export const RunningIcon = withDefaults(Clock);
 export const WorkerIcon = withDefaults(Cpu);
 export const WorkflowsIcon = withDefaults(Layers);

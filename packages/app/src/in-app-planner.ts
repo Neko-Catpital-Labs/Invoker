@@ -5,6 +5,8 @@ import { trimPreservingEscapeSequences } from './embedded-terminal-manager.js';
 import type {
   InAppPlanRequest,
   InAppPlanResponse,
+  InAppPlanningCancelRequest,
+  InAppPlanningCancelResponse,
   InAppPlanningChatLine,
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
@@ -34,15 +36,29 @@ import type {
   PlanningConfirmationMode,
   PlanningTerminalMode,
   PlanningPresetOption,
+  PlanningPresetsResponse,
+  CursorModelDiscoverySummary,
+  PlanningModelAvailability,
 } from '@invoker/contracts';
-import { forgeProjectIdentityFromUrl, resolveInvokerHomeRoot } from '@invoker/contracts';
+import {
+  curatedCursorPlanningModelIds,
+  cursorMorePresetKey,
+  forgeProjectIdentityFromUrl,
+  labelForBuiltinPlanningPreset,
+  resolveInvokerHomeRoot,
+  resolvePlanningPresetByKey,
+} from '@invoker/contracts';
 import type {
   ConversationMessageEntry,
   ConversationRepository,
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import {
+  isPlannerAuthRequiredErrorMessage,
+  plannerAuthRecoveryHint,
+  type AgentRegistry,
+} from '@invoker/execution-engine';
 import {
   decideWorktreeBinding,
   evaluatePlanningTurn,
@@ -57,6 +73,7 @@ import {
 } from '@invoker/planning-core';
 import { detectDefaultBranchRemote } from '@invoker/workflow-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
+import { isPlanningTurnCancelledError, PlanningTurnCancelledError } from '@invoker/surfaces';
 import { filterPlanningPresets, type InvokerConfig } from './config.js';
 import {
   ensurePlanningWorktreeReady,
@@ -66,6 +83,7 @@ import {
   type PlanningRepoPool,
 } from './planning-chat-worktree.js';
 import { commandIsOnPath } from './system-diagnostics.js';
+import { discoverCursorPlanningModels } from './cursor-model-discovery.js';
 
 function logPlanningWorktreeReadyError(sessionId: string, step: string, error: unknown): void {
   console.error(`[planning-chat] ensurePlanningWorktreeReady ${step} failed session="${sessionId}": ${
@@ -157,6 +175,19 @@ export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
   return new Map();
 }
 
+export const PLANNING_TURN_CANCELLED_MESSAGE = 'Cancelled.';
+
+function isTurnAlreadyMarkedCancelled(
+  status: InAppPlanningTurnStatus | undefined,
+  error: string | undefined,
+  activeTurnId: string | undefined,
+  turnId: string,
+): boolean {
+  return status === 'failed'
+    && error === PLANNING_TURN_CANCELLED_MESSAGE
+    && activeTurnId === turnId;
+}
+
 function isModuleResolutionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (
@@ -169,18 +200,20 @@ function isModuleResolutionError(error: unknown): boolean {
 
 function isAuthenticationError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return (
-    message.includes('oauth')
-    || message.includes('401')
-    || message.includes('unauthorized')
-    || message.includes('failed to authenticate')
-    || message.includes('authentication failed')
-    || message.includes('token has expired')
-    || message.includes('re-authenticate')
-    || message.includes('session expired')
-    || message.includes('api error: 401')
-  );
+  return isPlannerAuthRequiredErrorMessage(error.message);
+}
+
+function planningAuthToolHint(presetKey: string): string {
+  if (presetKey === 'cursor' || presetKey.startsWith('cursor+')) return 'cursor';
+  if (presetKey.includes('codex')) return 'codex';
+  if (presetKey.includes('claude')) return 'claude';
+  if (presetKey.includes('omp')) return 'omp';
+  return presetKey;
+}
+
+function planningAuthenticationFailureMessage(presetKey: string): string {
+  const harness = labelForPresetKey(presetKey);
+  return `${harness} isn't authenticated. ${plannerAuthRecoveryHint(planningAuthToolHint(presetKey))}`;
 }
 
 type PlanConversationConstructor = new (config: PlanConversationConfig) => PlanConversation;
@@ -238,6 +271,8 @@ async function resolveDefaultPresetKey(config: InvokerConfig): Promise<string> {
 
 function labelForPresetKey(key: string): string {
   switch (key) {
+    case 'cursor':
+      return 'Cursor';
     case 'codex':
       return 'Codex';
     case 'claude':
@@ -249,11 +284,11 @@ function labelForPresetKey(key: string): string {
     case 'omp+codex':
       return 'Codex via OMP';
     case 'cursor+claude':
-      return 'Cursor + Claude';
+      return labelForBuiltinPlanningPreset(key) ?? 'Claude Sonnet 4.5';
     case 'cursor+codex':
-      return 'Cursor + Codex';
+      return labelForBuiltinPlanningPreset(key) ?? 'GPT-5.3 Codex';
     default:
-      return key.replaceAll('+', ' + ');
+      return labelForBuiltinPlanningPreset(key) ?? key.replaceAll('+', ' + ');
   }
 }
 
@@ -790,7 +825,7 @@ async function createSession(
     ? request.presetKey
     : undefined;
   const presetKey = requestedPresetKey ?? await resolveDefaultPresetKey(deps.config);
-  const preset = presets[presetKey];
+  const preset = resolvePlanningPresetByKey(presets, presetKey);
   if (!preset) {
     return { error: `Unknown planner preset "${presetKey}".` };
   }
@@ -882,7 +917,7 @@ async function activatePlanningSessionWorktree(
     sessionId: session.id,
   });
   const presets = await resolveHarnessPresets(deps.config);
-  const preset = presets[session.presetKey];
+  const preset = resolvePlanningPresetByKey(presets, session.presetKey);
   if (!preset) throw new Error(`Unknown planner preset "${session.presetKey}".`);
   const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
   const conversationDeps = {
@@ -904,6 +939,92 @@ async function activatePlanningSessionWorktree(
   return true;
 }
 
+async function applyCursorModelDiscovery(
+  options: PlanningPresetOption[],
+  config: InvokerConfig,
+  discoveryOpts?: { refreshCursorModels?: boolean },
+): Promise<{ options: PlanningPresetOption[]; cursorDiscovery: CursorModelDiscoverySummary }> {
+  const hasCursor = options.some((opt) => opt.tool === 'cursor');
+  if (!hasCursor) {
+    return { options, cursorDiscovery: { status: 'skipped' } };
+  }
+
+  const outcome = await discoverCursorPlanningModels({
+    plannerCommand: 'cursor',
+    refresh: discoveryOpts?.refreshCursorModels === true,
+  });
+
+  if (outcome.kind === 'failed') {
+    return {
+      options: options.map((opt) => (
+        opt.tool === 'cursor' && opt.model
+          ? { ...opt, availability: 'unverified' as const, section: 'recommended' as const }
+          : opt
+      )),
+      cursorDiscovery: {
+        status: 'failed',
+        warning: `Could not verify Cursor models (${outcome.reason}). Showing recommended list as unverified.`,
+      },
+    };
+  }
+
+  if (outcome.kind === 'empty') {
+    return {
+      options: options.map((opt) => (
+        opt.tool === 'cursor' && opt.model
+          ? { ...opt, availability: 'unverified' as const, section: 'recommended' as const }
+          : opt
+      )),
+      cursorDiscovery: {
+        status: 'empty',
+        warning: 'Cursor returned no models. Showing recommended list as unverified.',
+      },
+    };
+  }
+
+  const discoveredById = new Map(
+    outcome.models.map((model) => [model.id.toLowerCase(), model] as const),
+  );
+  const curatedIds = curatedCursorPlanningModelIds();
+  const existingKeys = new Set(options.map((opt) => opt.key));
+
+  const annotated = options.map((opt) => {
+    if (opt.tool !== 'cursor' || !opt.model) return opt;
+    const resolved = opt.model.trim().toLowerCase();
+    const availability: PlanningModelAvailability = discoveredById.has(resolved)
+      ? 'confirmed'
+      : 'unavailable';
+    return { ...opt, availability, section: 'recommended' as const };
+  });
+
+  const more: PlanningPresetOption[] = [];
+  for (const model of outcome.models) {
+    const idKey = model.id.toLowerCase();
+    if (curatedIds.has(idKey)) continue;
+    if (idKey.endsWith('-fast')) continue;
+    const key = cursorMorePresetKey(model.id);
+    if (existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    more.push({
+      key,
+      label: model.label,
+      tool: 'cursor',
+      model: model.id,
+      isDefault: false,
+      defaultConfirmationMode: annotated[0]?.defaultConfirmationMode,
+      availability: 'confirmed',
+      section: 'more',
+    });
+  }
+  more.sort((a, b) => a.label.localeCompare(b.label));
+  const allowedMore = filterPlanningPresets(more, config);
+
+  return {
+    options: [...annotated, ...allowedMore],
+    cursorDiscovery: { status: 'ok' },
+  };
+}
+
 /**
  * List the planning presets offered to pickers.
  * The `enabledExecutionAgents` allowlist is applied HERE (not at the IPC/web
@@ -911,16 +1032,22 @@ async function activatePlanningSessionWorktree(
  * dispatch — gets the same filtered view without double-filtering.
  * After the allowlist, presets whose planner `tool` is not on Invoker’s PATH
  * are dropped (injectable for tests; defaults to {@link commandIsOnPath}).
+ * When Cursor is available, hybrid discovery intersects the curated manifest
+ * with `cursor-agent --list-models` and appends non-curated ids under section "more".
  */
 export async function listInAppPlanningPresets(
   config: InvokerConfig,
-  opts?: { isInstalled?: (command: string) => boolean },
-): Promise<PlanningPresetOption[]> {
+  opts?: {
+    isInstalled?: (command: string) => boolean;
+    refreshCursorModels?: boolean;
+    skipCursorDiscovery?: boolean;
+  },
+): Promise<PlanningPresetsResponse> {
   const isInstalled = opts?.isInstalled ?? commandIsOnPath;
   const presets = await resolveHarnessPresets(config);
   const defaultPresetKey = await resolveDefaultPresetKey(config);
   const defaultConfirmationMode = resolveDefaultPlanningConfirmationMode(config);
-  const options = Object.entries(presets).map(([key, preset]) => ({
+  const options: PlanningPresetOption[] = Object.entries(presets).map(([key, preset]) => ({
     key,
     label: labelForPresetKey(key),
     tool: preset.tool,
@@ -934,7 +1061,21 @@ export async function listInAppPlanningPresets(
   if (!hasDefault && filtered.length > 0) {
     filtered[0] = { ...filtered[0], isDefault: true };
   }
-  return filtered;
+
+  if (opts?.skipCursorDiscovery) {
+    return {
+      options: filtered.map((opt) => (
+        opt.tool === 'cursor' && opt.model
+          ? { ...opt, availability: 'unverified' as const, section: 'recommended' as const }
+          : opt
+      )),
+      cursorDiscovery: { status: 'skipped' },
+    };
+  }
+
+  return applyCursorModelDiscovery(filtered, config, {
+    refreshCursorModels: opts?.refreshCursorModels,
+  });
 }
 
 export function createPlanningCommandBuilderFromRegistry(
@@ -955,7 +1096,7 @@ export async function planFromGoal(
 
   const presets = await resolveHarnessPresets(deps.config);
   const presetKey = request.presetKey ?? await resolveDefaultPresetKey(deps.config);
-  const preset = presets[presetKey];
+  const preset = resolvePlanningPresetByKey(presets, presetKey);
   if (!preset) {
     return { ok: false, error: `Unknown planner preset "${presetKey}".` };
   }
@@ -1012,6 +1153,45 @@ export function listPlanningChatSessions(
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
     .map(sessionToSummary);
   return { ok: true, sessions };
+}
+
+async function syncPlanningSessionPreset(
+  session: InAppPlanningChatSession,
+  requestedPresetKey: string | undefined,
+  presets: Record<string, HarnessPreset>,
+  deps: InAppPlannerDeps & {
+    planningCommandBuilder: PlanningCommandBuilder;
+    planningSessionStore?: InAppPlanningSessionStore;
+  },
+): Promise<string | undefined> {
+  const nextKey = requestedPresetKey?.trim();
+  if (!nextKey || nextKey === session.presetKey) return undefined;
+
+  const preset = resolvePlanningPresetByKey(presets, nextKey);
+  if (!preset) return `Unknown planner preset "${nextKey}".`;
+
+  const missingTool = refuseIfPlanningToolMissingFromPath(
+    preset.tool,
+    deps.isInstalled ?? commandIsOnPath,
+  );
+  if (missingTool) return missingTool;
+
+  const { selectHarnessSessionDriver } = await loadPlannerSurfaces();
+  const mcpConfigPath = session.worktreePath
+    ? planningMcpConfigPath(session.worktreePath)
+    : undefined;
+  session.conversation.rebindHarness({
+    tool: preset.tool,
+    model: preset.model,
+    harnessSessionDriver: selectHarnessSessionDriver(preset, {
+      executionAgentRegistry: deps.executionAgentRegistry,
+      planningCommandBuilder: deps.planningCommandBuilder,
+      mcpConfigPath,
+    }),
+  });
+  session.presetKey = nextKey;
+  persistPlanningSession(session, deps.planningSessionStore, false);
+  return undefined;
 }
 
 export async function sendPlanningChatMessage(
@@ -1072,7 +1252,16 @@ export async function sendPlanningChatMessage(
       return { ok: false, sessionId: session.id, turnId, error: 'duplicate-turn' };
     }
     const sessionPresets = await resolveHarnessPresets(deps.config);
-    const sessionPreset = sessionPresets[session.presetKey];
+    const presetSyncError = await syncPlanningSessionPreset(
+      session,
+      typeof rawRequest?.presetKey === 'string' ? rawRequest.presetKey : undefined,
+      sessionPresets,
+      deps,
+    );
+    if (presetSyncError) {
+      return { ok: false, sessionId: session.id, turnId, error: presetSyncError };
+    }
+    const sessionPreset = resolvePlanningPresetByKey(sessionPresets, session.presetKey);
     if (!sessionPreset) {
       return {
         ok: false,
@@ -1110,7 +1299,26 @@ export async function sendPlanningChatMessage(
       activeSession.activeTurnError = undefined;
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
+      const turnIsCancelled = (): boolean => isTurnAlreadyMarkedCancelled(
+        activeSession.activeTurnStatus,
+        activeSession.activeTurnError,
+        activeSession.activeTurnId,
+        turnId,
+      );
+      const throwIfTurnCancelled = (): void => {
+        if (turnIsCancelled()) {
+          throw new PlanningTurnCancelledError();
+        }
+      };
       const finishTurn = (response: Extract<InAppPlanningChatResponse, { ok: true }>): InAppPlanningChatResponse => {
+        if (turnIsCancelled()) {
+          return {
+            ok: false,
+            sessionId: activeSession.id,
+            turnId,
+            error: PLANNING_TURN_CANCELLED_MESSAGE,
+          };
+        }
         activeSession.activeTurnId = undefined;
         activeSession.activeTurnStatus = undefined;
         activeSession.activeTurnError = undefined;
@@ -1132,6 +1340,7 @@ export async function sendPlanningChatMessage(
 
       try {
         const activatedWorktree = await activatePlanningSessionWorktree(activeSession, deps);
+        throwIfTurnCancelled();
         if (activatedWorktree) {
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
         }
@@ -1156,10 +1365,13 @@ export async function sendPlanningChatMessage(
           } catch (error) {
             logPlanningWorktreeReadyError(activeSession.id, 'before-send', error);
           }
+          throwIfTurnCancelled();
         }
+        throwIfTurnCancelled();
         let reply = deps.plannerReplyOverride
           ? await deps.plannerReplyOverride(hostedMessage)
           : await activeSession.conversation.sendMessage(hostedMessage);
+        throwIfTurnCancelled();
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, message, reply);
         }
@@ -1240,6 +1452,7 @@ export async function sendPlanningChatMessage(
         }
 
         const mismatchedRepoUrl = await silentRepoMismatch(activeSession, review.planText);
+        throwIfTurnCancelled();
         if (mismatchedRepoUrl) {
           const mismatchReply = `Draft rejected because it silently changed repositories to ${mismatchedRepoUrl}. `
             + `This planning session is bound to ${activeSession.repoUrl}. Name a different repository explicitly if that is intentional.`;
@@ -1247,6 +1460,7 @@ export async function sendPlanningChatMessage(
           const correctedReply = deps.plannerReplyOverride
             ? await deps.plannerReplyOverride(correctionPrompt)
             : await activeSession.conversation.sendMessage(correctionPrompt);
+          throwIfTurnCancelled();
           const correctedPlanText = deps.plannerReplyOverride
             ? extractFencedYamlPlanText(correctedReply)
             : activeSession.conversation.lastTurnDraftPlanText;
@@ -1311,24 +1525,35 @@ export async function sendPlanningChatMessage(
           draftPlanText: review.planText,
         } as Extract<InAppPlanningChatResponse, { ok: true }>);
       } catch (error) {
-        const failureMessage = error instanceof Error ? error.message : String(error);
-        activeSession.activeTurnStatus = 'failed';
-        activeSession.activeTurnError = failureMessage;
-        if (isAuthenticationError(error)) {
-          activeSession.status = 'planner_error';
-          appendSessionMessage(
-            activeSession,
-            'system',
-            'Authentication failed. The planner could not complete this turn. Re-authenticate and try again.',
-            'error',
-          );
-        }
-        persistPlanningSession(activeSession, deps.planningSessionStore, false);
-        deps.onRawPlannerOutput?.({
-          sessionId: activeSession.id,
+        const cancelled = isPlanningTurnCancelledError(error);
+        const failureMessage = cancelled
+          ? PLANNING_TURN_CANCELLED_MESSAGE
+          : error instanceof Error ? error.message : String(error);
+        const alreadyCancelled = isTurnAlreadyMarkedCancelled(
+          activeSession.activeTurnStatus,
+          activeSession.activeTurnError,
+          activeSession.activeTurnId,
           turnId,
-          turn: { status: 'failed', error: failureMessage },
-        });
+        );
+        if (!alreadyCancelled) {
+          activeSession.activeTurnStatus = 'failed';
+          activeSession.activeTurnError = failureMessage;
+          if (!cancelled && isAuthenticationError(error)) {
+            activeSession.status = 'planner_error';
+            appendSessionMessage(
+              activeSession,
+              'system',
+              planningAuthenticationFailureMessage(activeSession.presetKey),
+              'error',
+            );
+          }
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          deps.onRawPlannerOutput?.({
+            sessionId: activeSession.id,
+            turnId,
+            turn: { status: 'failed', error: failureMessage },
+          });
+        }
         return {
           ok: false,
           sessionId: activeSession.id,
@@ -1347,6 +1572,52 @@ export async function sendPlanningChatMessage(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export function cancelPlanningChatTurn(
+  request: InAppPlanningCancelRequest,
+  deps: {
+    sessions: InAppPlanningChatSessions;
+    planningSessionStore?: InAppPlanningSessionStore;
+    onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
+  },
+): InAppPlanningCancelResponse {
+  const sessionId = typeof request?.sessionId === 'string' ? request.sessionId.trim() : '';
+  const requestedTurnId = typeof request?.turnId === 'string' ? request.turnId.trim() : '';
+  if (!sessionId && !requestedTurnId) {
+    return { ok: false, error: 'Planning session id or turn id is required.' };
+  }
+
+  let session = sessionId ? deps.sessions.get(sessionId) : undefined;
+  if (!session && requestedTurnId) {
+    session = [...deps.sessions.values()].find((entry) => (
+      entry.activeTurnStatus === 'running' && entry.activeTurnId === requestedTurnId
+    ));
+  }
+  if (!session) {
+    if (sessionId) {
+      return { ok: false, sessionId, error: `Planning session "${sessionId}" was not found.` };
+    }
+    return { ok: true, cancelled: false, turnId: requestedTurnId || undefined };
+  }
+  if (session.activeTurnStatus !== 'running' || !session.activeTurnId) {
+    return { ok: true, cancelled: false, sessionId: session.id };
+  }
+  if (requestedTurnId && session.activeTurnId !== requestedTurnId) {
+    return { ok: true, cancelled: false, sessionId: session.id, turnId: session.activeTurnId };
+  }
+
+  const turnId = session.activeTurnId;
+  session.conversation.abortActiveTurn();
+  session.activeTurnStatus = 'failed';
+  session.activeTurnError = PLANNING_TURN_CANCELLED_MESSAGE;
+  persistPlanningSession(session, deps.planningSessionStore, false);
+  deps.onRawPlannerOutput?.({
+    sessionId: session.id,
+    turnId,
+    turn: { status: 'failed', error: PLANNING_TURN_CANCELLED_MESSAGE },
+  });
+  return { ok: true, cancelled: true, sessionId: session.id, turnId };
 }
 
 export async function submitPlanningChatDraft(
@@ -1566,7 +1837,7 @@ export async function rebindPlanningChatRepo(
     });
 
     const presets = await resolveHarnessPresets(deps.config);
-    const preset = presets[session.presetKey];
+    const preset = resolvePlanningPresetByKey(presets, session.presetKey);
     if (!preset) {
       return { ok: false, error: `Unknown planner preset "${session.presetKey}".` };
     }
@@ -1682,7 +1953,7 @@ export async function restorePlanningChatSessions(
   const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
 
   for (const record of records) {
-    const preset = presets[record.presetKey];
+    const preset = resolvePlanningPresetByKey(presets, record.presetKey);
     if (!preset) continue;
 
     let restoredWorktreePath: string | undefined;

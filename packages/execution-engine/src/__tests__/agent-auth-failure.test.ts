@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyAgentAuthFailure } from '../agent-auth-failure.js';
+import {
+  buildPlannerAuthRequiredMessage,
+  classifyAgentAuthFailure,
+  isPlannerAuthRequiredErrorMessage,
+  plannerOutputIndicatesAuthFailure,
+  plannerOutputIndicatesAuthLimbo,
+} from '../agent-auth-failure.js';
 import { decideAgentAuthReauthRetry } from '../agent-auth-reauth-retry.js';
 
 describe('classifyAgentAuthFailure', () => {
@@ -35,6 +41,41 @@ describe('classifyAgentAuthFailure', () => {
     expect(
       classifyAgentAuthFailure('Claude AI usage limit reached', 'cursor'),
     ).toBeUndefined();
+  });
+});
+
+describe('planner auth output classification', () => {
+  it('treats Cursor limbo and Codex 401 reconnect as auth limbo', () => {
+    expect(plannerOutputIndicatesAuthLimbo('Logged in (unable to fetch user details)')).toBe(true);
+    expect(plannerOutputIndicatesAuthLimbo('HTTP error: 401 Unauthorized')).toBe(true);
+    expect(plannerOutputIndicatesAuthLimbo('Missing bearer or basic authentication in header')).toBe(true);
+    expect(plannerOutputIndicatesAuthLimbo('Not logged in')).toBe(false);
+  });
+
+  it('classifies Claude /login and shared login-failure signatures as auth failures', () => {
+    expect(plannerOutputIndicatesAuthFailure('Not logged in · Please run /login')).toBe(true);
+    expect(plannerOutputIndicatesAuthFailure(
+      'failed to authenticate: oauth session expired and could not be refreshed',
+    )).toBe(true);
+    expect(plannerOutputIndicatesAuthFailure('ENOENT: no such file')).toBe(false);
+  });
+
+  it('builds harness-specific recovery hints', () => {
+    expect(buildPlannerAuthRequiredMessage('cursor')).toMatch(/cursor agent login/i);
+    expect(buildPlannerAuthRequiredMessage('cursor')).toMatch(/cursor-agent login/i);
+    expect(buildPlannerAuthRequiredMessage('codex')).toMatch(/codex login/i);
+    expect(buildPlannerAuthRequiredMessage('claude')).toMatch(/\/login/i);
+    expect(buildPlannerAuthRequiredMessage('omp')).toMatch(/OMP/i);
+  });
+
+  it('recognizes only the shaped buildPlannerAuthRequiredError message', () => {
+    expect(isPlannerAuthRequiredErrorMessage(buildPlannerAuthRequiredMessage('cursor'))).toBe(true);
+    expect(isPlannerAuthRequiredErrorMessage(
+      "cursor exited with code 1: Error: Authentication required. Please run 'cursor agent login' first.",
+    )).toBe(false);
+    expect(isPlannerAuthRequiredErrorMessage(
+      'failed to authenticate: oauth session expired and could not be refreshed',
+    )).toBe(false);
   });
 });
 

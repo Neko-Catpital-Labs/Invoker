@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { forgeProjectIdentityFromUrl } from '@invoker/contracts';
+import { BUILTIN_PLANNING_PRESETS, forgeProjectIdentityFromUrl } from '@invoker/contracts';
 import {
   formatPlanSummaryLines,
   formatSlackPlanBrief,
@@ -190,13 +190,7 @@ export interface StageSlackPlanDraftResult {
 }
 
 export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
-  'cursor+claude': { tool: 'cursor', model: 'claude' },
-  'cursor+codex': { tool: 'cursor', model: 'codex' },
-  'omp+claude': { tool: 'omp', model: 'claude' },
-  'omp+codex': { tool: 'omp', model: 'codex' },
-  omp: { tool: 'omp' },
-  codex: { tool: 'codex' },
-  claude: { tool: 'claude' },
+  ...BUILTIN_PLANNING_PRESETS,
 };
 
 export const DEFAULT_HARNESS_PRESET = 'codex';
