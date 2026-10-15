@@ -46,9 +46,23 @@ is_apt_lock_error() {
   grep -qiE 'Could not get lock|Unable to acquire the dpkg frontend lock|Could not open lock file'
 }
 
+stop_unattended_upgrades() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$(id -u)" -eq 0 ]; then
+    systemctl stop unattended-upgrades.service apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true
+    return 0
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    sudo -n systemctl stop unattended-upgrades.service apt-daily.service apt-daily-upgrade.service >/dev/null 2>&1 || true
+  fi
+}
+
 run_apt_get() {
   local output exit_code attempt=1
   local -a cmd=("$@" -o "DPkg::Lock::Timeout=${apt_lock_timeout_secs}")
+  stop_unattended_upgrades
   while true; do
     set +e
     output="$("${cmd[@]}" 2>&1)"
@@ -64,6 +78,7 @@ run_apt_get() {
       return "$exit_code"
     fi
     echo "::warning::apt-get hit a dpkg/apt lock on attempt ${attempt}/${apt_lock_retries}; retrying in ${apt_lock_retry_sleep_secs}s."
+    stop_unattended_upgrades
     sleep "$apt_lock_retry_sleep_secs"
     attempt=$((attempt + 1))
   done

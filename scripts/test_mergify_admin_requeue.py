@@ -1020,6 +1020,41 @@ Failing checks
         self.assertEqual(fake_gh.comments[1], ("owner/repo", 6602, "@mergifyio queue"))
         self.assertTrue(should_poll)
 
+    def test_run_cycle_stack_retarget_rejection_does_not_abort_other_stacks(self):
+        ledger = self.ledger()
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)])
+        stuck = pr(15416, base="stack/old-parent")
+        healthy = pr(15458, latest=None)
+        stacks = (StackGroup("stuck", (stuck,)), StackGroup("healthy", (healthy,)))
+
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+                self.retargets = 0
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def retarget_base(self, repo, pr_number, base):
+                self.retargets += 1
+                error = subprocess.CalledProcessError(1, ["gh", "api", "--method", "PATCH"])
+                error.stderr = (
+                    '{"message":"Validation Failed","errors":[{"message":'
+                    '"Cannot change the base branch because the pull request is part of a stack."}]}'
+                )
+                raise error
+
+        fake_gh = FakeGh()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=stacks, open_pr_numbers_by_head={})):
+                    exec_impl.run_cycle(args)
+                    exec_impl.run_cycle(args)
+        self.assertEqual(fake_gh.retargets, 1)
+        self.assertIn(("owner/repo", 15458, "@mergifyio queue"), fake_gh.comments)
+        reloaded = Ledger(ledger.path)
+        self.assertEqual(reloaded.count("retarget-base-rejected", 15416, HEAD, "stack/old-parent->master"), 1)
+
     def test_run_cycle_attempts_every_independent_stack_in_one_tick(self):
         # Direct regression test for the starvation bug: PR #5933's stuck check
         # used to consume the single action slot every tick, so PR #6951 (a
