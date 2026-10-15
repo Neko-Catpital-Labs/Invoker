@@ -298,7 +298,9 @@ run_suite() {
   local preflight_reason=""
   local preflight_status=0
   local relpath
+  local streamed_file="${log_file}.streamed"
   relpath="$(suite_relpath "$suite")"
+  RUN_SUITE_STATUS=""
 
   preflight_reason="$(suite_preflight "$suite")" || preflight_status=$?
   if [ "$preflight_status" -ne 0 ]; then
@@ -307,7 +309,7 @@ run_suite() {
         echo "======== ${relpath} ========"
         echo "SKIP-UNAVAILABLE: $preflight_reason"
       } > "$log_file"
-      printf 'skipped-unavailable'
+      RUN_SUITE_STATUS="skipped-unavailable"
       return 0
     fi
     {
@@ -321,15 +323,16 @@ run_suite() {
   {
     echo "======== ${relpath} ========"
     bash "$suite"
-  } >"$log_file" 2>&1
-  local suite_status=$?
+  } 2>&1 | tee "$log_file"
+  local suite_status=${PIPESTATUS[0]}
   set -e
+  touch "$streamed_file"
 
   if [ "$suite_status" -ne 0 ]; then
     return "$suite_status"
   fi
 
-  printf 'passed'
+  RUN_SUITE_STATUS="passed"
   return 0
 }
 
@@ -337,7 +340,9 @@ record_and_print_log() {
   local suite="$1"
   local log_file="$2"
   local status="$3"
-  [ -f "$log_file" ] && cat "$log_file"
+  if [ ! -f "${log_file}.streamed" ]; then
+    [ -f "$log_file" ] && cat "$log_file"
+  fi
   echo ""
 
   state_set "$suite" "$status"
@@ -364,7 +369,8 @@ run_suite_serial() {
 
   echo ""
   echo "==> Running $(suite_relpath "$suite")"
-  if status="$(run_suite "$suite" "$log_file")"; then
+  if run_suite "$suite" "$log_file"; then
+    status="$RUN_SUITE_STATUS"
     record_and_print_log "$suite" "$log_file" "$status"
     return 0
   fi
@@ -382,7 +388,7 @@ start_parallel_suite() {
   echo ""
   echo "==> Starting $(suite_relpath "$suite") in parallel"
   (
-    status="$(run_suite "$suite" "$log_file")" && printf '%s' "$status" > "$preflight_file"
+    run_suite "$suite" "$log_file" && printf '%s' "$RUN_SUITE_STATUS" > "$preflight_file"
   ) &
   pid=$!
   JOB_SUITE["$pid"]="$suite"

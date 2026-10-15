@@ -1200,11 +1200,8 @@ export function installSetupBundledSkills(
 
   const registerHarnesses = installOptions.registerHarnesses === true;
   try {
-    printBundledSkillsResult(
-      io,
-      install({ isPackaged: false, repoRoot }, 'install', 'all', { registerHarnesses }),
-      registerHarnesses,
-    );
+    const status = install({ isPackaged: false, repoRoot }, 'install', 'all', { registerHarnesses });
+    printBundledSkillsResult(io, status, status.harnessesRegistered === true);
   } catch (error) {
     io.print(`Skills: install skipped — ${formatCaughtException(error)}`);
   }
