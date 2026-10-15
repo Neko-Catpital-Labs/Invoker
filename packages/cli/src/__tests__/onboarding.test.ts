@@ -214,7 +214,7 @@ describe('runSetup', () => {
     }
   });
 
-  it.fails('installs bundled skills as part of setup and reports the result', async () => {
+  it('installs bundled skills as part of setup and reports the result', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-'));
     const saved = { HOME: process.env.HOME };
     const lines: string[] = [];
@@ -248,7 +248,7 @@ describe('runSetup', () => {
     }
   });
 
-  it.fails('prints a one-line MCP skip and still reports installed skills', async () => {
+  it('prints a one-line MCP skip and still reports installed skills', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-skip-'));
     const saved = { HOME: process.env.HOME };
     const lines: string[] = [];
@@ -285,7 +285,7 @@ describe('runSetup', () => {
     }
   });
 
-  it.fails('falls back to skills bundled next to the running binary when not in a checkout', async () => {
+  it('falls back to skills bundled next to the running binary when not in a checkout', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-skills-standalone-'));
     const saved = { HOME: process.env.HOME };
     const lines: string[] = [];

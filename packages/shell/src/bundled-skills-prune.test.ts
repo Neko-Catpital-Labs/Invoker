@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe('installBundledSkills pruning', () => {
-  it.fails('removes a dropped bundled skill from harness targets while preserving non-prefixed folders', () => {
+  it('removes a dropped bundled skill from harness targets while preserving non-prefixed folders', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const fakeHome = makeTempRoot('invoker-bundled-fakehome-');
@@ -77,7 +77,7 @@ describe('installBundledSkills pruning', () => {
     }
   });
 
-  it.fails('keeps a still-bundled optimization skill during a core-filtered reinstall', () => {
+  it('keeps a still-bundled optimization skill during a core-filtered reinstall', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const fakeHome = makeTempRoot('invoker-bundled-fakehome-');
@@ -101,7 +101,7 @@ describe('installBundledSkills pruning', () => {
     }
   });
 
-  it.fails('installs from the legacy source skills tree when corpus skills are absent', () => {
+  it('installs from the legacy source skills tree when corpus skills are absent', () => {
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const fakeHome = makeTempRoot('invoker-bundled-fakehome-');
