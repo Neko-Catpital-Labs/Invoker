@@ -72,9 +72,7 @@ export interface WorktreeExecutorConfig {
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
   /** Optional dependency/bootstrap command run before the task command in local worktrees. */
   provisionCommand?: string;
-  /** Invoker home root used for ENOSPC provisioning recovery cleanup. */
   invokerHome?: string;
-  /** Test seam for local disk cleanup. Defaults to cleanupLocalInvokerHome. */
   cleanupLocalDisk?: typeof defaultCleanupLocalInvokerHome;
   /**
    * Per-repo override for `provisionCommand`, keyed by `repoUrl` (normalized —
@@ -1018,15 +1016,17 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       const workflowId = `active-worktree-${index}`;
       index += 1;
       workflows.push({ id: workflowId, repoUrl: entry.request.inputs.repoUrl });
-      tasksByWorkflowId.set(workflowId, [{
+      const activeTask: TaskState = {
         id: entry.request.actionId,
         description: entry.request.inputs.description ?? entry.request.actionId,
         status: 'pending',
-        dependencies: [],
+        dependencies: [] as readonly string[],
         createdAt: new Date(),
         config: {} as TaskState['config'],
         execution: { workspacePath: entry.worktreeDir },
-      } as TaskState]);
+        taskStateVersion: 1,
+      };
+      tasksByWorkflowId.set(workflowId, [activeTask]);
     }
     return {
       listWorkflows: () => workflows,
