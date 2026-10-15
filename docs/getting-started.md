@@ -26,7 +26,7 @@ Install, configure, and run Invoker. For the product overview, see the [README](
 
 ## Installation
 
-**Recommended (packaged):** Node.js 26.x required. One command installs `invoker-cli` + `invoker-ui`, runs `doctor --fix`, installs first-party helper skills under `~/.invoker`, and enables `pr-status` / `autofix` / `auto-approve`. It does not wire harness MCP/skills, Slack tokens, or remote machines by default.
+**Recommended (packaged):** Node.js 26.x required. One command installs `invoker-cli` + `invoker-ui`, runs `doctor --fix`, and enables `pr-status` / `autofix` / `auto-approve`. It does not install harness skills/MCP, Slack tokens, or remote machines.
 
 ```bash
 npx @neko-catpital-labs/invoker-cli@latest install
@@ -78,7 +78,7 @@ invoker-cli install
 invoker-cli run plans/fixtures/hello-world.yaml --standalone
 ```
 
-`invoker-cli install` installs the first-party Invoker AI helper skills under `~/.invoker`, writes an MCP snippet at `~/.invoker/mcp-servers/invoker.json`, and enables default workers (`pr-status`, `autofix`, `auto-approve`). It does **not** modify Cursor / Claude / Codex / OMP configs by default, and it skips Slack/machines. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in without a prompt (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
+`invoker-cli install` enables default workers (`pr-status`, `autofix`, `auto-approve`). It does **not** install skills under `~/.invoker` or modify Cursor / Claude / Codex / OMP configs by default, and it skips Slack/machines. Interactive `invoker-cli setup` asks whether to wire those harnesses (default No); pass `--register-harnesses` to opt in without a prompt (`--yes` alone does not register). Setup still walks Slack and machines when you want them.
 
 To remove what install/setup added:
 
@@ -166,9 +166,9 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-`invoker-cli install` (and interactive `invoker-cli setup`) installs the first-party Invoker AI helper skills under `~/.invoker`. Packaged installs also bundle those helpers inside the app. Run setup (or System Setup in the desktop app) to optionally register harness MCP/skills (`--register-harnesses` or answer yes to the prompt) and to configure Slack / remote machines.
+Packaged installs bundle the first-party Invoker AI helpers inside the app. `invoker-cli install` does not write those helpers under `~/.invoker` by default. Run setup (or System Setup in the desktop app) to register harness MCP/skills (`--register-harnesses` or answer yes to the prompt) and to configure Slack / remote machines.
 
-Then, in Codex, Claude, Cursor, or OMP (after harness registration or a manual snippet merge), ask in normal chat to plan and run durable work through Invoker. `invoker-chat-submit` plus MCP review/submit/status tools prepare a review, wait for one approval, submit, and watch without a slash command.
+Then, in Codex, Claude, Cursor, or OMP (after harness registration), ask in normal chat to plan and run durable work through Invoker. `invoker-chat-submit` plus MCP review/submit/status tools prepare a review, wait for one approval, submit, and watch without a slash command.
 
 Explicit fallback:
 

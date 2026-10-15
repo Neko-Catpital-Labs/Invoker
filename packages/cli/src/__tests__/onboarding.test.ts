@@ -240,8 +240,7 @@ describe('runSetup', () => {
 
       expect(code).toBe(0);
       const output = lines.join('\n');
-      expect(output).toContain('Skills: installed 2 bundled skill(s) under Invoker home (Claude).');
-      expect(output).toContain('Skills MCP: wrote Invoker MCP snippet only (no Cursor/Claude/Codex/OMP config changes).');
+      expect(output).toContain('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
       expect(output).toContain('Harness MCP/skills stay opt-in');
     } finally {
       restoreEnv('HOME', saved.HOME);
@@ -276,10 +275,8 @@ describe('runSetup', () => {
 
       expect(code).toBe(0);
       const output = lines.join('\n');
-      expect(output).toContain('Skills: installed 1 bundled skill(s) under Invoker home (Claude).');
-      expect(output).toContain('Skills MCP: wrote Invoker MCP snippet only (no Cursor/Claude/Codex/OMP config changes).');
+      expect(output).toContain('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
       expect(output).toContain('Skills: install note — Invalid MCP config at /Users/me/.cursor/mcp.json: expected a JSON object');
-      expect(output).not.toContain('Skills MCP: skipped');
       expect(output).not.toContain('at installBundledSkills');
       expect(output).not.toContain('Skills: install skipped');
     } finally {
@@ -314,7 +311,7 @@ describe('runSetup', () => {
       }));
 
       expect(code).toBe(0);
-      expect(lines.join('\n')).toContain('Skills: installed 1 bundled skill(s) under Invoker home (Claude).');
+      expect(lines.join('\n')).toContain('Skills: harness registration skipped (no Cursor/Claude/Codex/OMP skill or MCP changes).');
     } finally {
       restoreEnv('HOME', saved.HOME);
       rmSync(home, { recursive: true, force: true });
