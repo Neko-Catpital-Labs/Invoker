@@ -356,6 +356,7 @@ export class GitLabMergeGateProvider implements ForgeProvider {
         'api',
         '--method', 'POST',
         `projects/${encodeURIComponent(project)}/merge_requests`,
+        '-H', 'Content-Type: application/json',
         '--input', bodyPath,
       ], cwd);
       const created = JSON.parse(stdout) as { web_url?: string; iid: number };
@@ -382,6 +383,7 @@ export class GitLabMergeGateProvider implements ForgeProvider {
         'api',
         '--method', 'PUT',
         `projects/${encodeURIComponent(project)}/merge_requests/${iid}`,
+        '-H', 'Content-Type: application/json',
         '--input', bodyPath,
       ], cwd);
     } finally {
