@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SQLiteAdapter, type WorkflowSaveInput } from '@invoker/data-store';
+import { readInvokerConfigFile, writeInvokerConfigFile } from '@invoker/contracts';
 import { LocalBus } from '@invoker/transport';
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -47,14 +48,20 @@ function workflow(id: string, name: string, createdAt: string): WorkflowSaveInpu
   };
 }
 
-function task(workflowId: string, id: string, status: TaskStatus, description: string): TaskState {
+function task(
+  workflowId: string,
+  id: string,
+  status: TaskStatus,
+  description: string,
+  config: Partial<TaskState['config']> = {},
+): TaskState {
   return {
     id,
     description,
     status,
     dependencies: [],
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
-    config: { workflowId },
+    config: { workflowId, ...config },
     execution: {},
     taskStateVersion: 1,
   };
@@ -80,6 +87,7 @@ async function seedDb(dbDir: string): Promise<void> {
 
 describe('invoker-cli query', () => {
   const previousInvokerDbDir = process.env.INVOKER_DB_DIR;
+  const previousInvokerRepoConfigPath = process.env.INVOKER_REPO_CONFIG_PATH;
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -90,6 +98,11 @@ describe('invoker-cli query', () => {
       delete process.env.INVOKER_DB_DIR;
     } else {
       process.env.INVOKER_DB_DIR = previousInvokerDbDir;
+    }
+    if (previousInvokerRepoConfigPath === undefined) {
+      delete process.env.INVOKER_REPO_CONFIG_PATH;
+    } else {
+      process.env.INVOKER_REPO_CONFIG_PATH = previousInvokerRepoConfigPath;
     }
   });
 
@@ -179,6 +192,164 @@ describe('invoker-cli query', () => {
         config: expect.objectContaining({ workflowId: 'wf-env' }),
       }),
     ]);
+    output.restore();
+  });
+
+  it('shows forceExecution pool and agent in standalone task query output without writing over the stored pin', async () => {
+    const dbDir = makeTempDir('invoker-cli-query-force-');
+    const configDir = makeTempDir('invoker-cli-query-force-config-');
+    const configPath = join(configDir, 'config.json');
+    process.env.INVOKER_DB_DIR = dbDir;
+    process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+    writeInvokerConfigFile(configPath, {
+      forceExecution: { poolId: 'local-worktree', executionAgent: 'claude' },
+    });
+
+    const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
+      ownerCapability: true,
+      outputDir: join(dbDir, 'outputs'),
+      slowQueryThresholdMs: 0,
+    });
+    try {
+      persistence.saveWorkflow(workflow('wf-force', 'Force workflow', '2026-01-01T00:00:00.000Z'));
+      persistence.saveTask('wf-force', task(
+        'wf-force',
+        'wf-force/task-forced',
+        'pending',
+        'Pinned elsewhere',
+        { runnerKind: 'ssh', poolId: 'mixed-local-ssh', executionAgent: 'codex' },
+      ));
+    } finally {
+      persistence.close();
+    }
+
+    const output = captureProcessOutput();
+    const code = await main(
+      ['query', 'tasks', '--workflow', 'wf-force', '--output', 'json', '--standalone'],
+      { createMessageBus: () => new LocalBus() },
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual([
+      expect.objectContaining({
+        id: 'wf-force/task-forced',
+        config: expect.objectContaining({
+          runnerKind: 'ssh',
+          poolId: 'local-worktree',
+          executionAgent: 'claude',
+        }),
+      }),
+    ]);
+    output.restore();
+
+    const readback = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
+      readOnly: true,
+      outputDir: join(dbDir, 'outputs'),
+      slowQueryThresholdMs: 0,
+    });
+    try {
+      const stored = readback.loadWorkflowTaskSnapshot().tasks.find((item) => item.id === 'wf-force/task-forced');
+      expect(stored?.config).toEqual(expect.objectContaining({
+        runnerKind: 'ssh',
+        poolId: 'mixed-local-ssh',
+        executionAgent: 'codex',
+      }));
+    } finally {
+      readback.close();
+    }
+  });
+
+  it('reports stored pool and agent in standalone task query output when forceExecution is absent', async () => {
+    const dbDir = makeTempDir('invoker-cli-query-no-force-');
+    const configDir = makeTempDir('invoker-cli-query-no-force-config-');
+    const configPath = join(configDir, 'config.json');
+    process.env.INVOKER_DB_DIR = dbDir;
+    process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+    writeInvokerConfigFile(configPath, {});
+
+    const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
+      ownerCapability: true,
+      outputDir: join(dbDir, 'outputs'),
+      slowQueryThresholdMs: 0,
+    });
+    try {
+      persistence.saveWorkflow(workflow('wf-force', 'Force workflow', '2026-01-01T00:00:00.000Z'));
+      persistence.saveTask('wf-force', task(
+        'wf-force',
+        'wf-force/task-stored',
+        'pending',
+        'Pinned elsewhere',
+        { runnerKind: 'ssh', poolId: 'mixed-local-ssh', executionAgent: 'codex' },
+      ));
+    } finally {
+      persistence.close();
+    }
+
+    const output = captureProcessOutput();
+    const code = await main(
+      ['query', 'tasks', '--workflow', 'wf-force', '--output', 'json', '--standalone'],
+      { createMessageBus: () => new LocalBus() },
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual([
+      expect.objectContaining({
+        id: 'wf-force/task-stored',
+        config: expect.objectContaining({
+          runnerKind: 'ssh',
+          poolId: 'mixed-local-ssh',
+          executionAgent: 'codex',
+        }),
+      }),
+    ]);
+    output.restore();
+    expect(readInvokerConfigFile(configPath)).toEqual({});
+  });
+
+  it('does not report the forced pool for scratch, docker, and merge tasks while forcing the agent', async () => {
+    const dbDir = makeTempDir('invoker-cli-query-force-exempt-');
+    const configDir = makeTempDir('invoker-cli-query-force-exempt-config-');
+    const configPath = join(configDir, 'config.json');
+    process.env.INVOKER_DB_DIR = dbDir;
+    process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+    writeInvokerConfigFile(configPath, {
+      forceExecution: { poolId: 'local-worktree', executionAgent: 'claude' },
+    });
+
+    const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
+      ownerCapability: true,
+      outputDir: join(dbDir, 'outputs'),
+      slowQueryThresholdMs: 0,
+    });
+    try {
+      persistence.saveWorkflow(workflow('wf-force-exempt', 'Force exempt workflow', '2026-01-01T00:00:00.000Z'));
+      for (const runnerKind of ['scratch', 'docker', 'merge'] as const) {
+        persistence.saveTask('wf-force-exempt', task(
+          'wf-force-exempt',
+          `wf-force-exempt/task-${runnerKind}`,
+          'pending',
+          `${runnerKind} task`,
+          { runnerKind, poolId: `stored-${runnerKind}`, executionAgent: 'codex' },
+        ));
+      }
+    } finally {
+      persistence.close();
+    }
+
+    const output = captureProcessOutput();
+    const code = await main(
+      ['query', 'tasks', '--workflow', 'wf-force-exempt', '--output', 'json', '--standalone'],
+      { createMessageBus: () => new LocalBus() },
+    );
+
+    expect(code).toBe(0);
+    const rows = JSON.parse(output.stdout) as Array<{ id: string; config: Record<string, unknown> }>;
+    expect(rows.map((row) => row.config)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runnerKind: 'scratch', executionAgent: 'claude' }),
+      expect.objectContaining({ runnerKind: 'docker', executionAgent: 'claude' }),
+      expect.objectContaining({ runnerKind: 'merge', executionAgent: 'claude' }),
+    ]));
+    expect(rows.every((row) => row.config.poolId !== 'local-worktree')).toBe(true);
     output.restore();
   });
 
