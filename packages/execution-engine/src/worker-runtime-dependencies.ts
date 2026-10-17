@@ -87,6 +87,7 @@ export interface WorkerRuntimeDependencies {
   reviewGate?: PrStatusReviewGate;
   /** Provider IO surface for workers that need to update published reviews. */
   mergeGateProvider?: MergeGateProvider;
+  reviewProviderRegistry?: import('./review-provider-registry.js').ReviewProviderRegistry;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** Requeue worker tuning (stall requeue budget / backoff). */
