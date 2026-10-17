@@ -1039,8 +1039,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       tasksByWorkflowId.set(workflowId, [activeTask]);
     }
     return {
-      listWorkflows: () => [...persisted.listWorkflows(), ...workflows],
-      loadTasks: (workflowId) => tasksByWorkflowId.get(workflowId) ?? persisted.loadTasks(workflowId),
+      listWorkflows: () => {
+        const persistedWorkflows = persisted.listWorkflows();
+        const persistedIds = new Set(persistedWorkflows.map((workflow) => workflow.id));
+        return [...persistedWorkflows, ...workflows.filter((workflow) => !persistedIds.has(workflow.id))];
+      },
+      loadTasks: (workflowId) => [
+        ...persisted.loadTasks(workflowId),
+        ...(tasksByWorkflowId.get(workflowId) ?? []),
+      ],
     };
   }
 }

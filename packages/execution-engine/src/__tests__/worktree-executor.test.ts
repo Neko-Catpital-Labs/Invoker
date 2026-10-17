@@ -490,8 +490,8 @@ describe('WorktreeExecutor', () => {
       invokerHome: '/fake/invoker',
       cleanupLocalDisk,
       diskCleanupStore: {
-        listWorkflows: () => [{ id: 'wf-other-executor' }],
-        loadTasks: (workflowId: string) => workflowId === 'wf-other-executor'
+        listWorkflows: () => [{ id: 'active-worktree-0' }],
+        loadTasks: (workflowId: string) => workflowId === 'active-worktree-0'
           ? [{
             id: 'other-task',
             description: 'other',
