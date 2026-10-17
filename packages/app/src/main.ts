@@ -1033,6 +1033,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
       invokerHome: invokerHomeRoot,
+      diskCleanupStore: persistence,
       maxWorktrees: effectiveMaxConcurrency,
       agentRegistry: executionAgentRegistry,
     }),

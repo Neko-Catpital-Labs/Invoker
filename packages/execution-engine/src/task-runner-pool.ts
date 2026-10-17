@@ -811,6 +811,7 @@ export function selectExecutor(
         worktreeBaseDir: resolve(invokerHome, 'worktrees'),
         cacheDir: resolve(invokerHome, 'repos'),
         invokerHome,
+        diskCleanupStore: host.persistence,
         maxWorktrees: host.maxWorktreesPerRepo,
         agentRegistry: host.executionAgentRegistry,
         provisionCommand: selectedWorktreeTarget?.provisionCommand,

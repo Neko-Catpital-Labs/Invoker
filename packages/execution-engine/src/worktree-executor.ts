@@ -74,6 +74,7 @@ export interface WorktreeExecutorConfig {
   provisionCommand?: string;
   invokerHome?: string;
   cleanupLocalDisk?: typeof defaultCleanupLocalInvokerHome;
+  diskCleanupStore?: DiskHeadroomWorkerStore;
   /**
    * Per-repo override for `provisionCommand`, keyed by `repoUrl` (normalized —
    * see `normalizeRepoUrlForProvisionLookup`). A workflow whose `repoUrl` has
@@ -128,13 +129,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private readonly secretsFile: string | undefined;
   private readonly invokerHome: string | undefined;
   private readonly cleanupLocalDisk: typeof defaultCleanupLocalInvokerHome;
+  private readonly diskCleanupStore: DiskHeadroomWorkerStore | undefined;
   private pool: RepoPool;
   constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
-    this.invokerHome = config.invokerHome;
+    this.invokerHome = config.invokerHome === undefined ? undefined : resolve(config.invokerHome);
     this.cleanupLocalDisk = config.cleanupLocalDisk ?? defaultCleanupLocalInvokerHome;
+    this.diskCleanupStore = config.diskCleanupStore;
     this.secretsFile = config.secretsFile
       ?? (existsSync(join(homedir(), '.config', 'invoker', 'secrets.env'))
         ? join(homedir(), '.config', 'invoker', 'secrets.env')
@@ -971,6 +974,13 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       );
       return false;
     }
+    if (!this.diskCleanupStore) {
+      this.emitOutput(
+        executionId,
+        '[worktree] Provisioning failed with ENOSPC, but no task store was configured to protect other executors\' worktrees; skipping cleanup retry.\n',
+      );
+      return false;
+    }
     if (!resolveDiskCleanupEnabled()) {
       this.emitOutput(
         executionId,
@@ -987,7 +997,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       const result = await this.cleanupLocalDisk({
         invokerHome: this.invokerHome,
         targetKey: `local ${this.invokerHome}`,
-        store: this.buildActiveEntryDiskCleanupStore(),
+        store: this.buildDiskCleanupStore(this.diskCleanupStore),
       });
       startup?.check();
       this.emitOutput(
@@ -1007,7 +1017,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
   }
 
-  private buildActiveEntryDiskCleanupStore(): DiskHeadroomWorkerStore {
+  private buildDiskCleanupStore(persisted: DiskHeadroomWorkerStore): DiskHeadroomWorkerStore {
     const workflows: Array<{ id: string; repoUrl?: string }> = [];
     const tasksByWorkflowId = new Map<string, TaskState[]>();
     let index = 0;
@@ -1029,8 +1039,8 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       tasksByWorkflowId.set(workflowId, [activeTask]);
     }
     return {
-      listWorkflows: () => workflows,
-      loadTasks: (workflowId) => tasksByWorkflowId.get(workflowId) ?? [],
+      listWorkflows: () => [...persisted.listWorkflows(), ...workflows],
+      loadTasks: (workflowId) => tasksByWorkflowId.get(workflowId) ?? persisted.loadTasks(workflowId),
     };
   }
 }
