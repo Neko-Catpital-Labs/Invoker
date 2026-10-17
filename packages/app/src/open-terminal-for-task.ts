@@ -246,6 +246,7 @@ export function resolveTaskTerminalSpec(
       const worktree = new WorktreeExecutor({
         worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
         cacheDir: path.resolve(invokerHome, 'repos'),
+        invokerHome,
         maxWorktrees,
         agentRegistry: opts.executionAgentRegistry,
         secretsFile: resolveSecretsFilePath(loadConfig()),
