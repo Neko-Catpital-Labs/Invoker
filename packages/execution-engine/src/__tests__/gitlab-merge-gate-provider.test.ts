@@ -86,6 +86,11 @@ describe('GitLabMergeGateProvider', () => {
       ['push', '--force', '--', 'origin', 'feature/x:refs/heads/feature/x'],
       expect.objectContaining({ cwd: '/tmp/repo' }),
     );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'glab',
+      expect.arrayContaining(['--method', 'POST', '-H', 'Content-Type: application/json']),
+      expect.objectContaining({ cwd: '/tmp/repo' }),
+    );
   });
 
   it('refuses to push a feature branch that looks like a git option', async () => {
