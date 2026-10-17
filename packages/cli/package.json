@@ -1,6 +1,6 @@
 {
   "name": "@invoker/cli",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "description": "Standalone Invoker command-line runner",
   "type": "module",
   "main": "src/index.ts",
