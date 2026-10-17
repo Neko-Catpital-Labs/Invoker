@@ -256,9 +256,8 @@ export async function pollMergeGateTask(
 ): Promise<void> {
   const artifacts = getCurrentRequiredReviewArtifacts(task);
   if (artifacts.length === 0) return;
-  const workflow = task.config.workflowId
-    ? host.persistence.loadWorkflow?.(task.config.workflowId)
-    : undefined;
+  const workflowId = task.config?.workflowId;
+  const workflow = workflowId ? host.persistence.loadWorkflow?.(workflowId) : undefined;
 
   host.orchestrator.recordTaskHeartbeat?.(task.id, { at: new Date(), source: 'executor' });
 
