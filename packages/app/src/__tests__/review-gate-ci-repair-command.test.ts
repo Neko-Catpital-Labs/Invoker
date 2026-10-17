@@ -8,7 +8,7 @@ import {
   type MergeGateApprovalStatus,
 } from '@invoker/execution-engine';
 
-import { repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
+import { parseReviewGatePrNumber, repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
 
 const logger = {
   debug: vi.fn(),
@@ -187,5 +187,21 @@ describe('repairReviewGateCiByPr', () => {
 
     expect(result).toMatchObject({ status: 'skipped', reason: 'checks-not-failing', prNumber: '123' });
     expect(submit).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseReviewGatePrNumber', () => {
+  it('parses a GitHub pull URL', () => {
+    expect(parseReviewGatePrNumber('https://github.com/acme/widgets/pull/12')).toBe('12');
+  });
+
+  it('parses a GitLab merge request URL', () => {
+    expect(
+      parseReviewGatePrNumber('https://gitlab.com/Group/Sub/Project/-/merge_requests/7'),
+    ).toBe('7');
+  });
+
+  it('parses a bare number', () => {
+    expect(parseReviewGatePrNumber('42')).toBe('42');
   });
 });

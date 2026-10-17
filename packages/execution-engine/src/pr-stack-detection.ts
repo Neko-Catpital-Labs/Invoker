@@ -157,11 +157,36 @@ export interface FetchOpenStackPrsOptions {
   readonly exec?: (cmd: string, args: string[], cwd: string) => Promise<string>;
 }
 
-/** Live-fetch adapter: lists open PRs via `gh pr list` (same fields
- *  land-stack.mjs and github-merge-gate-provider.ts already consume) for
- *  detectStack to walk. Kept separate from detectStack so the linkage
- *  algorithm stays pure and unit-testable without any `gh` calls. */
-export async function fetchOpenStackPrs(options: FetchOpenStackPrsOptions): Promise<StackPrRecord[]> {
+export interface FetchOpenStackPrsOptionsWithProvider extends FetchOpenStackPrsOptions {
+  readonly listOpenReviews?: (opts: {
+    projectPath: string;
+    cwd: string;
+  }) => Promise<readonly {
+    number: number;
+    state: string;
+    baseRefName: string;
+    headRefName: string;
+    headRefOid: string;
+  }[]>;
+}
+
+export async function fetchOpenStackPrs(
+  options: FetchOpenStackPrsOptionsWithProvider,
+): Promise<StackPrRecord[]> {
+  if (options.listOpenReviews) {
+    const rows = await options.listOpenReviews({
+      projectPath: options.repo,
+      cwd: options.cwd,
+    });
+    return rows.map((row) => ({
+      number: row.number,
+      state: row.state === 'opened' ? 'OPEN' : row.state,
+      baseRefName: row.baseRefName,
+      headRefName: row.headRefName,
+      headRefOid: row.headRefOid,
+    }));
+  }
+
   const exec = options.exec ?? execGh;
   const stdout = await retryTransientGitHubCli(() => exec('gh', [
     'pr', 'list',
