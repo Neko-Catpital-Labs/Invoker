@@ -4,12 +4,19 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
+skill_path() {
+  if [[ -e "$REPO_ROOT/corpus/skills/$1" ]]; then
+    echo "$REPO_ROOT/corpus/skills/$1"
+  else
+    echo "$REPO_ROOT/skills/$1"
+  fi
+}
+SKILL_DIR="$(skill_path plan-to-invoker)"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
-REVIEW_COMPRESSION_SKILL="$REPO_ROOT/skills/review-compression/SKILL.md"
-MAKE_PR_SKILL="$REPO_ROOT/skills/make-pr/SKILL.md"
+REVIEW_COMPRESSION_SKILL="$(skill_path review-compression/SKILL.md)"
+MAKE_PR_SKILL="$(skill_path make-pr/SKILL.md)"
 SAFETY_INVARIANT_RULE="$REPO_ROOT/.cursor/rules/plan-safety-invariant.mdc"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
@@ -244,7 +251,7 @@ must_contain "$SKILL_MD" "Schema-only validation or ad hoc individual script che
 must_contain "$SKILL_MD" "Individual validator scripts remain fallback diagnostics only" "SKILL must preserve fallback diagnostics"
 must_contain "$SKILL_MD" "lint-review-units.mjs" "SKILL must document review-unit lint enforcement"
 
-DOCTOR_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/skill-doctor.sh"
+DOCTOR_SCRIPT="$SKILL_DIR/scripts/skill-doctor.sh"
 DOCTOR_HELP="$(bash "$DOCTOR_SCRIPT" --help)"
 must_output_contain "$DOCTOR_HELP" "skill-doctor.sh: Deterministic orchestrator for plan validation scripts" "skill-doctor --help must expose the deterministic command contract"
 must_output_contain "$DOCTOR_HELP" "Usage: bash skill-doctor.sh [OPTIONS] <plan-file>" "skill-doctor --help must expose usage"
@@ -269,9 +276,9 @@ must_output_contain "$DOCTOR_HELP" "Output: JSON summary of all checks with pass
 STANDALONE_INSTALL_DIR="$(mktemp -d)"
 STANDALONE_INVOKER_HOME="$(mktemp -d)"
 trap 'rm -rf "$STANDALONE_INSTALL_DIR" "$STANDALONE_INVOKER_HOME"' EXIT
-cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.sh "$REPO_ROOT"/skills/plan-to-invoker/scripts/*.mjs "$STANDALONE_INSTALL_DIR/"
+cp "$SKILL_DIR"/scripts/*.sh "$SKILL_DIR"/scripts/*.mjs "$STANDALONE_INSTALL_DIR/"
 mkdir -p "$STANDALONE_INSTALL_DIR/vendor"
-cp "$REPO_ROOT"/skills/plan-to-invoker/scripts/vendor/*.mjs "$STANDALONE_INSTALL_DIR/vendor/"
+cp "$SKILL_DIR"/scripts/vendor/*.mjs "$STANDALONE_INSTALL_DIR/vendor/"
 STANDALONE_DOCTOR="$STANDALONE_INSTALL_DIR/skill-doctor.sh"
 STANDALONE_FIXTURE="$POSITIVE_FIXTURE_DIR/02-feature-implementation.yaml"
 
@@ -433,7 +440,7 @@ must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level cover
 must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-context prompt framing for implementation tasks"
 
 # Submit — pilot one head before fan-out, show the plan, one Recommended option
-CHAT_SUBMIT_SKILL="$REPO_ROOT/skills/chat-submit/SKILL.md"
+CHAT_SUBMIT_SKILL="$(skill_path chat-submit/SKILL.md)"
 must_contain "$SKILL_MD" "Pilot one head before fan-out" "SKILL handoff mode must pilot one head before submitting the rest of a chain"
 must_contain "$SKILL_MD" 'submit ONE head workflow first' "SKILL handoff mode must submit one head first for N>1 template-derived workflows"
 must_contain "$SKILL_MD" 'reaches `running` with an agent session' "SKILL handoff mode must gate fan-out on a running implement task with an agent session"
@@ -527,7 +534,7 @@ fi
 # Run validator regression tests
 echo ""
 echo "Running plan validator regression tests..."
-VALIDATOR_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-validate-plan.sh"
+VALIDATOR_TEST_SCRIPT="$SKILL_DIR/scripts/test-validate-plan.sh"
 if [[ -f "$VALIDATOR_TEST_SCRIPT" ]]; then
   if ! bash "$VALIDATOR_TEST_SCRIPT"; then
     fail "Plan validator regression tests failed"
@@ -539,7 +546,7 @@ fi
 # Run fixture tests
 echo ""
 echo "Running plan-to-invoker fixture tests..."
-FIXTURES_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-fixtures.sh"
+FIXTURES_TEST_SCRIPT="$SKILL_DIR/scripts/test-fixtures.sh"
 if [[ -f "$FIXTURES_TEST_SCRIPT" ]]; then
   if ! bash "$FIXTURES_TEST_SCRIPT"; then
     fail "Plan-to-invoker fixture tests failed"
@@ -550,7 +557,7 @@ fi
 
 echo ""
 echo "Running policy coverage regression tests..."
-POLICY_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-policy-coverage.sh"
+POLICY_TEST_SCRIPT="$SKILL_DIR/scripts/test-policy-coverage.sh"
 if [[ -f "$POLICY_TEST_SCRIPT" ]]; then
   if ! bash "$POLICY_TEST_SCRIPT"; then
     fail "Policy coverage regression tests failed"

@@ -892,6 +892,27 @@ const prAuthoringPolicyErrors = await validatePrBody(validMinimal.replace('- beh
 });
 assert(prAuthoringPolicyErrors.length === 0, 'PR authoring docs and template files should stay in tooling-policy');
 
+const corpusPrAuthoringPolicyErrors = await validatePrBody(validMinimal.replace('- behavior', '- policy').replace('- routing', '- tooling-policy'), {
+  changedFiles: [
+    'corpus/skills/make-pr/SKILL.md',
+    'corpus/skills/plan-to-invoker/scripts/validate-plan.mjs',
+    'scripts/pr-body-template.md',
+    'scripts/create-pr.mjs',
+  ],
+});
+assert(corpusPrAuthoringPolicyErrors.length === 0, 'PR authoring skill files under corpus/skills should stay in tooling-policy');
+
+const corpusDocsSkillPolicyErrors = await validatePrBody(validMinimal.replace('- behavior', '- policy').replace('- routing', '- tooling-policy'), {
+  changedFiles: [
+    'corpus/skills/verify/control-invoker.mjs',
+    'scripts/test-suites/required/14-verify-catalog-check.sh',
+  ],
+});
+assert(
+  corpusDocsSkillPolicyErrors.some((error) => error.includes('Review Unit "tooling-policy" cannot ship with docs files')),
+  'a non-policy skill file under corpus/skills is a docs unit even when it is not markdown',
+);
+
 const behaviorScopeErrors = await validatePrBody(validMinimal, {
   changedFiles: [
     'packages/app/src/main.ts',
@@ -937,6 +958,15 @@ assert(
   docsScopeErrors.some((error) => error.includes('Review lane docs cannot ship with policy files')),
   'docs lane should reject policy/tooling files in the same PR',
 );
+
+const corpusDocsScopeErrors = await validatePrBody(validMinimal.replace('- behavior', '- docs').replace('- routing', '- docs'), {
+  changedFiles: [
+    'corpus/skills/verify/SKILL.md',
+    'corpus/skills/verify/control-invoker.mjs',
+    'corpus/skills/invoker-ops/SKILL.md',
+  ],
+});
+assert(corpusDocsScopeErrors.length === 0, 'non-policy skill files under corpus/skills ship as one docs slice');
 const proofToolingPolicyBody = validMinimal.replace('- behavior', '- proof').replace('- routing', '- proof');
 const proofToolingPolicyFiles = [
   '.github/workflows/ci.yml',
