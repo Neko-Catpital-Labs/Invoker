@@ -267,7 +267,10 @@ export async function pollMergeGateTask(
     const providerId = artifact.providerId;
     if (!providerId) continue;
     const gateCwd = task.execution.workspacePath ?? host.cwd;
-    const mergeGateProvider = resolveForgeProvider({
+    const recordedProvider = artifact.provider
+      ? host.reviewProviderRegistry?.get(artifact.provider)
+      : undefined;
+    const mergeGateProvider = recordedProvider ?? resolveForgeProvider({
       reviewProviderRegistry: host.reviewProviderRegistry,
       mergeGateProvider: host.mergeGateProvider,
       repoUrl: workflow?.repoUrl,
