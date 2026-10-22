@@ -2,4 +2,6 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO_ROOT"
-node skills/verify/control-invoker.mjs catalog --check
+CONTROL_INVOKER="skills/verify/control-invoker.mjs"
+[[ -f "corpus/skills/verify/control-invoker.mjs" ]] && CONTROL_INVOKER="corpus/skills/verify/control-invoker.mjs"
+node "$CONTROL_INVOKER" catalog --check
