@@ -360,7 +360,8 @@ export async function maybePublishReviewGateCiFailure(
   reviewId: string = task.execution.reviewId ?? '',
 ): Promise<void> {
   if (!host.reviewGateCiFailurePublisher) return;
-  if (!task.config.workflowId || !reviewId) return;
+  const workflowId = task.config?.workflowId;
+  if (!workflowId || !reviewId) return;
   if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
 
   const key = [
@@ -375,7 +376,7 @@ export async function maybePublishReviewGateCiFailure(
   try {
     await host.reviewGateCiFailurePublisher.publish({
       taskId: task.id,
-      workflowId: task.config.workflowId,
+      workflowId,
       reviewId,
       reviewUrl: status.url,
       headSha: status.headSha,
@@ -398,7 +399,8 @@ export async function maybePublishReviewGateMergeConflict(
   reviewId: string = task.execution.reviewId ?? '',
 ): Promise<void> {
   if (!host.reviewGateMergeConflictPublisher) return;
-  if (!task.config.workflowId || !reviewId) return;
+  const workflowId = task.config?.workflowId;
+  if (!workflowId || !reviewId) return;
   if (!status.hasMergeConflict && status.mergeState !== 'dirty') return;
 
   const key = [
@@ -413,7 +415,7 @@ export async function maybePublishReviewGateMergeConflict(
   try {
     await host.reviewGateMergeConflictPublisher.publish({
       taskId: task.id,
-      workflowId: task.config.workflowId,
+      workflowId,
       status: task.status,
       taskStateVersion: task.taskStateVersion,
       reviewId,
