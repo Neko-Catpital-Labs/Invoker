@@ -109,8 +109,7 @@ function resolveReviewGateProvider(
 ): ForgeProvider | undefined {
   if (!host.reviewProviderRegistry) return host.mergeGateProvider;
   if (opts.providerName) {
-    const named = host.reviewProviderRegistry.get(opts.providerName);
-    if (named) return named;
+    return host.reviewProviderRegistry.get(opts.providerName);
   }
   if (opts.reviewUrl) {
     const project = parseForgeProject(opts.reviewUrl);
@@ -305,7 +304,11 @@ export async function pollMergeGateTask(
       reviewUrl: artifact.url,
       repoUrl: workflow?.repoUrl ?? '',
     });
-    if (!provider) continue;
+    if (!provider) {
+      throw new Error(
+        `No forge provider is registered for recorded provider "${artifact.provider ?? 'unknown'}" on review ${providerId}.`,
+      );
+    }
     const gateCwd = task.execution.workspacePath ?? host.cwd;
     const status = await provider.checkApproval({
       identifier: providerId,
