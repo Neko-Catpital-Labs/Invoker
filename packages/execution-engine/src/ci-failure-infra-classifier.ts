@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process';
 
+import { parseForgeProject } from '@invoker/contracts';
+
 import type { ReviewGateFailedCheck } from './lifecycle-events.js';
+import type { ReviewProviderRegistry } from './review-provider-registry.js';
+import { createDefaultReviewProviders } from './create-default-review-providers.js';
 
 export type CiFailureClass = 'infra' | 'code' | 'unknown';
 
@@ -121,6 +125,7 @@ export interface CreateFailedCheckLogFetcherOptions {
   cwd?: string;
   /** Override for tests; defaults to spawning `gh`. */
   runGh?: (args: readonly string[], cwd: string) => Promise<string>;
+  reviewProviderRegistry?: ReviewProviderRegistry;
 }
 
 async function defaultRunGh(args: readonly string[], cwd: string): Promise<string> {
@@ -145,12 +150,14 @@ async function defaultRunGh(args: readonly string[], cwd: string): Promise<strin
   });
 }
 
-/** Build a fetcher that loads failed-step logs for Actions check details URLs. */
 export function createFailedCheckLogFetcher(
   options: CreateFailedCheckLogFetcherOptions = {},
 ): FailedCheckLogFetcher {
   const cwd = options.cwd ?? process.cwd();
   const runGh = options.runGh ?? defaultRunGh;
+  const useProviderPath = !options.runGh;
+  const registry = options.reviewProviderRegistry
+    ?? (useProviderPath ? createDefaultReviewProviders().reviewProviderRegistry : undefined);
 
   return async (checks) => {
     const out = new Map<string, string>();
@@ -159,6 +166,33 @@ export function createFailedCheckLogFetcher(
     for (const check of checks) {
       const url = check.detailsUrl?.trim();
       if (!url || out.has(url)) continue;
+
+      const forgeProject = useProviderPath ? parseForgeProject(url) : undefined;
+      if (forgeProject && registry) {
+        const cacheKey = forgeProject.jobId
+          ? `job:${forgeProject.jobId}`
+          : forgeProject.runId
+            ? `run:${forgeProject.runId}`
+            : forgeProject.pipelineId
+              ? `pipeline:${forgeProject.pipelineId}`
+              : url;
+        const cached = seenRuns.get(cacheKey);
+        if (cached !== undefined) {
+          out.set(url, cached);
+          continue;
+        }
+        try {
+          const provider = registry.get(forgeProject.kind);
+          const log = await provider?.fetchFailedJobLog?.({ detailsUrl: url, cwd });
+          if (log !== undefined) {
+            seenRuns.set(cacheKey, log);
+            out.set(url, log);
+          }
+        } catch {
+        }
+        continue;
+      }
+
       const parsed = parseActionsDetailsUrl(url);
       if (!parsed) continue;
 
