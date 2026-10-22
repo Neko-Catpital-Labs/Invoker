@@ -23,7 +23,7 @@ import {
   createWorkerRegistry,
   registerBuiltinWorkers,
   resolveInvokerHomeRoot,
-  GitHubMergeGateProvider,
+  createDefaultReviewProviders,
   WorkerLockHeldError,
   resetAutoFixBudgetForTasks,
   type WorkerRuntimeDependencies,
@@ -747,7 +747,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       agentLoginWatch: resolveHeadlessAgentLoginWatchConfig(deps.invokerConfig),
       messageBus: deps.messageBus,
       selfDeploy: resolveHeadlessSelfDeployConfig(deps.invokerConfig),
-      mergeGateProvider: new GitHubMergeGateProvider(),
+      ...createDefaultReviewProviders(),
     });
     await worker.tick('manual');
     await worker.stop();
