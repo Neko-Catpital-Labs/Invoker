@@ -309,13 +309,14 @@ export class GitLabMergeGateProvider implements ForgeProvider {
     if (featureBranch.startsWith('-')) {
       throw new Error(`Refusing to push GitLab feature branch that looks like a git option: ${featureBranch}`);
     }
-    const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+    const pushArgs = ['push', '--force', '--', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
     try {
       await this.exec('git', pushArgs, cwd);
     } catch (err) {
       if (!isGitRefLockRace(err)) throw err;
       await this.exec('git', [
         'fetch',
+        '--',
         'origin',
         `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
       ], cwd);
