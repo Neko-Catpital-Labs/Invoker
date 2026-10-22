@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +22,10 @@ function git(cwd: string, args: string[]): string {
       GIT_COMMITTER_EMAIL: 'invoker-gitlab-live@example.invalid',
     },
   }).trim();
+}
+
+function headHasCommit(cwd: string): boolean {
+  return spawnSync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd, stdio: 'ignore' }).status === 0;
 }
 
 function glabApi(args: string[]): string {
@@ -90,7 +94,7 @@ describe.runIf(liveEnabled)('GitLabMergeGateProvider live against gitlab.com', (
       env: process.env,
     });
     git(repoDir, ['checkout', '-B', baseBranch]);
-    if (git(repoDir, ['rev-list', '--count', 'HEAD']) === '0') {
+    if (!headHasCommit(repoDir)) {
       writeFileSync(join(repoDir, 'README.md'), '# invoker forge live\n');
       git(repoDir, ['add', 'README.md']);
       git(repoDir, ['commit', '-m', 'seed']);
