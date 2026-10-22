@@ -22,6 +22,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VENDOR_DIR="skills/plan-to-invoker/scripts/vendor"
+[[ -d "corpus/skills/plan-to-invoker/scripts/vendor" ]] && VENDOR_DIR="corpus/skills/plan-to-invoker/scripts/vendor"
 
 cp scripts/review-unit-rules.mjs "$VENDOR_DIR/review-unit-rules.mjs"
 

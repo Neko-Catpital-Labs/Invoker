@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,6 +49,16 @@ const stillToolingPolicy = [
   'skills/land-stack/SKILL.md',
   'skills/visual-proof/SKILL.md',
   'skills/prove-it/SKILL.md',
+  'corpus/skills/make-pr/SKILL.md',
+  'corpus/skills/chat-submit/SKILL.md',
+  'corpus/skills/chat-submit/scripts/check-contract.sh',
+  'corpus/skills/plan-to-invoker/SKILL.md',
+  'corpus/skills/plan-to-invoker/references/local-vs-remote-mcp.md',
+  'corpus/skills/plan-to-invoker/scripts/validate-plan.ts',
+  'corpus/skills/workflow-chain-submit/SKILL.md',
+  'corpus/skills/land-stack/SKILL.md',
+  'corpus/skills/visual-proof/SKILL.md',
+  'corpus/skills/prove-it/SKILL.md',
   'scripts/bootstrap.sh',
   'scripts/test-bootstrap.sh',
 ];
@@ -59,6 +69,48 @@ for (const path of stillToolingPolicy) {
     `genuine policy/automation path should stay tooling-policy: ${path}`,
   );
 }
+
+const docsSkillsAtEitherRoot = [
+  'skills/verify/SKILL.md',
+  'skills/verify/control-invoker.mjs',
+  'skills/failure-triage/tests/failure-digest.test.mjs',
+  'corpus/skills/verify/SKILL.md',
+  'corpus/skills/verify/control-invoker.mjs',
+  'corpus/skills/failure-triage/tests/failure-digest.test.mjs',
+  'corpus/skills/review-compression/SKILL.md',
+];
+for (const path of docsSkillsAtEitherRoot) {
+  assert.deepEqual(
+    classifyReviewUnitsForPath(path),
+    ['docs'],
+    `a non-policy skill file classifies as docs under either skills root: ${path}`,
+  );
+}
+
+function readFixtureFileList(name) {
+  return readFileSync(new URL(`./fixtures/review-units/${name}`, import.meta.url), 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+const rehomePolicySkillFiles = readFixtureFileList('skills-rehome-policy-skills.txt');
+const rehomeDocsSkillFiles = readFixtureFileList('skills-rehome-docs-skills.txt');
+assert.ok(rehomePolicySkillFiles.length > 100 && rehomeDocsSkillFiles.length > 40, 'rehome fixtures list the moved skill files');
+assert.deepEqual(
+  reviewUnitsForChangedFiles(rehomePolicySkillFiles),
+  ['tooling-policy'],
+  'moving the policy skills to corpus/skills is one tooling-policy unit',
+);
+assert.deepEqual(
+  reviewUnitsForChangedFiles(rehomeDocsSkillFiles),
+  ['docs'],
+  'moving the remaining skills to corpus/skills is one docs unit',
+);
+assert.deepEqual(
+  reviewUnitsForChangedFiles([...rehomePolicySkillFiles, ...rehomeDocsSkillFiles]),
+  ['tooling-policy', 'docs'],
+  'moving the whole skills tree in one PR spans two review units and must be split',
+);
 
 const newPackageFiles = [
   'packages/slack-manager/package.json',
@@ -135,13 +187,14 @@ const mixedFiles = validateSingleReviewUnitFiles({
 assert.equal(mixedFiles.length, 1, 'files from two review units fail');
 assert.match(mixedFiles[0], /lists files from routing, activation-surface; split into one review unit per task\./);
 
-const lintScript = new URL('../skills/plan-to-invoker/scripts/lint-review-units.mjs', import.meta.url).pathname;
+const skillsRoot = existsSync(new URL('../corpus/skills/plan-to-invoker/', import.meta.url)) ? '../corpus/skills/' : '../skills/';
+const lintScript = new URL(`${skillsRoot}plan-to-invoker/scripts/lint-review-units.mjs`, import.meta.url).pathname;
 function lintPlan(planPath) {
   const result = spawnSync(process.execPath, [lintScript, planPath], { encoding: 'utf8' });
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 }
 
-const spanningFixture = new URL('../skills/plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml', import.meta.url).pathname;
+const spanningFixture = new URL(`${skillsRoot}plan-to-invoker/fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml`, import.meta.url).pathname;
 const spanning = lintPlan(spanningFixture);
 assert.equal(spanning.status, 1, `a task whose Files span review units must fail:\n${spanning.stdout}${spanning.stderr}`);
 assert.match(spanning.stderr, /lists files from .*; split into one review unit per task\./);
