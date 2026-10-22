@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
+import { parseForgeProject } from '@invoker/contracts';
 import { FailureClassifier } from '@invoker/workflow-core';
 
 import type { ExecutionAgent } from './agent.js';
@@ -560,15 +561,9 @@ export function buildMakePrStackPublishPrompt(args: {
   return lines.join('\n');
 }
 
-function parseGitHubPullRequestNumber(url: string): string | undefined {
-  const match = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/i.exec(url);
-  return match?.[1];
-}
-
-// GitHub-first for now: the public PR URL is the authoritative review-gate key.
 function normalizeReviewArtifactProviderId(url: string, providerId: string | undefined): string | undefined {
-  const githubPrNumber = parseGitHubPullRequestNumber(url);
-  if (githubPrNumber) return githubPrNumber;
+  const reviewId = parseForgeProject(url)?.reviewId;
+  if (reviewId) return reviewId;
   return providerId;
 }
 

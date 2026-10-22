@@ -1,10 +1,13 @@
+import { parseForgeProject, type ForgeProvider } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import {
+  createDefaultReviewProviders,
   createFailedCheckLogFetcher,
-  GitHubMergeGateProvider,
   queueReviewGateCiRepair,
+  resolveForgeProvider,
   type MergeGateApprovalStatus,
   type ReviewGateCiRepairPolicyOptions,
+  type ReviewProviderRegistry,
 } from '@invoker/execution-engine';
 
 export interface ReviewGateCiRepairCommandResult {
@@ -20,15 +23,28 @@ export interface ReviewGateCiRepairCommandDeps {
   persistence: Pick<SQLiteAdapter, 'findReviewGateByPr' | 'loadTask'>;
   repoRoot: string;
   policy: ReviewGateCiRepairPolicyOptions;
-  mergeGateProvider?: Pick<GitHubMergeGateProvider, 'checkApproval'>;
+  mergeGateProvider?: Pick<ForgeProvider, 'checkApproval'>;
+  reviewProviderRegistry?: ReviewProviderRegistry;
+  repoUrl?: string;
   now?: () => string;
 }
 
 export function parseReviewGatePrNumber(prArg: string): string | null {
-  const fromUrl = prArg.match(/\/pull\/(\d+)/);
-  const bare = fromUrl?.[1] ?? prArg.replace(/^#/, '');
+  const project = parseForgeProject(prArg);
+  if (project?.reviewId) return project.reviewId;
+  const fromPull = prArg.match(/\/pull\/(\d+)/);
+  const fromMr = prArg.match(/\/-\/merge_requests\/(\d+)/);
+  const bare = fromPull?.[1] ?? fromMr?.[1] ?? prArg.replace(/^#/, '');
   if (!/^\d+$/.test(bare)) return null;
   return bare;
+}
+
+function repoUrlFromReviewArg(prArg: string, explicit?: string): string | undefined {
+  if (explicit?.trim()) return explicit.trim();
+  const project = parseForgeProject(prArg);
+  if (!project) return undefined;
+  const scheme = project.kind === 'gitlab' ? 'https' : 'https';
+  return `${scheme}://${project.host}/${project.projectPath}`;
 }
 
 export async function repairReviewGateCiByPr(
@@ -37,7 +53,7 @@ export async function repairReviewGateCiByPr(
 ): Promise<ReviewGateCiRepairCommandResult> {
   const prNumber = parseReviewGatePrNumber(prArg);
   if (!prNumber) {
-    throw new Error(`Could not parse a PR number from "${prArg}".`);
+    throw new Error(`Could not parse a PR/MR number from "${prArg}".`);
   }
   const lookup = deps.persistence.findReviewGateByPr(prNumber);
   if (!lookup) {
@@ -61,7 +77,17 @@ export async function repairReviewGateCiByPr(
     };
   }
 
-  const provider = deps.mergeGateProvider ?? new GitHubMergeGateProvider();
+  const defaults = createDefaultReviewProviders();
+  const registry = deps.reviewProviderRegistry ?? defaults.reviewProviderRegistry;
+  const repoUrl = repoUrlFromReviewArg(prArg, deps.repoUrl);
+  const provider = deps.mergeGateProvider
+    ?? (repoUrl
+      ? resolveForgeProvider({
+        reviewProviderRegistry: registry,
+        mergeGateProvider: defaults.mergeGateProvider,
+        repoUrl,
+      })
+      : defaults.mergeGateProvider);
   const reviewId = lookup.reviewId?.trim() || prNumber;
   const status = await provider.checkApproval({ identifier: reviewId, cwd: deps.repoRoot });
   if (status.lifecycle !== 'open') {
@@ -91,7 +117,10 @@ export async function repairReviewGateCiByPr(
   const policy: ReviewGateCiRepairPolicyOptions = {
     ...deps.policy,
     fetchFailedCheckLogs: deps.policy.fetchFailedCheckLogs
-      ?? createFailedCheckLogFetcher({ cwd: deps.repoRoot }),
+      ?? createFailedCheckLogFetcher({
+        cwd: deps.repoRoot,
+        reviewProviderRegistry: deps.reviewProviderRegistry ?? defaults.reviewProviderRegistry,
+      }),
   };
   const result = await queueReviewGateCiRepair(policy, {
     eventKey: `review_gate.ci_failed|workflow:${lookup.workflowId}|task:${mergeTask.id}|scan:${prNumber}`,

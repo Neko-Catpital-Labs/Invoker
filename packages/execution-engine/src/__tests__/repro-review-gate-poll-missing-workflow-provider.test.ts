@@ -128,6 +128,26 @@ describe('pollMergeGateTask when task.config is absent and a provider registry i
     expect(updateTask).not.toHaveBeenCalled();
   });
 
+  it('rejects instead of polling another forge when the recorded provider is unregistered and the workflow is GitHub', async () => {
+    const github = fakeProvider('github');
+    const registry = new ReviewProviderRegistry();
+    registry.register(github.provider);
+    const task = mergeGateTask({
+      config: { workflowId: 'wf-1', isMergeNode: true } as TaskState['config'],
+      provider: 'gitlab',
+    });
+    const { host, updateTask } = pollHost({
+      task,
+      registry,
+      workflow: { repoUrl: 'https://github.com/owner/repo.git' },
+    });
+
+    await expect(pollMergeGateTask(host, task, 'refresh')).rejects.toThrow(/forge provider/);
+
+    expect(github.checkApproval).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   it('still selects the provider from the workflow repoUrl when the artifact records none', async () => {
     const gitlab = fakeProvider('gitlab');
     const github = fakeProvider('github');
