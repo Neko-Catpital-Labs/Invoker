@@ -1045,28 +1045,32 @@ test.describe('Visual proof capture', () => {
     await expect(rows).toHaveCount(2);
   });
 
-  test('planning chat composer — split harness and model picker', async ({ page }) => {
-    await page.getByTestId('sidebar-home').click();
-    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+  test.describe('planning picker', () => {
+    test.use({ includeOmpPlanningTool: true });
 
-    const input = page.getByTestId('invoker-terminal-input');
-    await expect(input).toBeVisible({ timeout: 10000 });
-    await input.fill('Draft a plan for the chat picker visual proof fixture');
+    test('planning chat composer — split harness and model picker', async ({ page }) => {
+      await page.getByTestId('sidebar-home').click();
+      await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Options' }).click();
+      const input = page.getByTestId('invoker-terminal-input');
+      await expect(input).toBeVisible({ timeout: 10000 });
+      await input.fill('Draft a plan for the chat picker visual proof fixture');
 
-    const harnessSelect = page.getByTestId('invoker-terminal-harness');
-    await expect(harnessSelect).toBeVisible({ timeout: 10000 });
-    await expect(harnessSelect.locator('option')).not.toHaveCount(0);
-    await expect.poll(async () => harnessSelect.inputValue()).not.toBe('');
-    await harnessSelect.selectOption('omp');
-    const modelSelect = page.getByTestId('invoker-terminal-model');
-    await expect(modelSelect).toBeVisible({ timeout: 10000 });
-    await expect(modelSelect.locator('option')).not.toHaveCount(0);
-    await expect(page.getByTestId('invoker-terminal-confirmation-mode')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+      await page.getByRole('button', { name: 'Options' }).click();
 
-    await captureScreenshot(page, 'planning-chat-composer-combined-agent-picker-before');
+      const harnessSelect = page.getByTestId('invoker-terminal-harness');
+      await expect(harnessSelect).toBeVisible({ timeout: 10000 });
+      await expect(harnessSelect.locator('option')).not.toHaveCount(0);
+      await expect.poll(async () => harnessSelect.inputValue()).not.toBe('');
+      await harnessSelect.selectOption('omp');
+      const modelSelect = page.getByTestId('invoker-terminal-model');
+      await expect(modelSelect).toBeVisible({ timeout: 10000 });
+      await expect(modelSelect.locator('option')).not.toHaveCount(0);
+      await expect(page.getByTestId('invoker-terminal-confirmation-mode')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+
+      await captureScreenshot(page, 'planning-chat-composer-combined-agent-picker-before');
+    });
   });
 
   test('terminal planning captures long transcript follow surface', async ({ page }) => {
