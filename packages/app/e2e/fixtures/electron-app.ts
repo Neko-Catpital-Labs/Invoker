@@ -28,6 +28,8 @@ export type ElectronFixtures = {
   breakTerminalSpawn: boolean;
   /** When true, the invoker:get-planning-presets IPC handler throws (fault injection). */
   breakPlanningPresets: boolean;
+  /** When true, put an OMP stub on the launched app's PATH. */
+  includeOmpPlanningTool: boolean;
   standaloneOwnerIdleTimeoutMs: string;
   repoConfig: Partial<InvokerConfig>;
   codexSpendGateTripped: boolean;
@@ -139,6 +141,7 @@ export const test = base.extend<ElectronFixtures>({
   guiOwnerMode: [process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui', { option: true }],
   breakTerminalSpawn: [false, { option: true }],
   breakPlanningPresets: [false, { option: true }],
+  includeOmpPlanningTool: [false, { option: true }],
   standaloneOwnerIdleTimeoutMs: [process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000', { option: true }],
   repoConfig: [{ autoFixRetries: 0 }, { option: true }],
   codexSpendGateTripped: [false, { option: true }],
@@ -151,7 +154,7 @@ export const test = base.extend<ElectronFixtures>({
     }
   },
 
-  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, standaloneOwnerIdleTimeoutMs, repoConfig, codexSpendGateTripped, testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, includeOmpPlanningTool, standaloneOwnerIdleTimeoutMs, repoConfig, codexSpendGateTripped, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
@@ -230,6 +233,11 @@ echo "unsupported codex args: $*" >&2
 exit 64
 `, 'utf8');
     chmodSync(codexStub, 0o755);
+    if (includeOmpPlanningTool) {
+      const ompStub = path.join(stubDir, 'omp');
+      writeFileSync(ompStub, '#!/usr/bin/env bash\nexit 0\n', 'utf8');
+      chmodSync(ompStub, 0o755);
+    }
     const pathEnv = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
     const forceReadOnlyStatus = guiOwnerMode === 'read-only-status';
     const forceConnectionLostStatus = guiOwnerMode === 'connection-lost-status';
