@@ -132,6 +132,24 @@ const FAKE_SSH_SCRIPT = [
   '',
 ].join('\n');
 
+const LONG_LOGIN_URL =
+  'https://example.test/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ff-0123456789ab&response_type=code&redirect_uri=https%3A%2F%2Fexample.test%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference&code_challenge=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefg&code_challenge_method=S256&state=0123456789abcdef0123456789abcdef';
+
+const CLAUDE_WRAPPING_SCRIPT = [
+  '#!/bin/bash',
+  'if [ "$1" = "setup-token" ]; then',
+  '  cols=$(stty size 2>/dev/null | cut -d" " -f2)',
+  '  [ -n "$cols" ] || cols=80',
+  `  printf '%s\\n' "Visit this URL to authorize: ${LONG_LOGIN_URL}" | fold -w "$cols"`,
+  '  read -r CODE',
+  '  echo "Your Claude Code OAuth token: sk-ant-oat01-abcdefghijklmnop"',
+  '  exit 0',
+  'fi',
+  'if [ "$1" = "-p" ]; then echo ok; exit 0; fi',
+  'exit 1',
+  '',
+].join('\n');
+
 function createFakeBin(name: 'codex' | 'claude', script: string): string {
   const dir = mkdtempSync(join(tmpdir(), `invoker-agent-login-test-bin-`));
   writeFileSync(join(dir, name), script, { mode: 0o755 });
@@ -538,6 +556,15 @@ describe('agent-login-session claude flow (real fake-claude executable under a r
 
     const logged = allLoggedText(logger);
     expect(logged).not.toContain('sk-ant-oat01-abcdefghijklmnop');
+  }, 20_000);
+
+  it('reports the whole login URL when the CLI wraps its output at the terminal width', async () => {
+    fakeBinDir = createFakeBin('claude', CLAUDE_WRAPPING_SCRIPT);
+    process.env.PATH = `${fakeBinDir}:${originalPath}`;
+
+    const started = await startAgentLogin('claude', { logger: createSilentLogger() });
+    expect(started.status).toBe('awaiting_code');
+    expect(started.loginUrl).toBe(LONG_LOGIN_URL);
   }, 20_000);
 
   it('leaves the secrets file byte-identical when the post-code probe fails', async () => {
