@@ -8,6 +8,15 @@ export interface ResolveForgeProviderOptions {
   readonly repoUrl?: string;
 }
 
+function isLocalFileUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'file:' && (!url.hostname || url.hostname === 'localhost');
+  } catch {
+    return false;
+  }
+}
+
 export function resolveForgeProvider(options: ResolveForgeProviderOptions): ForgeProvider {
   const { reviewProviderRegistry, mergeGateProvider, repoUrl } = options;
 
@@ -20,6 +29,9 @@ export function resolveForgeProvider(options: ResolveForgeProviderOptions): Forg
     }
     const project = parseForgeProject(trimmed);
     if (!project) {
+      if (mergeGateProvider && isLocalFileUrl(trimmed)) {
+        return mergeGateProvider;
+      }
       throw new Error(
         `Unable to resolve forge kind from repo URL "${trimmed}". ` +
         'Use a github.com or gitlab.com project URL (or INVOKER_GITLAB_HOST).',
