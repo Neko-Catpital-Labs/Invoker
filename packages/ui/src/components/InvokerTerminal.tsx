@@ -817,7 +817,7 @@ export function InvokerTerminal({
   const renderStartedAt = nowMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
-  const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const shouldFollowTranscriptRef = useRef(true);
   const [showComposerOptions, setShowComposerOptions] = useState(false);
   const inputSequenceRef = useRef(0);
   const latestLineCountRef = useRef(lines.length);
@@ -832,7 +832,7 @@ export function InvokerTerminal({
   latestLineCountRef.current = lines.length;
   perfContextRef.current = { activeConversationKey, expanded };
 
-  const scrollTranscriptToBottom = useCallback((reason: 'conversation_change' | 'line_change', lineCount: number): void => {
+  const scrollTranscriptToBottom = useCallback((reason: 'conversation_change' | 'line_change' | 'resize', lineCount: number): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
     const startedAt = nowMs();
@@ -850,15 +850,27 @@ export function InvokerTerminal({
   }, []);
 
   useLayoutEffect(() => {
-    setShouldFollowTranscript(true);
+    shouldFollowTranscriptRef.current = true;
     scrollTranscriptToBottom('conversation_change', latestLineCountRef.current);
   }, [activeConversationKey, scrollTranscriptToBottom]);
 
   useLayoutEffect(() => {
-    if (shouldFollowTranscript) {
+    if (shouldFollowTranscriptRef.current) {
       scrollTranscriptToBottom('line_change', lines.length);
     }
-  }, [lines.length, planningStream?.text, scrollTranscriptToBottom, shouldFollowTranscript]);
+  }, [lines.length, planningStream?.text, scrollTranscriptToBottom]);
+
+  useLayoutEffect(() => {
+    const transcript = transcriptRef.current;
+    if (!transcript || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (shouldFollowTranscriptRef.current) {
+        scrollTranscriptToBottom('resize', latestLineCountRef.current);
+      }
+    });
+    observer.observe(transcript);
+    return () => observer.disconnect();
+  }, [scrollTranscriptToBottom]);
 
   useLayoutEffect(() => {
     const pending = pendingInputRef.current;
@@ -911,7 +923,7 @@ export function InvokerTerminal({
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
-    setShouldFollowTranscript(isTranscriptNearBottom(transcript));
+    shouldFollowTranscriptRef.current = isTranscriptNearBottom(transcript);
   }, []);
 
   useEffect(() => {

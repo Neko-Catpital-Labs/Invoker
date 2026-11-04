@@ -1125,8 +1125,10 @@ test.describe('Visual proof capture', () => {
     await send.click();
 
     await expect(transcript).toContainText('Step 1 follow-state line 24');
-    const stepOneScrollGap = await transcript.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
-    expect(stepOneScrollGap).toBeLessThanOrEqual(32);
+    await expect.poll(
+      () => transcript.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
+      { message: 'expected the followed transcript to settle at the bottom after the draft panel opened' },
+    ).toBeLessThanOrEqual(32);
     await captureScreenshot(page, 'terminal-planning-long-transcript-step-1-pinned');
 
     await transcript.evaluate((el) => {
