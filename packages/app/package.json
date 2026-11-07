@@ -2,7 +2,7 @@
   "name": "@invoker/app",
   "productName": "Invoker",
   "desktopName": "invoker.desktop",
-  "version": "0.2.38",
+  "version": "0.2.39",
   "description": "Invoker desktop app",
   "homepage": "https://github.com/Neko-Catpital-Labs/Invoker",
   "author": {
