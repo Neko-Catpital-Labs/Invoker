@@ -64,6 +64,27 @@ invoker_e2e_allow_repo_git_ops() {
   )
 }
 
+invoker_e2e_isolate_git_config() {
+  local user_name user_email
+  if [ -n "${INVOKER_E2E_HAD_GIT_CONFIG_GLOBAL+x}" ]; then
+    return 0
+  fi
+  user_name="$(git config --global --get user.name 2>/dev/null || true)"
+  user_email="$(git config --global --get user.email 2>/dev/null || true)"
+  if [ -n "${GIT_CONFIG_GLOBAL+x}" ]; then
+    export INVOKER_E2E_HAD_GIT_CONFIG_GLOBAL=1
+    export INVOKER_E2E_ORIGINAL_GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL"
+  else
+    export INVOKER_E2E_HAD_GIT_CONFIG_GLOBAL=0
+    unset INVOKER_E2E_ORIGINAL_GIT_CONFIG_GLOBAL
+  fi
+
+  export GIT_CONFIG_GLOBAL="$INVOKER_E2E_MARKER_ROOT/gitconfig"
+  : > "$GIT_CONFIG_GLOBAL"
+  git config --global user.name "${user_name:-Invoker E2E}"
+  git config --global user.email "${user_email:-e2e@invoker.dev}"
+}
+
 invoker_e2e_ensure_make_pr_skill() {
   local skill_src="$INVOKER_E2E_REPO_ROOT/skills/make-pr"
   [ -f "$skill_src/SKILL.md" ] || return 0
@@ -223,6 +244,16 @@ invoker_e2e_cleanup() {
     unset INVOKER_E2E_AGENT_HOME
     unset INVOKER_CLAUDE_CONFIG_DIR
   fi
+
+  if [ -n "${INVOKER_E2E_HAD_GIT_CONFIG_GLOBAL+x}" ]; then
+    if [ "$INVOKER_E2E_HAD_GIT_CONFIG_GLOBAL" = "1" ]; then
+      export GIT_CONFIG_GLOBAL="${INVOKER_E2E_ORIGINAL_GIT_CONFIG_GLOBAL:-}"
+    else
+      unset GIT_CONFIG_GLOBAL
+    fi
+  fi
+  unset INVOKER_E2E_HAD_GIT_CONFIG_GLOBAL
+  unset INVOKER_E2E_ORIGINAL_GIT_CONFIG_GLOBAL
 
   # Restore original PATH so claude/gh/codex stubs never leak into user shells.
   if [ -n "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then
@@ -457,9 +488,41 @@ invoker_e2e_run_with_timeout() {
   fi
 }
 
-# Rewrite plan repoUrl to file://<this checkout> so WorktreeExecutor clones locally (no GitHub org coupling).
+invoker_e2e_add_git_transport_rewrite() {
+  local repo_url="$1"
+  local local_url rewrite_key
+  invoker_e2e_isolate_git_config
+  invoker_e2e_allow_repo_git_ops
+  local_url="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$INVOKER_E2E_REPO_ROOT")"
+  rewrite_key="url.$local_url.insteadOf"
+  if git config --global --get-all "$rewrite_key" 2>/dev/null | grep -Fqx "$repo_url"; then
+    return 0
+  fi
+  git config --global --add "$rewrite_key" "$repo_url"
+}
+
 invoker_e2e_patch_plan_repo_url() {
   local src="$1" dest="$2"
+  local repo_url merge_mode
+  repo_url="$(python3 -c "
+import pathlib, sys
+for line in pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+    if line.lstrip().startswith('repoUrl:'):
+        print(line.split(':', 1)[1].strip())
+        break
+" "$src")"
+  if [ -z "$repo_url" ]; then
+    echo "ERROR: e2e plan is missing repoUrl: $src" >&2
+    return 2
+  fi
+  merge_mode="$(sed -n 's/^[[:space:]]*mergeMode:[[:space:]]*//p' "$src" | head -1)"
+  if [ "${INVOKER_E2E_PRESERVE_FORGE_REPO_URL:-0}" = "1" ] \
+    && [ "$merge_mode" = "external_review" ]; then
+    invoker_e2e_add_git_transport_rewrite "$repo_url"
+    cp "$src" "$dest"
+    return 0
+  fi
+
   python3 -c "
 import pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve()

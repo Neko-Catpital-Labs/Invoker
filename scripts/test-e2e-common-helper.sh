@@ -182,6 +182,66 @@ test_installs_make_pr_skill_outside_inherited_home() {
   rm -rf "$tmp"
 }
 
+test_preserves_forge_url_while_redirecting_git_transport() {
+  local tmp repo plan prepared default_prepared repo_url local_url resolved_url original_gitconfig marker_root scoped_gitconfig
+  tmp="$(mktemp -d)"
+  repo="$tmp/repo"
+  plan="$tmp/plan.yaml"
+  prepared="$tmp/prepared.yaml"
+  default_prepared="$tmp/default-prepared.yaml"
+  original_gitconfig="$tmp/original-gitconfig"
+  marker_root="$tmp/marker"
+  repo_url='git@github.com:example-org/acme-repo.git'
+  mkdir -p "$repo" "$marker_root"
+  git config --file "$original_gitconfig" user.name 'Original User'
+  git config --file "$original_gitconfig" user.email 'original@example.invalid'
+  printf 'name: transport-test\nrepoUrl: %s\nmergeMode: external_review\n' "$repo_url" > "$plan"
+
+  (
+    INVOKER_E2E_REPO_ROOT="$repo"
+    INVOKER_E2E_MARKER_ROOT="$marker_root"
+    INVOKER_E2E_PRESERVE_FORGE_REPO_URL=1
+    GIT_CONFIG_GLOBAL="$original_gitconfig"
+    export INVOKER_E2E_REPO_ROOT INVOKER_E2E_MARKER_ROOT INVOKER_E2E_PRESERVE_FORGE_REPO_URL GIT_CONFIG_GLOBAL
+
+    invoker_e2e_patch_plan_repo_url "$plan" "$prepared"
+
+    scoped_gitconfig="$GIT_CONFIG_GLOBAL"
+    [ "$scoped_gitconfig" = "$marker_root/gitconfig" ] \
+      || fail "expected e2e Git config to be run-scoped"
+    [ "$(git config --global --get user.name)" = 'Original User' ] \
+      || fail "expected run-scoped Git config to preserve caller identity"
+    cmp -s "$plan" "$prepared" \
+      || fail "expected prepared plan to preserve its forge repoUrl"
+    local_url="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo")"
+    [ "$(git config --global --get-all "url.$local_url.insteadOf")" = "$repo_url" ] \
+      || fail "expected run-scoped Git config to redirect the forge repoUrl"
+    resolved_url="$(git ls-remote --get-url "$repo_url")"
+    [ "$resolved_url" = "$local_url" ] \
+      || fail "expected Git transport to resolve locally, got $resolved_url"
+
+    invoker_e2e_cleanup
+    [ "$GIT_CONFIG_GLOBAL" = "$original_gitconfig" ] \
+      || fail "expected cleanup to restore the caller Git config"
+  )
+
+  (
+    INVOKER_E2E_REPO_ROOT="$repo"
+    GIT_CONFIG_GLOBAL="$original_gitconfig"
+    export INVOKER_E2E_REPO_ROOT GIT_CONFIG_GLOBAL
+    unset INVOKER_E2E_PRESERVE_FORGE_REPO_URL
+
+    invoker_e2e_patch_plan_repo_url "$plan" "$default_prepared"
+    local_url="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo")"
+    grep -Fqx "repoUrl: $local_url" "$default_prepared" \
+      || fail "expected unscoped plans to retain the existing local repoUrl rewrite"
+    [ "$GIT_CONFIG_GLOBAL" = "$original_gitconfig" ] \
+      || fail "expected unscoped plan preparation not to isolate Git config"
+  )
+
+  rm -rf "$tmp"
+}
+
 run_case() {
   case "${1:-all}" in
     wal-guard)
@@ -199,12 +259,16 @@ run_case() {
     make-pr-skill-home)
       test_installs_make_pr_skill_outside_inherited_home
       ;;
+    forge-transport)
+      test_preserves_forge_url_while_redirecting_git_transport
+      ;;
     all)
       test_retries_wal_guard_once
       test_ignores_electron_helper_processes
       test_waits_for_owned_process_exit
       test_detects_stale_app_ui_build_artifacts
       test_installs_make_pr_skill_outside_inherited_home
+      test_preserves_forge_url_while_redirecting_git_transport
       ;;
     *)
       fail "unknown test case: ${1:-}"
@@ -214,4 +278,4 @@ run_case() {
 
 run_case "${1:-all}"
 
-echo 'PASS: headless e2e helper retries WAL guard, ignores Electron helpers, detects stale builds, and installs make-pr outside HOME'
+echo 'PASS: headless e2e helper retries WAL guard, ignores Electron helpers, detects stale builds, isolates forge transport, and installs make-pr outside HOME'
