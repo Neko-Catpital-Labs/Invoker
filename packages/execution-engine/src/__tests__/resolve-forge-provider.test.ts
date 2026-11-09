@@ -22,6 +22,28 @@ describe('resolveForgeProvider', () => {
     expect(provider.name).toBe('gitlab');
   });
 
+  it('uses the configured fallback provider for a local file repo URL', () => {
+    const providers = createDefaultReviewProviders();
+    const provider = resolveForgeProvider({
+      reviewProviderRegistry: providers.reviewProviderRegistry,
+      mergeGateProvider: providers.mergeGateProvider,
+      repoUrl: 'file:///tmp/local-repo',
+    });
+    expect(provider).toBe(providers.mergeGateProvider);
+  });
+
+  it.each([
+    'file://remote-host/repo',
+    'https://example.com/acme/widgets',
+  ])('rejects an unrecognized non-local repo URL: %s', (repoUrl) => {
+    const providers = createDefaultReviewProviders();
+    expect(() => resolveForgeProvider({
+      reviewProviderRegistry: providers.reviewProviderRegistry,
+      mergeGateProvider: providers.mergeGateProvider,
+      repoUrl,
+    })).toThrow(/unable to resolve forge kind/i);
+  });
+
   it('throws when the registry is set and the repo URL is missing', () => {
     const providers = createDefaultReviewProviders();
     expect(() => resolveForgeProvider({
